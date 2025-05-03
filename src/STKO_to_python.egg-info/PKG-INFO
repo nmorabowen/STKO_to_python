@@ -17,6 +17,7 @@ Requires-Dist: matplotlib
 Requires-Dist: jupyter
 Requires-Dist: tables
 Requires-Dist: pandas
+Requires-Dist: scipy
 Dynamic: license-file
 
 

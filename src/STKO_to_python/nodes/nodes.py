@@ -45,6 +45,9 @@ class Nodes:
     
     def __init__(self, dataset: 'MPCODataSet'):
         self.dataset = dataset
+        # Estimate the number of nodes in the dataset
+        self.total_nodes = self._estimate_node_count()
+        
         # Cache for node information to avoid redundant lookups
         self._node_info_cache = {}
         
@@ -71,8 +74,19 @@ class Nodes:
                 
         return total_nodes
 
+    def _get_node_dtype(self):
+        """Return the NumPy dtype for node data."""
+        return [
+            ('node_id', 'i8'),
+            ('file_id', 'i8'),
+            ('index', 'i8'),
+            ('x', 'f8'),
+            ('y', 'f8'),
+            ('z', 'f8')
+        ]
+    
     @profile_execution
-    def _get_all_nodes_ids(self, verbose=False, max_workers=4) -> Dict[str, Any]:
+    def _get_all_nodes_ids(self, verbose=False, max_workers=8) -> Dict[str, Any]:
         """
         Retrieve all node IDs, file names, indices, and coordinates from the partition files.
         
@@ -88,7 +102,7 @@ class Nodes:
                 - 'dataframe': A pandas DataFrame with the same data.
         """
         # Estimate total node count first to pre-allocate arrays
-        estimated_node_count = self._estimate_node_count()
+        estimated_node_count = self.total_nodes
         if estimated_node_count == 0:
             logger.warning("No nodes found in any partition")
             return {'array': np.array([], dtype=self._get_node_dtype()), 'dataframe': pd.DataFrame()}
@@ -180,17 +194,6 @@ class Nodes:
         self._node_info_cache['all_nodes'] = results_dict
         
         return results_dict
-    
-    def _get_node_dtype(self):
-        """Return the NumPy dtype for node data."""
-        return [
-            ('node_id', 'i8'),
-            ('file_id', 'i8'),
-            ('index', 'i8'),
-            ('x', 'f8'),
-            ('y', 'f8'),
-            ('z', 'f8')
-        ]
     
     @lru_cache(maxsize=32)
     def get_node_files_and_indices(self, node_ids=None):
