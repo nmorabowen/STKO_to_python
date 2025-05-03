@@ -5,6 +5,7 @@ from ..nodes.nodes import Nodes
 from ..elements.elements import Elements
 from ..model.model_info import ModelInfo
 from ..model.cdata import CData
+from ..plotting.plot import Plot
 
 
 class MPCODataSet:
@@ -121,7 +122,9 @@ class MPCODataSet:
         self.elements=Elements(self)
         self.model_info = ModelInfo(self)
         self.cdata=CData(self)
+        self.plot=Plot(self)
         
+        # Create the object attributes
         self._create_object_attributes()
         
     def _create_object_attributes(self):

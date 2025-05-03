@@ -413,7 +413,7 @@ class Nodes:
                 component_count = sample_data.shape[1]
                 
                 # Create column names once
-                columns = [f"val_{i + 1}" for i in range(component_count)]
+                columns = [i+1 for i in range(component_count)]
                 
                 # Process all steps for this file
                 for step_idx, step_name in enumerate(step_names):

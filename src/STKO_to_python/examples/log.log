@@ -1,5 +1,9 @@
-2025-05-03 01:31:17,084 - INFO - Memory usage for structured array (NODES): 0.10 MB
-2025-05-03 01:31:17,084 - INFO - Memory usage for DataFrame (NODES): 0.10 MB
-2025-05-03 01:31:17,084 - INFO - _get_all_nodes_ids executed in 0.01 seconds
-2025-05-03 01:31:17,574 - INFO - _get_stage_results executed in 0.46 seconds
-2025-05-03 01:31:17,574 - INFO - get_nodal_results executed in 0.46 seconds
+2025-05-03 02:18:14,607 - INFO - Memory usage for structured array (NODES): 0.10 MB
+2025-05-03 02:18:14,607 - INFO - Memory usage for DataFrame (NODES): 0.10 MB
+2025-05-03 02:18:14,608 - INFO - _get_all_nodes_ids executed in 0.01 seconds
+2025-05-03 02:18:15,120 - INFO - _get_stage_results executed in 0.48 seconds
+2025-05-03 02:18:15,120 - INFO - get_nodal_results executed in 0.48 seconds
+2025-05-03 02:18:16,418 - INFO - _get_stage_results executed in 1.29 seconds
+2025-05-03 02:18:16,418 - INFO - get_nodal_results executed in 1.29 seconds
+2025-05-03 02:18:16,918 - INFO - _get_stage_results executed in 0.50 seconds
+2025-05-03 02:18:16,918 - INFO - get_nodal_results executed in 0.50 seconds
