@@ -11,7 +11,10 @@ if TYPE_CHECKING:
     from ..core.dataset import MPCODataSet
 
 class ModelInfo:
-    
+    """
+    This class has a "friend" relationship with MPCODataSet, which is allowed
+    to access protected methods.
+    """
     def __init__(self, dataset:'MPCODataSet'):
         self.dataset = dataset
         

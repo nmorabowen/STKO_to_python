@@ -1,0 +1,5 @@
+2025-05-03 01:31:17,084 - INFO - Memory usage for structured array (NODES): 0.10 MB
+2025-05-03 01:31:17,084 - INFO - Memory usage for DataFrame (NODES): 0.10 MB
+2025-05-03 01:31:17,084 - INFO - _get_all_nodes_ids executed in 0.01 seconds
+2025-05-03 01:31:17,574 - INFO - _get_stage_results executed in 0.46 seconds
+2025-05-03 01:31:17,574 - INFO - get_nodal_results executed in 0.46 seconds
