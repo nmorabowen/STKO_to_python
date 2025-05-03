@@ -12,7 +12,7 @@ class CData:
     def __init__(self, dataset:'MPCODataSet'):
         self.dataset = dataset
     
-    def _extract_selection_set_ids_for_file(self, file_path, selection_set_ids=None):
+    def _extract_selection_set_ids_for_file(self, file_path:str, selection_set_ids=None):
         """
         Extracts selection set IDs and associated data (nodes and elements) from the given file using NumPy for optimization.
 
