@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "STKO_to_python"
+version = "0.1.0"
+description = "STKO tools for Python"
+readme = "README.md"
+authors = [
+    {name = "Nicolas Mora Bowen", email = "nmorabowen@gmail.com"}
+]
+license = {text = "MIT"}
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: OS Independent",
+]
+requires-python = ">=3.8"
+dependencies = [
+    "numpy",
+    "h5py",
+    "matplotlib",
+    "jupyter",
+    "tables",
+    "pandas",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/nmorabowen/STKO_to_python"
+"Bug Tracker" = "https://github.com/nmorabowen/STKO_to_python/issues"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+packages = {find = {where = ["src"]}} 
+
+[tool.setuptools.package-data]
+"*" = ["*.ipynb"]

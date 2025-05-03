@@ -1,23 +1,16 @@
+
+
+from typing import TYPE_CHECKING
 import numpy as np
-import glob
-from collections import defaultdict
-import os
 
-class CDATA:
-    """This is a mixin class to parse through the info contained in a CDATA section."""
 
+if TYPE_CHECKING:
+    from ..core.dataset import MPCODataSet
+
+class CData:
     
-    def list_CDATA_files(self):
-        """
-        Lists all base names (keys) of the CDATA files from the file list.
-
-        Returns:
-            None
-        """
-        
-        file_list=self.file_info_cdata
-        for file in file_list.keys():
-            print(f'{file}')
+    def __init__(self, dataset:'MPCODataSet'):
+        self.dataset = dataset
     
     def _extract_selection_set_ids_for_file(self, file_path, selection_set_ids=None):
         """
@@ -95,7 +88,7 @@ class CDATA:
 
         return selection_sets
     
-    def extract_selection_set_ids(self, selection_set_ids=None):
+    def _extract_selection_set_ids(self, selection_set_ids=None):
         """
         
         Aggregates nodes and elements while maintaining the structure of each selection set.
@@ -117,7 +110,7 @@ class CDATA:
         aggregated_data = {}
 
         # Get the list of `.cdata` files
-        file_mapping = self.cdata_partitions
+        file_mapping = self.dataset.cdata_partitions
 
         for id, file_path in file_mapping.items():
             # Extract selection sets for the current file
@@ -150,12 +143,14 @@ class CDATA:
 
         return aggregated_data
     
-    def selection_set_names(self):
+    def print_selection_set_names(self):
         """
         Prints the names of all available selection sets.
         """
-        selection_sets = self.selection_set
+        selection_sets = self.dataset.selection_set
         print('Available selection sets:')
         for key in selection_sets.keys():
             print(f'Set id:{key} - Set name: {selection_sets[key]["SET_NAME"]}')
+
+
 
