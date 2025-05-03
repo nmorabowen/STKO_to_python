@@ -1,5 +1,6 @@
 import glob
 import os
+import re
 from typing import TYPE_CHECKING
 from collections import defaultdict
 from typing import Optional, Dict
@@ -60,6 +61,7 @@ class ModelInfo:
 
             for file in files:
                 filename = os.path.basename(file)
+
                 if ".part-" in filename:
                     try:
                         name, part_str = filename.split(".part-", 1)
@@ -67,6 +69,14 @@ class ModelInfo:
                         file_mapping[name][part] = file
                     except (ValueError, IndexError):
                         print(f"Skipping file due to unexpected naming format: {file}")
+                else:
+                    # Handle compound extensions like ".mpco.cdata"
+                    if filename.endswith(f".{extension}"):
+                        # Remove .<extension> (e.g., .cdata)
+                        base_with_possible_extra_ext = filename[: -len(extension) - 1]
+                        # Remove any remaining extra extension like .mpco if present
+                        base = re.sub(r"\.mpco$", "", base_with_possible_extra_ext)
+                        file_mapping[base][0] = file
 
             if verbose:
                 print("\nFound files:")
@@ -223,17 +233,17 @@ class ModelInfo:
             # Check for model stage errors
             # self._model_stages_error(model_stage) (ERROR CONTROL PENDING)
             model_stages = [model_stage]
+            
+        if results_name is None:
+            results_names = self.dataset.element_results_names
+        else:
+            # self._element_results_name_error(results_name, stage) (ERROR CONTROL PENDING)
+            results_names = [results_name]
 
         element_types_dict = {}
         for stage in model_stages:
             for partition, partition_path in self.dataset.results_partitions.items():
                 with h5py.File(partition_path, 'r') as results:
-                    if results_name is None:
-                        results_names = self.dataset.element_results_names
-                    else:
-                        # self._element_results_name_error(results_name, stage) (ERROR CONTROL PENDING)
-                        results_names = [results_name]
-
                     for name in results_names:
                         ele_types = results.get(self.dataset.RESULTS_ON_ELEMENTS_PATH.format(model_stage=stage) + f"/{name}")
                         if ele_types is None:
@@ -249,7 +259,7 @@ class ModelInfo:
             unique_element_types.update(element_types_dict[name])
 
         if verbose:
-            print(f'The element types found are: {element_types_dict}')
+            print(f'The element types found are: {unique_element_types}')
             
         results = {'element_types_dict': element_types_dict, 'unique_element_types': unique_element_types}
         

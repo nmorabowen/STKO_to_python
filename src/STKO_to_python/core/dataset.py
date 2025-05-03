@@ -34,6 +34,12 @@ class MPCODataSet:
         self.model_info = ModelInfo(self)
         self.cdata=CData(self)
         
+        self._create_object_attributes()
+        
+    def _create_object_attributes(self):
+        """
+        Helper method to create object attributes.
+        """
         # Extract the results partition for the given recorder name
         self.results_partitions=self.model_info._get_file_list_for_results_name(extension='mpco', verbose=False)
         self.cdata_partitions=self.model_info._get_file_list_for_results_name(extension='cdata', verbose=False)
@@ -141,10 +147,12 @@ class MPCODataSet:
         """Method to print the element types information.
         """
         
-        print(f"Number of unique element types: {len(self.element_types)}")
-        for name in self.element_types:
-            print(f"  - {name}")
-            
+        print(f"Number of unique element types: {len(self.element_types['unique_element_types'])}")
+        for result, types in self.element_types['element_types_dict'].items():
+            print(f"  - {result}")
+            for type in types:
+                print(f"    - {type}")
+                        
     def print_unique_element_types(self):
         """Method to print the unique element types information.
         """
