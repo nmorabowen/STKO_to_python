@@ -23,6 +23,7 @@ dependencies = [
     "jupyter",
     "tables",
     "pandas",
+    "scipy",
 ]
 
 [project.urls]

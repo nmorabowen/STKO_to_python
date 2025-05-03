@@ -9,6 +9,7 @@ from .elements.elements import Elements
 from .model.model_info import ModelInfo
 from .model.cdata import CData
 
+from .plotting.plot import Plot
 
 __all__ = [
     "MPCODataSet",
@@ -17,4 +18,5 @@ __all__ = [
     "CData",
     "Nodes",
     "Elements",
+    "Plot",
 ]

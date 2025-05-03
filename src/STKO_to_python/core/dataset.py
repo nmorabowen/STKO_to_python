@@ -5,9 +5,98 @@ from ..nodes.nodes import Nodes
 from ..elements.elements import Elements
 from ..model.model_info import ModelInfo
 from ..model.cdata import CData
+from ..plotting.plot import Plot
 
 
 class MPCODataSet:
+    
+    """
+    A dataset management class for MPCO (Model, Partition, Component, Operation) simulation files.
+
+    This class serves as the main access point to HDF5-based MPCO data files, providing
+    functionality to load, organize, and access simulation data through a composition
+    of specialized classes (Nodes, Elements, ModelInfo, CData).
+
+    The class implements a "friend" pattern with its component classes, allowing it
+    to access their protected methods which are indicated by a leading underscore.
+    These protected methods are used internally within the dataset implementation
+    but are not intended to be part of the public API.
+
+    Upon initialization, this class automatically loads directory information,
+    extracts partitions, model stages, results names, and other essential dataset
+    attributes to provide convenient access to the simulation data.
+
+    Attributes
+    ----------
+    nodes : Nodes
+    Component handling node-related operations and data access.
+    elements : Elements
+    Component handling element-related operations and data access.
+    model_info : ModelInfo
+    Component handling model metadata and information.
+    cdata : CData
+    Component handling component data information.
+    hd5f_directory : str
+    Path to the directory containing HDF5 files.
+    recorder_name : str
+    Base name of the recorder files to load.
+    file_extension : str
+    File extension pattern for dataset files.
+    verbose : bool
+    Flag controlling verbose output.
+    results_partitions : dict
+    Mapping of partition indices to result file paths.
+    cdata_partitions : dict
+    Mapping of partition indices to cdata file paths.
+    model_stages : list
+    Available model stages in the dataset.
+    node_results_names : list
+    Names of nodal results available in the dataset.
+    element_results_names : list
+    Names of element results available in the dataset.
+    element_types : dict
+    Dictionary containing element type information.
+    unique_element_types : list
+    List of all unique element types in the dataset.
+    time : pandas.DataFrame
+    Time series data for the simulation.
+    nodes_info : dict
+    Node mapping information for efficient data access.
+    elements_info : dict
+    Element mapping information for efficient data access.
+    number_of_steps : dict
+    Number of simulation steps per model stage.
+    selection_set : dict
+    Selection set mappings from the dataset.
+
+    Parameters
+    ----------
+    hdf5_directory : str
+    Path to the directory containing HDF5 files.
+    recorder_name : str
+    Base name of the recorder files to load.
+    file_extension : str, optional
+    File extension pattern for dataset files, default is '*.mpco'.
+    verbose : bool, optional
+    Enable verbose output, default is False.
+
+    Examples
+    --------
+    >>> dataset = MPCODataSet('/path/to/hdf5_files', 'simulation_results')
+    >>> dataset.print_summary()
+    >>> # Access model stages
+    >>> print(dataset.model_stages)
+    >>> # Get information about nodal results
+    >>> dataset.print_nodal_results()
+
+    Notes
+    -----
+    The class uses common path templates for accessing data within the HDF5 structure:
+    - MODEL_NODES_PATH: "/{model_stage}/MODEL/NODES"
+    - MODEL_ELEMENTS_PATH: "/{model_stage}/MODEL/ELEMENTS"
+    - RESULTS_ON_ELEMENTS_PATH: "/{model_stage}/RESULTS/ON_ELEMENTS"
+    - RESULTS_ON_NODES_PATH: "/{model_stage}/RESULTS/ON_NODES"
+    """
 
     # Common path templates
     MODEL_NODES_PATH = "/{model_stage}/MODEL/NODES"
@@ -33,7 +122,9 @@ class MPCODataSet:
         self.elements=Elements(self)
         self.model_info = ModelInfo(self)
         self.cdata=CData(self)
+        self.plot=Plot(self)
         
+        # Create the object attributes
         self._create_object_attributes()
         
     def _create_object_attributes(self):
