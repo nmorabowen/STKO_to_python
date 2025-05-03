@@ -1,3 +1,24 @@
+Metadata-Version: 2.4
+Name: STKO_to_python
+Version: 0.1.0
+Summary: STKO tools for Python
+Author-email: Nicolas Mora Bowen <nmorabowen@gmail.com>
+License: MIT
+Project-URL: Homepage, https://github.com/nmorabowen/STKO_to_python
+Project-URL: Bug Tracker, https://github.com/nmorabowen/STKO_to_python/issues
+Classifier: Programming Language :: Python :: 3
+Classifier: Operating System :: OS Independent
+Requires-Python: >=3.8
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: numpy
+Requires-Dist: h5py
+Requires-Dist: matplotlib
+Requires-Dist: jupyter
+Requires-Dist: tables
+Requires-Dist: pandas
+Dynamic: license-file
+
 
 
 
