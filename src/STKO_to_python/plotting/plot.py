@@ -6,6 +6,9 @@ from scipy import stats
 import re
 import matplotlib.pyplot as plt
 
+print("Hola ladruño")
+
+
 if TYPE_CHECKING:
     from ..core.dataset import MPCODataSet
 
