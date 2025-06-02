@@ -66,9 +66,9 @@ class Plot:
         scaling_factor_horizontalAxis=1.0,
         ax=None,
         figsize=(10, 6),
-        color='k',
+        color=None,
         linetype='-',
-        linewidth=0.75,
+        linewidth=1.00,
         label=None,
     ):
         """
@@ -136,14 +136,21 @@ class Plot:
             fig, ax = plt.subplots(figsize=figsize)
 
         # Plot the data
-        ax.plot(x_array, y_array, color=color, linestyle=linetype, linewidth=linewidth, label=label)
+        if color is not None:
+            ax.plot(x_array, y_array, color=color, linestyle=linetype, linewidth=linewidth, label=label)
+        else:
+            ax.plot(x_array, y_array, linestyle=linetype, linewidth=linewidth, label=label)
+        
         if label:
             ax.legend()
         ax.set_xlabel(results_name_horizontalAxis or "Horizontal Axis")
         ax.set_ylabel(results_name_verticalAxis or "Vertical Axis")
         ax.grid(True)
         
-        return ax
+        results={'x_array': x_array,
+                 'y_array': y_array}
+
+        return ax, results
     
     
     
