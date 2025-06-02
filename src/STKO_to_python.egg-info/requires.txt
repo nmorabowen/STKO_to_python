@@ -4,3 +4,4 @@ matplotlib
 jupyter
 tables
 pandas
+scipy
