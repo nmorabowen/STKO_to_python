@@ -1,4 +1,4 @@
-import os
+
 
 
 from ..nodes.nodes import Nodes
@@ -124,9 +124,6 @@ class MPCODataSet:
         self.cdata=CData(self)
         self.plot=Plot(self)
         
-        # Get the number of available cpus
-        self.cpu_count = os.cpu_count()
-        
         # Create the object attributes
         self._create_object_attributes()
         
@@ -136,7 +133,6 @@ class MPCODataSet:
         """
         # Extract the results partition for the given recorder name
         self.results_partitions=self.model_info._get_file_list_for_results_name(extension='mpco', verbose=False)
-        self.number_of_partitions=len(self.results_partitions)
         self.cdata_partitions=self.model_info._get_file_list_for_results_name(extension='cdata', verbose=False)
         
         # Extract the model stages information
@@ -170,12 +166,11 @@ class MPCODataSet:
         
     def print_summary(self):
         """
-        Print a summary of the MPCO data set.
+        Print a summary of the virtual dataset.
         ---------------------------------------
         """
         print(f'File name: {self.recorder_name}')
         print(f'Number of partitions: {len(self.results_partitions)}')
-        print(f'The total number of nodes is: {self.nodes.total_nodes}')
         
         print('------------------------------------------------------')
         
