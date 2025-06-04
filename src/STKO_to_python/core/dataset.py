@@ -6,6 +6,7 @@ from ..elements.elements import Elements
 from ..model.model_info import ModelInfo
 from ..model.cdata import CData
 from ..plotting.plot import Plot
+from ..io.info import Info
 
 
 class MPCODataSet:
@@ -36,7 +37,7 @@ class MPCODataSet:
     Component handling model metadata and information.
     cdata : CData
     Component handling component data information.
-    hd5f_directory : str
+    hdf5_directory : str
     Path to the directory containing HDF5 files.
     recorder_name : str
     Base name of the recorder files to load.
@@ -108,12 +109,14 @@ class MPCODataSet:
         self,
         hdf5_directory: str,
         recorder_name: str,
+        name=None, # The model name, if None it will be extracted from the folder name
         file_extension='*.mpco',
         verbose=False,
     ):
         
-        self.hd5f_directory = hdf5_directory
+        self.hdf5_directory = hdf5_directory
         self.recorder_name = recorder_name
+        self.name=name
         self.file_extension = file_extension
         self.verbose = verbose
         
@@ -123,9 +126,11 @@ class MPCODataSet:
         self.model_info = ModelInfo(self)
         self.cdata=CData(self)
         self.plot=Plot(self)
+        self.info=Info(self)
         
         # Create the object attributes
         self._create_object_attributes()
+
         
     def _create_object_attributes(self):
         """
@@ -251,5 +256,15 @@ class MPCODataSet:
         print(f"Number of unique element types: {len(self.unique_element_types)}")
         for name in self.unique_element_types:
             print(f"  - {name}")
+    
+    def __str__(self):
+        print(f"Model Name: {self.name}")
+
+    def __repr__(self):
+        return (f"MPCODataSet(hdf5_directory='{self.hdf5_directory}', "
+                f"recorder_name='{self.recorder_name}', "
+                f"name='{self.name}', "
+                f"file_extension='{self.file_extension}', "
+                f"verbose={self.verbose})")
         
         

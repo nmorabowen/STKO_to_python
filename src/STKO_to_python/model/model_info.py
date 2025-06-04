@@ -53,7 +53,7 @@ class ModelInfo:
         if extension is None:
             extension = self.dataset.file_extension.strip("*.")
 
-        results_directory = self.dataset.hd5f_directory
+        results_directory = self.dataset.hdf5_directory
 
         try:
             files = glob.glob(os.path.join(results_directory, f"*.{extension}"))
