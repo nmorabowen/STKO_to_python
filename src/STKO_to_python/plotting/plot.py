@@ -57,7 +57,7 @@ class Plot:
         scaling_factor_verticalAxis=1.0,
         results_name_horizontalAxis=None,
         node_ids_horizontalAxis=None,
-        selection_set_id_horizontallAxis=None,
+        selection_set_id_horizontalAxis=None,
         direction_horizontalAxis=None,
         values_operation_horizontalAxis='Sum',
         scaling_factor_horizontalAxis=1.0,
@@ -80,7 +80,7 @@ class Plot:
             values_operation_verticalAxis (str): Aggregation operation for vertical axis ('Sum', 'Mean', etc.).
             results_name_horizontalAxis (str): Name of the horizontal axis results.
             node_ids_horizontalAxis (list): List of node IDs for horizontal axis results.
-            selection_set_id_horizontallAxis (int): Selection set ID for horizontal axis.
+            selection_set_id_horizontalAxis (int): Selection set ID for horizontal axis.
             direction_horizontalAxis (str): Direction of horizontal axis results ('x', 'y', or 'z').
             values_operation_horizontalAxis (str): Aggregation operation for horizontal axis.
             ax (matplotlib.axes.Axes): Pre-existing axes to plot on. If None, a new figure is created.
@@ -116,7 +116,7 @@ class Plot:
                 model_stage=model_stage,
                 results_name=results_name_horizontalAxis,
                 node_ids=node_ids_horizontalAxis,
-                selection_set_id=selection_set_id_horizontallAxis,
+                selection_set_id=selection_set_id_horizontalAxis,
             )
             # Aggregate results
             x_array = self._aggregate_results(horizontal_results_df, direction_horizontalAxis, values_operation_horizontalAxis) * scaling_factor_horizontalAxis
