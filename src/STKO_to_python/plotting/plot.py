@@ -42,7 +42,7 @@ class Plot:
         elif operation == 'Min':
             aggregated_values = results_df.groupby('step')[direction].min()
         else:
-            raise ValueError(f"Invalid operation: {operation}")
+            raise ValueError(f"Plot Error: Invalid operation: {operation}")
         
         return aggregated_values.values
     
@@ -126,7 +126,7 @@ class Plot:
             x_array = self.dataset.time.loc[model_stage]['TIME'].values
 
         if len(x_array) != len(y_array):
-            raise ValueError("Mismatch in lengths of horizontal and vertical data arrays.")
+            raise ValueError("Plot Error: Mismatch in lengths of horizontal and vertical data arrays.")
 
         # Create figure and axes if not provided
         if ax is None:

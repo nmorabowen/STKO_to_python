@@ -28,7 +28,7 @@ class CData:
             selection_set_ids = [selection_set_ids]
         
         if selection_set_ids is not None and not isinstance(selection_set_ids, list):
-            raise ValueError("selection_set_ids must be a list of integers or None.")
+            raise ValueError("CData Error: selection_set_ids must be a list of integers or None.")
         
         selection_sets = []  # Store extracted data
 
@@ -83,7 +83,7 @@ class CData:
                         selection_sets.append(selection_set)
 
         except Exception as e:
-            print(f"Error processing file {file_path}: {e}")
+            print(f"CData Error processing file {file_path}: {e}")
             return []
 
         return selection_sets
