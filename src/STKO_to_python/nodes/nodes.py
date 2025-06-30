@@ -89,6 +89,10 @@ class Nodes:
         """
         # Estimate total node count first to pre-allocate arrays
         estimated_node_count = self._estimate_node_count()
+        
+        if verbose:
+            print(f"Estimated total nodes across all partitions: {estimated_node_count}")
+        
         if estimated_node_count == 0:
             logger.warning("No nodes found in any partition")
             return {'array': np.array([], dtype=self._get_node_dtype()), 'dataframe': pd.DataFrame()}
@@ -133,13 +137,20 @@ class Nodes:
                                 part_data['node_id'] = node_ids
                                 part_data['file_id'] = file_ids
                                 part_data['index'] = indices
-                                part_data['x'] = coords[:, 0]
-                                part_data['y'] = coords[:, 1]
-                                part_data['z'] = coords[:, 2]
+                                if coords.shape[1] == 3:
+                                    part_data['x'] = coords[:, 0]
+                                    part_data['y'] = coords[:, 1]
+                                    part_data['z'] = coords[:, 2]
+                                elif coords.shape[1] == 2:
+                                    part_data['x'] = coords[:, 0]
+                                    part_data['y'] = coords[:, 1]
+                                    part_data['z'] = 0.0  # Pad with zeros for 2D models
+                                else:
+                                    raise ValueError(f"Unexpected number of coordinate components: {coords.shape[1]}")
                                 
                                 return part_data
             except Exception as e:
-                logger.warning(f"Error processing partition {part_number}: {str(e)}")
+                logger.warning(f"Node Error processing partition {part_number}: {str(e)}")
             
             return []
         

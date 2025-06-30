@@ -1,8 +1,6 @@
 # Ignore Python bytecode
 __pycache__/
 *.py[cod]
-*.pyo
-*.log
-*.pyc
-*.pyc
-*.pyc
+
+# Ignore Python packaging files
+*.egg-info/

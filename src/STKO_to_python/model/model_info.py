@@ -91,7 +91,7 @@ class ModelInfo:
             return file_mapping
 
         except Exception as e:
-            print(f"Error during file listing: {e}")
+            print(f"Model Info Error during file listing: {e}")
             raise
         
     def _get_file_list_for_results_name(self, extension= None, verbose=False):
@@ -104,7 +104,7 @@ class ModelInfo:
         recorder_files = file_info.get(self.dataset.recorder_name)
 
         if recorder_files is None:
-            raise ValueError(f"Recorder name '{self.dataset.recorder_name}' not found in {extension} files.")
+            raise ValueError(f"Model Info Error: Recorder name '{self.dataset.recorder_name}' not found in {extension} files.")
 
         return recorder_files
     
@@ -132,7 +132,7 @@ class ModelInfo:
         model_stages = sorted(set(model_stages))
 
         if not model_stages:
-            raise ValueError("No model stages found in the result partitions.")
+            raise ValueError("Model Info Error: No model stages found in the result partitions.")
 
         if verbose:
             print(f'The model stages found across partitions are: {model_stages}')
@@ -171,7 +171,7 @@ class ModelInfo:
                 print(f"Node results names for model stage '{stage}': {list(node_results_names)}")
 
         if not node_results_names:
-            raise ValueError(f"No node results found for model stage(s): {', '.join(model_stages)} in the result partitions.")
+            raise ValueError(f"Model Info: No node results found for model stage(s): {', '.join(model_stages)} in the result partitions.")
 
         return list(node_results_names)
     
@@ -210,10 +210,10 @@ class ModelInfo:
             element_results_names = list(set(element_results_names))
             
             if not element_results_names:
-                raise ValueError(f"No element results found for model stage '{model_stage}' in the result partitions.")
+                raise ValueError(f"Model Info: No element results found for model stage '{model_stage}' in the result partitions.")
             
             if verbose:
-                print(f'The element results names found across partitions for model stage "{model_stage}" are: {element_results_names}')
+                print(f'Model Info: The element results names found across partitions for model stage "{model_stage}" are: {element_results_names}')
         
         return element_results_names
     
@@ -250,7 +250,7 @@ class ModelInfo:
                     for name in results_names:
                         ele_types = results.get(self.dataset.RESULTS_ON_ELEMENTS_PATH.format(model_stage=stage) + f"/{name}")
                         if ele_types is None:
-                            raise ValueError(f"Element types group not found for {name} in partition {partition}")
+                            raise ValueError(f"Model Info Error: Element types group not found for {name} in partition {partition}")
                         if name not in element_types_dict:
                             element_types_dict[name] = []
                             element_types_dict[name].extend(list(ele_types.keys()))
@@ -285,7 +285,7 @@ class ModelInfo:
                     for name in results_names:
                         ele_types = results.get(self.dataset.RESULTS_ON_ELEMENTS_PATH.format(model_stage=model_stage) + f"/{name}")
                         if ele_types is None:
-                            raise ValueError(f"Element types group not found for {name}")
+                            raise ValueError(f"Model Info Error: Element types group not found for {name}")
                         element_types.update([key.split('[')[0] for key in ele_types.keys()])
             
                 
@@ -325,7 +325,7 @@ class ModelInfo:
                             time_series_dict[int(step_value)] = float(time_value)  # Store STEP -> TIME mapping
 
             except Exception as e:
-                print(f"Error processing partition {part_number}: {e}")
+                print(f"Model Info Error: Get time series error processing partition {part_number} for model stage '{model_stage}', results name '{results_name}': {e}")
 
         # Convert to DataFrame
         df = pd.DataFrame(list(time_series_dict.items()), columns=['STEP', 'TIME']).sort_values(by='STEP')
@@ -368,7 +368,7 @@ class ModelInfo:
                             time_series_dict[int(step_value)] = float(time_value)  # Store STEP -> TIME mapping
 
             except Exception as e:
-                print(f"Error processing partition {part_number}: {e}")
+                print(f"Model Info Error: Get time series error processing partition {part_number} for model stage '{model_stage}', results name '{results_name}', element type '{element_type}': {e}")
 
         # Convert to DataFrame
         df = pd.DataFrame(list(time_series_dict.items()), columns=['STEP', 'TIME']).sort_values(by='STEP')
@@ -412,7 +412,7 @@ class ModelInfo:
                 all_time_series.append(time_series_df)
 
             else:
-                raise ValueError(f"No nodal or element results found for model stage: {model_stage}")
+                raise ValueError(f"Model Info Error: No nodal or element results found for model stage: {model_stage}")
 
         # Concatenate all time series DataFrames and set MultiIndex
         final_df = pd.concat(all_time_series).set_index(["MODEL_STAGE", "STEP"]).sort_index()
@@ -472,7 +472,7 @@ class ModelInfo:
                             steps_info[stage] = len(data_group)
 
             except Exception as e:
-                print(f"Error processing model stage '{stage}': {e}")
+                print(f'Model Info Error: retrieving steps for model stage "{stage}": {e}')
                 steps_info[stage] = None
 
         return steps_info
