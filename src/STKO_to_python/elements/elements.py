@@ -2,6 +2,9 @@ from typing import TYPE_CHECKING
 import h5py
 import numpy as np
 import pandas as pd 
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+
 
 if TYPE_CHECKING:
     from ..core.dataset import MPCODataSet
@@ -397,3 +400,53 @@ class Elements:
 
         df = pd.DataFrame(all_results)
         return df.sort_values(by=['element_id', 'step', 'point_id']).reset_index(drop=True)
+
+    def plot_shell_elements(self, df_elements: pd.DataFrame, highlight_ids: list[int] = None):
+        """
+        Dibuja elementos tipo Shell y nodos, con opción de resaltar ciertos elementos.
+
+        Parámetros:
+        -----------
+        df_elements : pd.DataFrame
+            DataFrame con columnas ['element_id', 'node_list', 'centroid_x', 'centroid_y', 'centroid_z'].
+
+        highlight_ids : list[int], opcional
+            Lista de IDs de elementos a resaltar. Si es None, se dibujan todos igual.
+        """
+        if not hasattr(self.dataset, 'nodes_info') or 'dataframe' not in self.dataset.nodes_info:
+            raise ValueError("Información de nodos no disponible en el dataset.")
+
+        df_nodes = self.dataset.nodes_info['dataframe']
+        coord_map = dict(zip(df_nodes['node_id'], zip(df_nodes['x'], df_nodes['y'], df_nodes['z'])))
+        highlight_ids = set(highlight_ids) if highlight_ids else set()
+
+        fig = plt.figure(figsize=(10, 8))
+        ax = plt.subplot(111, projection='3d')
+
+        for _, row in df_elements.iterrows():
+            node_ids = row['node_list']
+            coords = [coord_map[nid] for nid in node_ids]
+            if coords[0] != coords[-1]:
+                coords.append(coords[0])
+
+            is_selected = row['element_id'] in highlight_ids
+            color = 'lightcoral' if is_selected else 'skyblue'
+            alpha = 0.4 if is_selected else 0.7
+
+            poly = Poly3DCollection([coords], facecolor=color, edgecolor='k', alpha=alpha)
+            ax.add_collection3d(poly)
+
+            ax.text(row['centroid_x'], row['centroid_y'], row['centroid_z'],
+                    str(row['element_id']), color='black', fontsize=8, ha='center')
+
+        ax.scatter(df_nodes['x'], df_nodes['y'], df_nodes['z'], color='black', s=5)
+
+        ax.set_xlabel('X')
+        ax.set_ylabel('Y')
+        ax.set_zlabel('Z')
+        ax.set_title('Shell Elements')
+
+        ax.view_init(elev=0, azim=-90)
+        ax.set_proj_type('ortho')
+        plt.tight_layout()
+        plt.show()
