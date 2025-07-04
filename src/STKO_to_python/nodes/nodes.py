@@ -682,5 +682,115 @@ class Nodes:
         
         logger.info(f"Results saved to {output_file}")
         return output_file
-    
-    
+
+
+# REVISAR -----------------------------------------------------
+    def get_nodes_at_z_levels(self, list_z: list[float], tol: float = 1e-3) -> dict:
+        """
+        Devuelve los node_id presentes en cada altura especificada.
+
+        Args:
+            list_z (list): Lista de alturas Z en mm.
+            tol (float): Tolerancia para comparación de altura.
+
+        Returns:
+            dict: Diccionario {z: [node_id1, node_id2, ...]} ordenado por Z.
+        """
+        import numpy as np
+
+        # Asegurar que las coordenadas estén disponibles
+        if 'all_nodes' not in self._node_info_cache:
+            self._get_all_nodes_ids()
+
+        node_df = self._node_info_cache['all_nodes']['dataframe']
+
+        # Inicializar diccionario
+        nodes_by_z = {}
+
+        # Recorrer cada altura Z
+        for z_val in sorted(list_z):
+            mask = np.isclose(node_df['z'], z_val, atol=tol)
+            ids = node_df.loc[mask, 'node_id'].sort_values().tolist()
+            nodes_by_z[z_val] = ids
+
+        return nodes_by_z
+
+    def get_results_from_node_dict(
+        self,
+        model_stage: str,
+        results_name: str,
+        nodes_by_level: dict,
+        reduction: str = "sum",
+        direction: int = 1
+    ) -> Tuple[pd.DataFrame, pd.DataFrame]:
+        """
+        Calcula los resultados por nivel Z utilizando un diccionario de nodos prefiltrados por altura.
+
+        Args:
+            model_stage (str): Etapa del modelo (ej: 'MODEL_STAGE[3]').
+            results_name (str): Nombre del resultado (ej: 'REACTION_FORCE').
+            nodes_by_level (dict): Diccionario con alturas Z como clave y lista de node_ids como valor.
+            reduction (str): Operación a aplicar por step: 'sum', 'mean', 'max', 'min'.
+            direction (int): Componente (1, 2 o 3) a extraer del resultado.
+
+        Returns:
+            Tuple[pd.DataFrame, pd.DataFrame]:
+                - df_full: Resultados por nodo, step, x, y, z y valor.
+                - df_summary: Una fila por z con min y max luego de aplicar la reducción por step.
+        """
+        import pandas as pd
+
+        reduction = reduction.lower()
+        if reduction not in ['sum', 'mean', 'max', 'min']:
+            raise ValueError("Reducción no válida. Usa: 'sum', 'mean', 'max', 'min'.")
+
+        # Cargar geometría de nodos si no está en caché
+        if 'all_nodes' not in self._node_info_cache:
+            self._get_all_nodes_ids()
+        node_df = self._node_info_cache['all_nodes']['dataframe']
+
+        full_rows = []
+        summary_rows = []
+
+        for z, node_ids in nodes_by_level.items():
+            if not node_ids:
+                continue
+
+            df_res = self.get_nodal_results(
+                model_stage=model_stage,
+                results_name=results_name,
+                node_ids=node_ids
+            ).reset_index()  # columnas: ['node_id', 'step', 1, 2, 3]
+
+            if direction not in df_res.columns:
+                continue
+
+            # Agregar coordenadas x, y, z
+            df_coords = node_df[node_df['node_id'].isin(node_ids)][['node_id', 'x', 'y', 'z']]
+            df_merged = pd.merge(df_res, df_coords, on='node_id', how='left')
+
+            # Renombrar componente
+            df_merged = df_merged[['step', 'node_id', 'x', 'y', 'z', direction]].rename(columns={direction: 'value'})
+            full_rows.append(df_merged)
+
+            # Reducción por step
+            grouped = df_merged.groupby("step")['value']
+            if reduction == "sum":
+                reduced = grouped.sum()
+            elif reduction == "mean":
+                reduced = grouped.mean()
+            elif reduction == "max":
+                reduced = grouped.max()
+            elif reduction == "min":
+                reduced = grouped.min()
+            
+            summary_rows.append({
+                "z": z,
+                "min_comp": reduced.min(),
+                "max_comp": reduced.max()
+            })
+
+        df_full = pd.concat(full_rows, ignore_index=True) if full_rows else pd.DataFrame()
+        df_summary = pd.DataFrame(summary_rows) if summary_rows else pd.DataFrame()
+
+        return df_full, df_summary
