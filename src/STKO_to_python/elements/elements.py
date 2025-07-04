@@ -10,170 +10,78 @@ class Elements:
     def __init__(self, dataset: 'MPCODataSet'):
         self.dataset = dataset
 
-    def _get_all_element_index(self, element_type=None, verbose=False):
+    def _get_all_element_index(self, element_type=None, model_stage=None, verbose=False):
         """
-        Fetch information for all elements of a given type in the partition files.
-        If no element type is provided, fetch information for all element types.
+        Extrae la conectividad y ubicación de elementos de un tipo específico o todos los tipos conocidos.
 
-        Args:
-            element_type (str or None): The type of elements to fetch (e.g., 'ElasticBeam3d'). 
-                                        If None, fetches all element types.
-            verbose (bool, optional): If True, prints memory usage for the 
-                                      structured array and DataFrame. Defaults to False.
+        Parámetros:
+        -----------
+        element_type : str, opcional
+            Tipo de elemento a leer (nombre completo incluyendo corchetes).
+        model_stage : str, opcional
+            Etapa del modelo a usar (por defecto usa la primera disponible).
+        verbose : bool
+            Si True, imprime información de memoria.
 
-        Returns:
-            dict: A dictionary containing:
-                - 'array': Structured NumPy array with element data.
-                - 'dataframe': Pandas DataFrame with element data.
+        Retorna:
+        --------
+        dict: {'array': ndarray estructurado, 'dataframe': DataFrame}
         """
-        model_stages = self.dataset.model_stages
+        if model_stage is None:
+            model_stage = self.dataset.model_stages[0]
 
-        # Prepare a dictionary of node coordinates for centroid calculation
-        # (node_id -> (x, y, z))
-        node_coord_map = {}
-        if hasattr(self.dataset, 'nodes_info') and 'dataframe' in self.dataset.nodes_info:
-            df_nodes = self.dataset.nodes_info['dataframe']
-            # Build the dictionary for quick lookup of coordinates by node_id
-            for node_id, x, y, z in zip(df_nodes['node_id'], df_nodes['x'], df_nodes['y'], df_nodes['z']):
-                node_coord_map[int(node_id)] = (float(x), float(y), float(z))
-        else:
-            # If node information is not available, we cannot compute centroids
-            # Proceed without centroid calculation
-            node_coord_map = None
-
-        # Determine which element types to fetch
         if element_type is None:
-            # If element_types is a dict, use its keys; if list, use directly
-            element_types = self.dataset.element_types
-            if isinstance(element_types, dict):
-                element_types = list(element_types.keys())
+            element_types = self.dataset.element_types['unique_element_types']
         else:
             element_types = [element_type]
 
-        elements_info = []  # List to store info for all elements
+        node_coord_map = {}
+        if hasattr(self.dataset, 'nodes_info') and 'dataframe' in self.dataset.nodes_info:
+            df_nodes = self.dataset.nodes_info['dataframe']
+            for node_id, x, y, z in zip(df_nodes['node_id'], df_nodes['x'], df_nodes['y'], df_nodes['z']):
+                node_coord_map[int(node_id)] = (x, y, z)
 
-        # Loop through each partition file
-        for part_number, partition_path in self.dataset.results_partitions.items():
-            with h5py.File(partition_path, 'r') as partition:
-                # Loop through each requested element type
+        elements_info = []
+
+        for part_id, path in self.dataset.results_partitions.items():
+            with h5py.File(path, 'r') as f:
+                base_path = f"{model_stage}/MODEL/ELEMENTS"
                 for etype in element_types:
-                    # Construct the HDF5 path for this element type in the current partition
-                    elem_path = self.dataset.MODEL_ELEMENTS_PATH.format(model_stage=model_stages[0], element_type=etype)
-                    element_group = partition.get(elem_path)
-                    if element_group is None:
-                        # If this partition does not contain the element type, skip it
-                        if verbose:
-                            print(f"Warning: Element type '{etype}' not found in partition {part_number}.")
+                    dataset_path = f"{base_path}/{etype}"
+                    if dataset_path not in f:
                         continue
 
-                    # Loop through each dataset in the element group
-                    for element_name in element_group.keys():
-                        # The dataset name might be like "ASDQuad4[1]" etc. 
-                        # We use the part before '[' to match the type name
-                        base_name = element_name.split('[')[0]
-                        if base_name != etype:
-                            continue  # skip any entries not matching the element type (just in case)
+                    data = f[dataset_path][:]
+                    for idx, row in enumerate(data):
+                        element_id = int(row[0])
+                        node_list = row[1:].tolist()
+                        centroid_x = centroid_y = centroid_z = np.nan
 
-                        dataset = element_group[element_name]
-                        data = dataset[:]  # Load all element data (IDs and connectivity)
-                        # Each entry in data: [element_id, node1, node2, ..., nodeN]
+                        if node_coord_map:
+                            coords = [node_coord_map.get(nid, (0, 0, 0)) for nid in node_list]
+                            coords = np.array(coords)
+                            centroid_x, centroid_y, centroid_z = coords.mean(axis=0)
 
-                        for idx, element_data in enumerate(data):
-                            element_id = int(element_data[0])
-                            node_ids = element_data[1:]  # array of node IDs (possibly numpy types)
-                            # Convert node IDs to a regular Python list of ints
-                            node_list = [int(nid) for nid in node_ids]
+                        elements_info.append({
+                            'element_id': element_id,
+                            'element_idx': idx,
+                            'file_name': part_id,
+                            'element_type': etype,
+                            'node_list': node_list,
+                            'num_nodes': len(node_list),
+                            'centroid_x': centroid_x,
+                            'centroid_y': centroid_y,
+                            'centroid_z': centroid_z
+                        })
 
-                            # Calculate centroid if node coordinates are available
-                            if node_coord_map:
-                                # Sum coordinates of all nodes in this element
-                                sx = sy = sz = 0.0
-                                for nid in node_list:
-                                    # Look up each node's coordinates
-                                    x, y, z = node_coord_map.get(nid, (0.0, 0.0, 0.0))
-                                    sx += x; sy += y; sz += z
-                                num_nodes = len(node_list)
-                                centroid_x = sx / num_nodes
-                                centroid_y = sy / num_nodes
-                                centroid_z = sz / num_nodes
-                            else:
-                                # If node coordinates unavailable, set centroid as None or 0
-                                num_nodes = len(node_list)
-                                centroid_x = centroid_y = centroid_z = None
-
-                            # Append element info dictionary
-                            elements_info.append({
-                                'element_id': element_id,
-                                'element_idx': idx,
-                                'file_name': part_number,
-                                'element_type': etype,
-                                'node_list': node_list,
-                                'num_nodes': num_nodes,
-                                'centroid_x': centroid_x,
-                                'centroid_y': centroid_y,
-                                'centroid_z': centroid_z
-                            })
-
-        # Convert the collected info to structured numpy array and pandas DataFrame
-        if elements_info:
-            # Define dtype for structured array, matching keys of the dict
-            dtype = [
-                ('element_id', 'i8'),
-                ('element_idx', 'i8'),
-                ('file_name', 'i8'),
-                ('element_type', object),
-                ('node_list', object),
-                ('num_nodes', 'i8'),
-                ('centroid_x', 'f8'),
-                ('centroid_y', 'f8'),
-                ('centroid_z', 'f8')
-            ]
-            # Create structured array data
-            structured_data = [
-                (
-                    elem['element_id'],
-                    elem['element_idx'],
-                    elem['file_name'],
-                    elem['element_type'],
-                    elem['node_list'],
-                    elem['num_nodes'],
-                    elem['centroid_x'] if elem['centroid_x'] is not None else np.nan,
-                    elem['centroid_y'] if elem['centroid_y'] is not None else np.nan,
-                    elem['centroid_z'] if elem['centroid_z'] is not None else np.nan
-                )
-                for elem in elements_info
-            ]
-            results_array = np.array(structured_data, dtype=dtype)
-            # Create DataFrame from the list of dicts
-            df = pd.DataFrame(elements_info)
-
-            if verbose:
-                array_memory = results_array.nbytes
-                df_memory = df.memory_usage(deep=True).sum()
-                print(f"Memory usage for structured array (ELEMENTS): {array_memory / 1024**2:.2f} MB")
-                print(f"Memory usage for DataFrame (ELEMENTS): {df_memory / 1024**2:.2f} MB")
-
-            return {
-                'array': results_array,
-                'dataframe': df
-            }
-        else:
+        if not elements_info:
             if verbose:
                 print("No elements found.")
-            return {
-                'array': np.array([], dtype=[
-                    ('element_id', 'i8'),
-                    ('file_id', 'i8'),
-                    ('index', 'i8'),
-                    ('type', 'U50'),
-                    ('node_list', object),
-                    ('num_nodes', 'i8'),
-                    ('centroid_x', 'f8'),
-                    ('centroid_y', 'f8'),
-                    ('centroid_z', 'f8')
-                ]),
-                'dataframe': pd.DataFrame()
-            }
+            return {'array': np.array([]), 'dataframe': pd.DataFrame()}
+
+        df = pd.DataFrame(elements_info)
+        return {'array': df.to_records(index=False), 'dataframe': df}
+
 
 
     def get_elements_at_z_levels(self, list_z: list[float], element_type: str, verbose: bool = False) -> pd.DataFrame:
@@ -329,3 +237,163 @@ class Elements:
             return pd.DataFrame()
 
         return pd.DataFrame(results)
+    
+
+    def get_shell_result_components(self, result_type: str, model_stage: str = 'MODEL_STAGE[3]', verbose: bool = True):
+        """
+        Retorna los componentes disponibles para un tipo de resultado aplicado a elementos tipo Shell.
+
+        Parámetros:
+        -----------
+        result_type : str
+            Tipo de resultado (ej. 'section.force', 'section.deformation').
+        model_stage : str
+            Etapa del modelo donde buscar (por defecto 'MODEL_STAGE[3]').
+        verbose : bool
+            Si True, imprime los resultados encontrados.
+
+        Retorna:
+        --------
+        dict:
+            Diccionario {element_type: [componentes]} para cada tipo de elemento tipo Shell encontrado.
+        """
+        shell_components = {}
+
+        for part_id, path in self.dataset.results_partitions.items():
+            with h5py.File(path, 'r') as f:
+                base_path = f"{model_stage}/RESULTS/ON_ELEMENTS/{result_type}"
+                if base_path not in f:
+                    if verbose:
+                        print(f"[{part_id}] Resultado '{result_type}' no encontrado.")
+                    continue
+
+                for etype in f[base_path]:
+                    if 'Shell' not in etype:
+                        continue
+
+                    meta_path = f"{base_path}/{etype}/META/COMPONENTS"
+                    if meta_path not in f:
+                        if verbose:
+                            print(f"[{part_id}] {etype} no tiene COMPONENTS definidos.")
+                        continue
+
+                    comps = [c.decode() for c in f[meta_path][()]]
+                    shell_components[etype] = comps
+
+                    if verbose:
+                        print(f"🟩 Archivo: {part_id}")
+                        print(f"   • Tipo elemento : {etype}")
+                        print(f"   • Componentes   : {comps}")
+
+        # === Agregado: imprimir resumen de resultados disponibles ===
+        print("\n📋 Resultados disponibles en ModelAnalysis_01:")
+        if hasattr(self.dataset, "element_results_names"):
+            for rtype in sorted(self.dataset.element_results_names):
+                print(f"   • {rtype}")
+        else:
+            print("   [X] No se encontró 'element_results_names' en el dataset.")
+
+        return shell_components
+
+
+
+    def get_element_results_by_ids(
+        self,
+        model_stage: str,
+        results_name: str,
+        element_ids: list[int],
+        desired_components: list[str],
+        verbose: bool = False
+    ) -> pd.DataFrame:
+        """
+        Extrae resultados específicos por componente de elementos tipo Shell.
+
+        Parámetros:
+        -----------
+        model_stage : str
+            Etapa del modelo (ej. 'MODEL_STAGE[3]').
+        results_name : str
+            Nombre del resultado (ej. 'section.deformation').
+        element_ids : list[int]
+            Lista de IDs de elementos deseados.
+        desired_components : list[str]
+            Componentes deseadas (ej. ['epsXX', 'epsYY']).
+        verbose : bool
+            Si True, imprime información adicional.
+
+        Retorna:
+        --------
+        pd.DataFrame con columnas ['element_id', 'step', 'point_id', comp_1, comp_2, ...]
+        """
+        import pandas as pd
+
+        all_results = []
+
+        for file_id, file_path in self.dataset.results_partitions.items():
+            with h5py.File(file_path, 'r') as f:
+                base_path = f"{model_stage}/RESULTS/ON_ELEMENTS/{results_name}"
+                if base_path not in f:
+                    continue
+
+                for element_type in f[base_path]:
+                    if 'Shell' not in element_type:
+                        continue
+
+                    group_path = f"{base_path}/{element_type}"
+                    ids_path = f"{group_path}/ID"
+                    meta_path = f"{group_path}/META/COMPONENTS"
+                    data_path = f"{group_path}/DATA"
+
+                    if ids_path not in f or meta_path not in f or data_path not in f:
+                        continue
+
+                    # Obtener IDs
+                    element_ids_all = f[ids_path][()]
+                    # Obtener componentes
+                    raw_labels = f[meta_path][()][0].decode()
+                    point_blocks = raw_labels.split(';')
+                    per_point_labels = point_blocks[0].split(',')
+                    per_point_labels = [l.strip().split('.')[-1] for l in per_point_labels]
+                    n_points = len(point_blocks)
+                    n_comp = len(per_point_labels)
+
+                    # Verificar componentes
+                    missing = [c for c in desired_components if c not in per_point_labels]
+                    if missing:
+                        if verbose:
+                            print(f"[{file_id}] {element_type} → componentes no encontradas: {missing}")
+                        continue
+
+                    comp_indices = [per_point_labels.index(c) for c in desired_components]
+
+                    # Revisar elementos encontrados
+                    mask = np.isin(element_ids_all, element_ids)
+                    if not np.any(mask):
+                        continue
+
+                    element_idx = np.where(mask)[0]
+                    element_real_ids = element_ids_all[element_idx]
+
+                    for step_key in f[data_path].keys():
+                        step_data = f[f"{data_path}/{step_key}"][()]
+
+                        for idx, eid in zip(element_idx, element_real_ids):
+                            full_vector = step_data[idx]
+                            for p in range(n_points):
+                                row = {
+                                    'element_id': int(eid),
+                                    'step': int(step_key.replace("STEP_", "")),
+                                    'point_id': p
+                                }
+                                for ci, cname in zip(comp_indices, desired_components):
+                                    row[cname] = full_vector[p * n_comp + ci]
+                                all_results.append(row)
+
+
+        if not all_results:
+            if verbose:
+                print("No se encontraron resultados para los elementos y componentes indicados.")
+            return pd.DataFrame()
+
+        df = pd.DataFrame(all_results)
+        return df.sort_values(by=['element_id', 'step', 'point_id']).reset_index(drop=True)
