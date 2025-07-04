@@ -17,6 +17,9 @@ src/STKO_to_python/examples/__init__.py
 src/STKO_to_python/examples/nodalExtranction.ipynb
 src/STKO_to_python/io/__init__.py
 src/STKO_to_python/io/hdf5_utils.py
+src/STKO_to_python/io/info.py
+src/STKO_to_python/io/time_utils.py
+src/STKO_to_python/io/utilities.py
 src/STKO_to_python/model/__init__.py
 src/STKO_to_python/model/cdata.py
 src/STKO_to_python/model/model_info.py
