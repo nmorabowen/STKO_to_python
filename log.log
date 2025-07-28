@@ -1,7 +1,24 @@
-2025-05-09 21:12:21,149 - INFO - Sending data: {"params": {"type": 4, "message": "file:///c%3A/Users/nmora/Documents/GitHub/STKO_to_python/src/STKO_to_python/__init__.py :\r\n[\n    {\n        \"type\": \"convention\",\n        \"module\": \"STKO_to_python.__init__\",\n        \"obj\": \"\",\n        \"line\": 22,\n        \"column\": 0,\n        \"endLine\": null,\n        \"endColumn\": null,\n        \"path\": \"C:\\\\Users\\\\nmora\\\\Documents\\\\GitHub\\\\STKO_to_python\\\\src\\\\STKO_to_python\\\\__init__.py\",\n        \"symbol\": \"missing-final-newline\",\n        \"message\": \"Final newline missing\",\n        \"message-id\": \"C0304\"\n    },\n    {\n        \"type\": \"convention\",\n        \"module\": \"STKO_to_python\",\n        \"obj\": \"\",\n        \"line\": 1,\n        \"column\": 0,\n        \"endLine\": null,\n        \"endColumn\": null,\n        \"path\": \"C:\\\\Users\\\\nmora\\\\Documents\\\\GitHub\\\\STKO_to_python\\\\src\\\\STKO_to_python\\\\__init__.py\",\n        \"symbol\": \"missing-module-docstring\",\n        \"message\": \"Missing module docstring\",\n        \"message-id\": \"C0114\"\n    },\n    {\n        \"type\": \"convention\",\n        \"module\": \"STKO_to_python\",\n        \"obj\": \"\",\n        \"line\": 1,\n        \"column\": 0,\n        \"endLine\": null,\n        \"endColumn\": null,\n        \"path\": \"C:\\\\Users\\\\nmora\\\\Documents\\\\GitHub\\\\STKO_to_python\\\\src\\\\STKO_to_python\\\\__init__.py\",\n        \"symbol\": \"invalid-name\",\n        \"message\": \"Module name \\\"STKO_to_python\\\" doesn't conform to snake_case naming style\",\n        \"message-id\": \"C0103\"\n    }\n]\n"}, "method": "window/logMessage", "jsonrpc": "2.0"}
-2025-05-09 21:12:21,150 - INFO - Sending data: {"params": {"uri": "file:///c%3A/Users/nmora/Documents/GitHub/STKO_to_python/src/STKO_to_python/__init__.py", "diagnostics": [{"range": {"start": {"line": 21, "character": 0}, "end": {"line": 21, "character": 0}}, "message": "Final newline missing", "severity": 3, "code": "C0304:missing-final-newline", "codeDescription": {"href": "https://pylint.readthedocs.io/en/latest/user_guide/messages/convention/missing-final-newline.html"}, "source": "Pylint"}, {"range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 0}}, "message": "Missing module docstring", "severity": 3, "code": "C0114:missing-module-docstring", "codeDescription": {"href": "https://pylint.readthedocs.io/en/latest/user_guide/messages/convention/missing-module-docstring.html"}, "source": "Pylint"}, {"range": {"start": {"line": 0, "character": 0}, "end": {"line": 0, "character": 0}}, "message": "Module name \"STKO_to_python\" doesn't conform to snake_case naming style", "severity": 3, "code": "C0103:invalid-name", "codeDescription": {"href": "https://pylint.readthedocs.io/en/latest/user_guide/messages/convention/invalid-name.html"}, "source": "Pylint"}]}, "method": "textDocument/publishDiagnostics", "jsonrpc": "2.0"}
-2025-05-09 21:12:21,151 - INFO - Sending data: {"id": 6, "jsonrpc": "2.0", "result": []}
-2025-05-09 21:12:21,151 - WARNING - Cancel notification for unknown message id "6"
-2025-05-09 21:17:51,370 - INFO - Sending data: {"id": 7, "jsonrpc": "2.0", "result": null}
-2025-05-09 21:17:51,371 - INFO - Shutting down the server
-2025-05-09 21:17:51,372 - INFO - Closing the event loop.
+2025-07-23 18:00:43,311 - INFO - STKO analysis started at 2025-07-01 23:35:50
+2025-07-23 18:00:43,311 - INFO - STKO analysis ended at 2025-07-02 03:03:09
+2025-07-23 18:00:43,311 - INFO - Elapsed time: 207.31666666666666 seconds
+2025-07-23 18:00:43,313 - INFO - Dataset folder size: 3.93 GB
+2025-07-23 18:00:43,527 - INFO - Memory usage for structured array (NODES): 0.09 MB
+2025-07-23 18:00:43,528 - INFO - Memory usage for DataFrame (NODES): 0.09 MB
+2025-07-23 18:00:43,528 - INFO - _get_all_nodes_ids executed in 0.01 seconds
+2025-07-23 18:00:44,115 - INFO - _get_stage_results executed in 0.34 seconds
+2025-07-23 18:00:44,115 - INFO - get_nodal_results executed in 0.34 seconds
+2025-07-23 18:00:44,478 - INFO - _get_stage_results executed in 0.36 seconds
+2025-07-23 18:00:44,478 - INFO - get_nodal_results executed in 0.36 seconds
+2025-07-23 18:00:44,679 - INFO - _get_all_nodes_ids executed in 0.00 seconds
+2025-07-23 18:02:53,582 - INFO - STKO analysis started at 2025-07-01 23:35:50
+2025-07-23 18:02:53,582 - INFO - STKO analysis ended at 2025-07-02 03:03:09
+2025-07-23 18:02:53,582 - INFO - Elapsed time: 207.31666666666666 seconds
+2025-07-23 18:02:53,585 - INFO - Dataset folder size: 3.93 GB
+2025-07-23 18:02:53,815 - INFO - Memory usage for structured array (NODES): 0.09 MB
+2025-07-23 18:02:53,815 - INFO - Memory usage for DataFrame (NODES): 0.09 MB
+2025-07-23 18:02:53,815 - INFO - _get_all_nodes_ids executed in 0.00 seconds
+2025-07-23 18:02:54,367 - INFO - _get_stage_results executed in 0.33 seconds
+2025-07-23 18:02:54,367 - INFO - get_nodal_results executed in 0.33 seconds
+2025-07-23 18:02:54,752 - INFO - _get_stage_results executed in 0.39 seconds
+2025-07-23 18:02:54,752 - INFO - get_nodal_results executed in 0.39 seconds
+2025-07-23 18:02:54,951 - INFO - _get_all_nodes_ids executed in 0.00 seconds
