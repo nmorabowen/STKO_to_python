@@ -1,23 +1,8 @@
-2025-07-27 21:20:44,992 - INFO - STKO analysis started at 2025-07-25 21:27:13
-2025-07-27 21:20:44,992 - INFO - STKO analysis ended at 2025-07-26 05:44:28
-2025-07-27 21:20:44,992 - INFO - Elapsed time: 497.25 seconds
-2025-07-27 21:20:44,995 - INFO - Dataset folder size: 19.55 GB
-2025-07-27 21:20:47,241 - INFO - Memory usage for structured array (NODES): 0.00 MB
-2025-07-27 21:20:47,241 - INFO - Memory usage for DataFrame (NODES): 0.00 MB
-2025-07-27 21:20:47,241 - INFO - _get_all_nodes_ids executed in 0.01 seconds
-2025-07-27 21:20:52,088 - INFO - _get_stage_results executed in 4.48 seconds
-2025-07-27 21:20:52,088 - INFO - get_nodal_results executed in 4.48 seconds
-2025-07-27 21:20:54,099 - INFO - _get_stage_results executed in 1.71 seconds
-2025-07-27 21:20:54,099 - INFO - get_nodal_results executed in 1.71 seconds
-2025-07-27 21:20:58,439 - INFO - _get_stage_results executed in 4.15 seconds
-2025-07-27 21:20:58,439 - INFO - get_nodal_results executed in 4.15 seconds
-2025-07-27 21:21:04,407 - INFO - _get_stage_results executed in 4.43 seconds
-2025-07-27 21:21:04,407 - INFO - get_nodal_results executed in 4.43 seconds
-2025-07-27 21:21:10,730 - INFO - _get_stage_results executed in 4.39 seconds
-2025-07-27 21:21:10,731 - INFO - get_nodal_results executed in 4.39 seconds
-2025-07-27 21:21:15,897 - INFO - _get_stage_results executed in 4.96 seconds
-2025-07-27 21:21:15,898 - INFO - get_nodal_results executed in 4.96 seconds
-2025-07-27 21:21:21,162 - INFO - _get_stage_results executed in 5.10 seconds
-2025-07-27 21:21:21,162 - INFO - get_nodal_results executed in 5.10 seconds
-2025-07-27 21:21:27,854 - INFO - _get_stage_results executed in 4.82 seconds
-2025-07-27 21:21:27,854 - INFO - get_nodal_results executed in 4.82 seconds
+2025-07-28 10:38:16,553 - INFO - STKO analysis started at 2025-07-25 21:27:13
+2025-07-28 10:38:16,553 - INFO - STKO analysis ended at 2025-07-26 05:44:28
+2025-07-28 10:38:16,553 - INFO - Elapsed time: 497.25 seconds
+2025-07-28 10:38:16,554 - INFO - Dataset folder size: 19.55 GB
+2025-07-28 10:38:16,641 - WARNING - No nodal results found for stage(s): MODEL_STAGE[1], MODEL_STAGE[2], MODEL_STAGE[3], MODEL_STAGE[4], MODEL_STAGE[5] in 8 partition(s).
+2025-07-28 10:38:16,942 - INFO - Memory usage for structured array (NODES): 0.42 MB
+2025-07-28 10:38:16,942 - INFO - Memory usage for DataFrame (NODES): 0.42 MB
+2025-07-28 10:38:16,942 - INFO - _get_all_nodes_ids executed in 0.01 seconds

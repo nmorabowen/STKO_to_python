@@ -1,9 +1,8 @@
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 import h5py
 import numpy as np
 import pandas as pd 
-import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+from concurrent.futures import ThreadPoolExecutor
 
 
 if TYPE_CHECKING:
@@ -12,106 +11,210 @@ if TYPE_CHECKING:
 class Elements:
     def __init__(self, dataset: 'MPCODataSet'):
         self.dataset = dataset
-
-    def _get_all_element_index(self, element_type=None, model_stage=None, verbose=False):
+    
+    def _get_all_element_index(self, element_type=None, verbose=False):
         """
-        Extrae la conectividad y ubicación de elementos de un tipo específico o todos los tipos conocidos.
+        Fetch information for all elements of a given type in the partition files.
+        If no element type is provided, fetch information for all element types.
 
-        Parámetros:
-        -----------
-        element_type : str, opcional
-            Tipo de elemento a leer (nombre completo incluyendo corchetes).
-        model_stage : str, opcional
-            Etapa del modelo a usar (por defecto usa la primera disponible).
-        verbose : bool
-            Si True, imprime información de memoria.
+        Args:
+            element_type (str or None): The type of elements to fetch (e.g., 'ElasticBeam3d'). 
+                                        If None, fetches all element types.
+            verbose (bool, optional): If True, prints memory usage for the 
+                                      structured array and DataFrame. Defaults to False.
 
-        Retorna:
-        --------
-        dict: {'array': ndarray estructurado, 'dataframe': DataFrame}
+        Returns:
+            dict: A dictionary containing:
+                - 'array': Structured NumPy array with element data.
+                - 'dataframe': Pandas DataFrame with element data.
         """
-        if model_stage is None:
-            model_stage = self.dataset.model_stages[0]
+        model_stages = self.dataset.model_stages
 
-        if element_type is None:
-            element_types = self.dataset.element_types['unique_element_types']
-        else:
-            element_types = [element_type]
-
+        # Prepare a dictionary of node coordinates for centroid calculation
+        # (node_id -> (x, y, z))
         node_coord_map = {}
         if hasattr(self.dataset, 'nodes_info') and 'dataframe' in self.dataset.nodes_info:
             df_nodes = self.dataset.nodes_info['dataframe']
+            # Build the dictionary for quick lookup of coordinates by node_id
             for node_id, x, y, z in zip(df_nodes['node_id'], df_nodes['x'], df_nodes['y'], df_nodes['z']):
-                node_coord_map[int(node_id)] = (x, y, z)
+                node_coord_map[int(node_id)] = (float(x), float(y), float(z))
+        else:
+            # If node information is not available, we cannot compute centroids
+            # Proceed without centroid calculation
+            node_coord_map = None
 
-        elements_info = []
+        # Determine which element types to fetch
+        if element_type is None:
+            element_types = self.dataset.element_types.get('unique_element_types', [])
+            if isinstance(element_types, set):
+                element_types = list(element_types)
 
-        for part_id, path in self.dataset.results_partitions.items():
-            with h5py.File(path, 'r') as f:
-                base_path = f"{model_stage}/MODEL/ELEMENTS"
+            # 🔁 Extract base names like '203-ASDShellQ4'
+            base_elements = sorted(set(e.split('[')[0] for e in element_types))
+            element_types = base_elements
+
+        else:
+            element_types = [element_type.split('[')[0]]  # just to be safe
+
+        if verbose:
+            print(f"Fetching elements of types: {element_types}")
+        
+        elements_info = []  # List to store info for all elements
+
+        # Loop through each partition file
+        for part_number, partition_path in self.dataset.results_partitions.items():
+            with h5py.File(partition_path, 'r') as partition:
+                # Loop through each requested element type
                 for etype in element_types:
-                    dataset_path = f"{base_path}/{etype}"
-                    if dataset_path not in f:
+                    # Construct the HDF5 path for this element type in the current partition
+                    elem_path = self.dataset.MODEL_ELEMENTS_PATH.format(model_stage=model_stages[0], element_type=etype)
+                    element_group = partition.get(elem_path)
+                    if element_group is None:
+                        # If this partition does not contain the element type, skip it
+                        if verbose:
+                            print(f"Warning: Element type '{etype}' not found in partition {part_number}.")
                         continue
 
-                    data = f[dataset_path][:]
-                    for idx, row in enumerate(data):
-                        element_id = int(row[0])
-                        node_list = row[1:].tolist()
-                        centroid_x = centroid_y = centroid_z = np.nan
+                    # Loop through each dataset in the element group
+                    for element_name in element_group.keys():
+                        # The dataset name might be like "ASDQuad4[1]" etc. 
+                        # We use the part before '[' to match the type name
+                        base_name = element_name.split('[')[0]
+                        if base_name != etype:
+                            continue  # skip any entries not matching the element type (just in case)
 
-                        if node_coord_map:
-                            coords = [node_coord_map.get(nid, (0, 0, 0)) for nid in node_list]
-                            coords = np.array(coords)
-                            centroid_x, centroid_y, centroid_z = coords.mean(axis=0)
+                        dataset = element_group[element_name]
+                        data = dataset[:]  # Load all element data (IDs and connectivity)
+                        # Each entry in data: [element_id, node1, node2, ..., nodeN]
 
-                        elements_info.append({
-                            'element_id': element_id,
-                            'element_idx': idx,
-                            'file_name': part_id,
-                            'element_type': etype,
-                            'node_list': node_list,
-                            'num_nodes': len(node_list),
-                            'centroid_x': centroid_x,
-                            'centroid_y': centroid_y,
-                            'centroid_z': centroid_z
-                        })
+                        for idx, element_data in enumerate(data):
+                            element_id = int(element_data[0])
+                            node_ids = element_data[1:]  # array of node IDs (possibly numpy types)
+                            # Convert node IDs to a regular Python list of ints
+                            node_list = [int(nid) for nid in node_ids]
 
-        if not elements_info:
+                            # Calculate centroid if node coordinates are available
+                            if node_coord_map:
+                                # Sum coordinates of all nodes in this element
+                                sx = sy = sz = 0.0
+                                for nid in node_list:
+                                    # Look up each node's coordinates
+                                    x, y, z = node_coord_map.get(nid, (0.0, 0.0, 0.0))
+                                    sx += x; sy += y; sz += z
+                                num_nodes = len(node_list)
+                                centroid_x = sx / num_nodes
+                                centroid_y = sy / num_nodes
+                                centroid_z = sz / num_nodes
+                            else:
+                                # If node coordinates unavailable, set centroid as None or 0
+                                num_nodes = len(node_list)
+                                centroid_x = centroid_y = centroid_z = None
+
+                            # Append element info dictionary
+                            elements_info.append({
+                                'element_id': element_id,
+                                'element_idx': idx,
+                                'file_name': part_number,
+                                'element_type': etype,
+                                'node_list': node_list,
+                                'num_nodes': num_nodes,
+                                'centroid_x': centroid_x,
+                                'centroid_y': centroid_y,
+                                'centroid_z': centroid_z
+                            })
+
+        # Convert the collected info to structured numpy array and pandas DataFrame
+        if elements_info:
+            # Define dtype for structured array, matching keys of the dict
+            dtype = [
+                ('element_id', 'i8'),
+                ('element_idx', 'i8'),
+                ('file_name', 'i8'),
+                ('element_type', object),
+                ('node_list', object),
+                ('num_nodes', 'i8'),
+                ('centroid_x', 'f8'),
+                ('centroid_y', 'f8'),
+                ('centroid_z', 'f8')
+            ]
+            # Create structured array data
+            structured_data = [
+                (
+                    elem['element_id'],
+                    elem['element_idx'],
+                    elem['file_name'],
+                    elem['element_type'],
+                    elem['node_list'],
+                    elem['num_nodes'],
+                    elem['centroid_x'] if elem['centroid_x'] is not None else np.nan,
+                    elem['centroid_y'] if elem['centroid_y'] is not None else np.nan,
+                    elem['centroid_z'] if elem['centroid_z'] is not None else np.nan
+                )
+                for elem in elements_info
+            ]
+            results_array = np.array(structured_data, dtype=dtype)
+            # Create DataFrame from the list of dicts
+            df = pd.DataFrame(elements_info)
+
             if verbose:
-                print("Ladruño elements rocks!! (almost)")
-            return {'array': np.array([]), 'dataframe': pd.DataFrame()}
+                array_memory = results_array.nbytes
+                df_memory = df.memory_usage(deep=True).sum()
+                print(f"Memory usage for structured array (ELEMENTS): {array_memory / 1024**2:.2f} MB")
+                print(f"Memory usage for DataFrame (ELEMENTS): {df_memory / 1024**2:.2f} MB")
 
-        df = pd.DataFrame(elements_info)
-        return {'array': df.to_records(index=False), 'dataframe': df}
+            return {
+                'array': results_array,
+                'dataframe': df
+            }
+        else:
+            if verbose:
+                print("No elements found.")
+            return {
+                'array': np.array([], dtype=[
+                    ('element_id', 'i8'),
+                    ('file_id', 'i8'),
+                    ('index', 'i8'),
+                    ('type', 'U50'),
+                    ('node_list', object),
+                    ('num_nodes', 'i8'),
+                    ('centroid_x', 'f8'),
+                    ('centroid_y', 'f8'),
+                    ('centroid_z', 'f8')
+                ]),
+                'dataframe': pd.DataFrame()
+            }
 
-
-
-    def get_elements_at_z_levels(self, list_z: list[float], element_type: str, verbose: bool = False) -> pd.DataFrame:
+    def get_elements_at_z_levels(
+        self,
+        list_z: list[float],
+        element_type: str | None = None,
+        verbose: bool = False
+    ) -> pd.DataFrame:
         """
-        Devuelve un DataFrame con los elementos que intersectan planos horizontales en múltiples niveles Z.
+        Return a DataFrame with elements that intersect horizontal planes at multiple Z-levels.
 
-        Parámetros:
-        -----------
+        Parameters
+        ----------
         list_z : list of float
-            Lista de valores Z (mm) donde se definen los planos horizontales de corte.
-        element_type : str
-            Tipo de elemento (ej. '203-ASDShellQ4') a considerar.
-        verbose : bool
-            Si es True, imprime la cantidad de elementos encontrados por nivel Z.
+            Z-coordinates (in mm) where horizontal slicing planes are defined.
+        element_type : str or None, default=None
+            Specific element type to filter (e.g., '203-ASDShellQ4').
+            If None, all element types are considered.
+        verbose : bool, default=False
+            If True, prints the number of elements found at each Z-level.
 
-        Retorna:
-        --------
-        pd.DataFrame:
-            DataFrame con los elementos que intersectan cada plano, incluyendo columna 'z_level'.
+        Returns
+        -------
+        pd.DataFrame
+            A DataFrame of intersecting elements including a 'z_level' column.
         """
-        # Obtener todos los elementos del tipo especificado
+        # Get elements of the specified type (or all types if None)
         result = self._get_all_element_index(element_type=element_type, verbose=False)
         df_elements = result['dataframe']
 
-        # Obtener coordenadas de los nodos
+        # Validate node info availability
         if not hasattr(self.dataset, 'nodes_info') or 'dataframe' not in self.dataset.nodes_info:
-            raise ValueError("Información de nodos no disponible en el dataset.")
+            raise ValueError("Node information is not available in the dataset.")
 
         df_nodes = self.dataset.nodes_info['dataframe']
         node_z_map = dict(zip(df_nodes['node_id'], df_nodes['z']))
@@ -127,12 +230,12 @@ class Elements:
                 z_coords = [z for z in z_coords if z is not None]
 
                 if not z_coords:
-                    continue  # Si no hay coordenadas disponibles, se omite
+                    continue  # Skip if no Z coordinates available
 
                 min_z = min(z_coords)
                 max_z = max(z_coords)
 
-                # Verifica si el plano Z intersecta el elemento
+                # Check if the Z-plane intersects the element
                 if min_z <= z_level <= max_z:
                     filtered_elements.append(row)
 
@@ -141,337 +244,319 @@ class Elements:
             all_filtered.append(df_filtered)
 
             if verbose:
-                print(f"[Z = {z_level}] Elementos encontrados: {len(df_filtered)}")
+                print(f"[Z = {z_level}] Elements found: {len(df_filtered)}")
 
         if all_filtered:
             return pd.concat(all_filtered, ignore_index=True)
         else:
             return pd.DataFrame()
 
-
-
-    def get_available_element_results(self, element_type: str = None):
+    def get_available_element_results(self, element_type: str = None) -> dict[str, dict[str, list[str]]]:
         """
-        Explora los archivos de partición para listar los tipos de resultados disponibles por elemento.
-        
-        Args:
-            element_type (str, optional): Tipo de elemento a consultar (por ejemplo, '203-ASDShellQ4').
-                                        Si es None, muestra todos los tipos disponibles.
-        
-        Returns:
-            dict: Diccionario {partition_id: [lista de resultados disponibles]}
+        List available element result types across partitions.
+
+        Parameters
+        ----------
+        element_type : str, optional
+            Base name (e.g., '203-ASDShellQ4') or full decorated name
+            (e.g., '203-ASDShellQ4[201:0:0]'). If None, includes all.
+
+        Returns
+        -------
+        dict
+            {
+                partition_id: {
+                    result_name: [list of matching decorated types]
+                }
+            }
         """
-        model_stages = self.dataset.model_stages
         results_by_partition = {}
 
         for part_id, filepath in self.dataset.results_partitions.items():
-            with h5py.File(filepath, 'r') as f:
+            with h5py.File(filepath, "r") as f:
                 try:
-                    stage = model_stages[0]
-                    results_path = f"/MODEL/{stage}/ELEMENTS"
-                    if results_path not in f:
-                        continue
+                    partition_results = {}
 
-                    element_results = f[results_path]
-                    results_for_type = {}
-
-                    for etype_name in element_results:
-                        # Si se solicita un tipo específico, saltar los otros
-                        if element_type is not None and not etype_name.startswith(element_type):
+                    for stage in self.dataset.model_stages:
+                        group_path = f"{stage}/RESULTS/ON_ELEMENTS"
+                        if group_path not in f:
                             continue
 
-                        group = element_results[etype_name]
-                        result_names = list(group.keys())
-                        results_for_type[etype_name] = result_names
+                        on_elements = f[group_path]
 
-                    results_by_partition[part_id] = results_for_type
+                        for result_name in on_elements:
+                            result_group = on_elements[result_name]
+                            matched_element_types = []
+
+                            for etype_name in result_group:
+                                if element_type is None:
+                                    matched_element_types.append(etype_name)
+                                elif etype_name == element_type:
+                                    matched_element_types.append(etype_name)
+                                elif etype_name.startswith(element_type):  # allow base match
+                                    matched_element_types.append(etype_name)
+
+                            if matched_element_types:
+                                partition_results[result_name] = matched_element_types
+
+                    if partition_results:
+                        results_by_partition[part_id] = partition_results
+
                 except Exception as e:
-                    print(f"Error leyendo {filepath}: {e}")
+                    print(f"[{filepath}] → Error reading results: {e}")
 
         return results_by_partition
 
 
-    def get_element_results(self, results_name: str, element_type: str, element_ids: list[int] = None) -> pd.DataFrame:
-        """
-        Devuelve resultados de un tipo específico de elemento para todos los model_stages disponibles.
-
-        Parámetros:
-        -----------
-        results_name : str
-            Nombre exacto del resultado (ej. 'STRESS_TENSOR', 'STRAIN_TENSOR', etc.).
-        element_type : str
-            Tipo de elemento (ej. '203-ASDShellQ4').
-        element_ids : list[int], opcional
-            Lista de IDs de elementos a extraer (si se desea filtrar). Si None, se extraen todos.
-
-        Retorna:
-        --------
-        DataFrame con columnas: ['model_stage', 'step', 'frame', 'element_id', 'data']
-        """
-        results = []
-
-        for model_stage in self.dataset.model_stages:
-            for part_number, path in self.dataset.results_partitions.items():
-                with h5py.File(path, 'r') as f:
-                    base_path = f'results/{model_stage}/ELEMENT/{element_type}/{results_name}'
-                    if base_path not in f:
-                        continue
-
-                    group = f[base_path]
-                    for step_key in group:
-                        step_group = group[step_key]
-                        for frame_key in step_group:
-                            frame_data = step_group[frame_key]
-                            element_ids_data = frame_data['element_id'][:]
-                            result_data = frame_data['data'][:]
-
-                            for eid, data in zip(element_ids_data, result_data):
-                                if (element_ids is None) or (eid in element_ids):
-                                    results.append({
-                                        'model_stage': model_stage,
-                                        'step': step_key,
-                                        'frame': frame_key,
-                                        'element_id': int(eid),
-                                        'data': data
-                                    })
-
-        if not results:
-            print(f"No se encontraron resultados para '{results_name}' en '{element_type}'")
-            return pd.DataFrame()
-
-        return pd.DataFrame(results)
-    
-
-    def get_shell_result_components(self, result_type: str, model_stage: str = 'MODEL_STAGE[3]', verbose: bool = True):
-        """
-        Retorna los componentes disponibles para un tipo de resultado aplicado a elementos tipo Shell.
-
-        Parámetros:
-        -----------
-        result_type : str
-            Tipo de resultado (ej. 'section.force', 'section.deformation').
-        model_stage : str
-            Etapa del modelo donde buscar (por defecto 'MODEL_STAGE[3]').
-        verbose : bool
-            Si True, imprime los resultados encontrados.
-
-        Retorna:
-        --------
-        dict:
-            Diccionario {element_type: [componentes]} para cada tipo de elemento tipo Shell encontrado.
-        """
-        shell_components = {}
-
-        for part_id, path in self.dataset.results_partitions.items():
-            with h5py.File(path, 'r') as f:
-                base_path = f"{model_stage}/RESULTS/ON_ELEMENTS/{result_type}"
-                if base_path not in f:
-                    if verbose:
-                        print(f"[{part_id}] Resultado '{result_type}' no encontrado.")
-                    continue
-
-                for etype in f[base_path]:
-                    if 'Shell' not in etype:
-                        continue
-
-                    meta_path = f"{base_path}/{etype}/META/COMPONENTS"
-                    if meta_path not in f:
-                        if verbose:
-                            print(f"[{part_id}] {etype} no tiene COMPONENTS definidos.")
-                        continue
-
-                    comps = [c.decode() for c in f[meta_path][()]]
-                    shell_components[etype] = comps
-
-                    if verbose:
-                        print(f"🟩 Archivo: {part_id}")
-                        print(f"   • Tipo elemento : {etype}")
-                        print(f"   • Componentes   : {comps}")
-
-        # === Agregado: imprimir resumen de resultados disponibles ===
-        print("\n📋 Resultados disponibles en ModelAnalysis_01:")
-        if hasattr(self.dataset, "element_results_names"):
-            for rtype in sorted(self.dataset.element_results_names):
-                print(f"   • {rtype}")
-        else:
-            print("   [X] No se encontró 'element_results_names' en el dataset.")
-
-        return shell_components
-
-
-
-    def get_element_results_by_ids(
+    def get_elements_in_selection_at_z_levels(
         self,
-        model_stage: str,
-        results_name: str,
-        element_ids: list[int],
-        desired_components: list[str],
+        selection_set_id: int,
+        list_z: list[float],
+        element_type: str | None = None,
         verbose: bool = False
     ) -> pd.DataFrame:
         """
-        Extrae resultados específicos por componente de elementos tipo Shell.
+        Return a DataFrame with elements from a selection set that intersect horizontal Z planes.
 
-        Parámetros:
-        -----------
-        model_stage : str
-            Etapa del modelo (ej. 'MODEL_STAGE[3]').
-        results_name : str
-            Nombre del resultado (ej. 'section.deformation').
-        element_ids : list[int]
-            Lista de IDs de elementos deseados.
-        desired_components : list[str]
-            Componentes deseadas (ej. ['epsXX', 'epsYY']).
-        verbose : bool
-            Si True, imprime información adicional.
+        Parameters
+        ----------
+        selection_set_id : int
+            ID of the selection set (e.g., 17).
+        list_z : list of float
+            Z-levels in mm for intersection planes.
+        element_type : str or None, default=None
+            Filter by base element type (e.g., '203-ASDShellQ4'). If None, includes all types.
+        verbose : bool, default=False
+            If True, prints count of intersecting elements per level.
 
-        Retorna:
-        --------
-        pd.DataFrame con columnas ['element_id', 'step', 'point_id', comp_1, comp_2, ...]
+        Returns
+        -------
+        pd.DataFrame
+            Elements intersecting each Z-level, with added 'z_level' column.
         """
-        import pandas as pd
+        # Load all or filtered element metadata
+        result = self._get_all_element_index(element_type=element_type, verbose=False)
+        df_elements = result['dataframe']
 
-        all_results = []
+        # Validate selection set exists
+        try:
+            element_ids = self.dataset.selection_set[selection_set_id]['ELEMENTS']
+        except (AttributeError, KeyError):
+            raise ValueError(f"Selection set {selection_set_id} not found or has no 'ELEMENTS' key.")
 
-        for file_id, file_path in self.dataset.results_partitions.items():
-            with h5py.File(file_path, 'r') as f:
-                base_path = f"{model_stage}/RESULTS/ON_ELEMENTS/{results_name}"
-                if base_path not in f:
-                    continue
+        # Filter element list
+        df_elements = df_elements[df_elements['element_id'].isin(element_ids)]
 
-                for element_type in f[base_path]:
-                    if 'Shell' not in element_type:
-                        continue
-
-                    group_path = f"{base_path}/{element_type}"
-                    ids_path = f"{group_path}/ID"
-                    meta_path = f"{group_path}/META/COMPONENTS"
-                    data_path = f"{group_path}/DATA"
-
-                    if ids_path not in f or meta_path not in f or data_path not in f:
-                        continue
-
-                    # Obtener IDs
-                    element_ids_all = f[ids_path][()]
-                    # Obtener componentes
-                    raw_labels = f[meta_path][()][0].decode()
-                    point_blocks = raw_labels.split(';')
-                    per_point_labels = point_blocks[0].split(',')
-                    per_point_labels = [l.strip().split('.')[-1] for l in per_point_labels]
-                    n_points = len(point_blocks)
-                    n_comp = len(per_point_labels)
-
-                    # Verificar componentes
-                    missing = [c for c in desired_components if c not in per_point_labels]
-                    if missing:
-                        if verbose:
-                            print(f"[{file_id}] {element_type} → componentes no encontradas: {missing}")
-                        continue
-
-                    comp_indices = [per_point_labels.index(c) for c in desired_components]
-
-                    # Revisar elementos encontrados
-                    mask = np.isin(element_ids_all, element_ids)
-                    if not np.any(mask):
-                        continue
-
-                    element_idx = np.where(mask)[0]
-                    element_real_ids = element_ids_all[element_idx]
-
-                    for step_key in f[data_path].keys():
-                        step_data = f[f"{data_path}/{step_key}"][()]
-
-                        for idx, eid in zip(element_idx, element_real_ids):
-                            full_vector = step_data[idx]
-                            for p in range(n_points):
-                                row = {
-                                    'element_id': int(eid),
-                                    'step': int(step_key.replace("STEP_", "")),
-                                    'point_id': p
-                                }
-                                for ci, cname in zip(comp_indices, desired_components):
-                                    row[cname] = full_vector[p * n_comp + ci]
-                                all_results.append(row)
-
-
-        if not all_results:
-            if verbose:
-                print("No se encontraron resultados para los elementos y componentes indicados.")
-            return pd.DataFrame()
-
-        df = pd.DataFrame(all_results)
-        return df.sort_values(by=['element_id', 'step', 'point_id']).reset_index(drop=True)
-
-
-    def plot_shell_elements(self, df_elements: pd.DataFrame, highlight_ids: list[int] = None , show_labels=False , show_nodes=False):
-
-        """
-        Dibuja elementos tipo Shell y nodos, con opción de resaltar ciertos elementos.
-
-        Parámetros:
-        -----------
-        df_elements : pd.DataFrame
-            DataFrame con columnas ['element_id', 'node_list', 'centroid_x', 'centroid_y', 'centroid_z'].
-
-        highlight_ids : list[int], opcional
-            Lista de IDs de elementos a resaltar. Si es None, se dibujan todos igual.
-        """
+        # Validate node data
         if not hasattr(self.dataset, 'nodes_info') or 'dataframe' not in self.dataset.nodes_info:
-            raise ValueError("Información de nodos no disponible en el dataset.")
+            raise ValueError("Node information is not available in the dataset.")
 
         df_nodes = self.dataset.nodes_info['dataframe']
-        coord_map = dict(zip(df_nodes['node_id'], zip(df_nodes['x'], df_nodes['y'], df_nodes['z'])))
-        highlight_ids = set(highlight_ids) if highlight_ids else set()
+        node_z_map = dict(zip(df_nodes['node_id'], df_nodes['z']))
 
-        fig = plt.figure(figsize=(10, 8))
-        ax = plt.subplot(111, projection='3d')
+        all_filtered = []
 
-        for _, row in df_elements.iterrows():
-            node_ids = row['node_list']
-            coords = [coord_map[nid] for nid in node_ids]
-            if coords[0] != coords[-1]:
-                coords.append(coords[0])
+        for z_level in list_z:
+            filtered_elements = []
 
-            is_selected = row['element_id'] in highlight_ids
-            color = 'lightcoral' if is_selected else 'skyblue'
-            alpha = 0.4 if is_selected else 0.7
+            for _, row in df_elements.iterrows():
+                node_ids = row['node_list']
+                z_coords = [node_z_map.get(nid, None) for nid in node_ids]
+                z_coords = [z for z in z_coords if z is not None]
 
-            poly = Poly3DCollection([coords], facecolor=color, edgecolor='k', alpha=alpha)
-            ax.add_collection3d(poly)
+                if not z_coords:
+                    continue
 
-            if show_labels:
-                ax.text(row['centroid_x'], row['centroid_y'], row['centroid_z'],
-                        str(row['element_id']), color='black', fontsize=8, ha='center')
-            if show_nodes:
-                ax.scatter(df_nodes['x'], df_nodes['y'], df_nodes['z'], color='black', s=5)
+                if min(z_coords) <= z_level <= max(z_coords):
+                    filtered_elements.append(row)
+
+            df_filtered = pd.DataFrame(filtered_elements)
+            df_filtered['z_level'] = z_level
+            all_filtered.append(df_filtered)
+
+            if verbose:
+                print(f"[Z = {z_level}] Elements in selection set: {len(df_filtered)}")
+
+        if all_filtered:
+            return pd.concat(all_filtered, ignore_index=True)
+        else:
+            return pd.DataFrame()
+
+    def get_element_results(
+        self,
+        results_name: str,
+        element_type: str,
+        element_ids: list[int],
+        model_stage: str = None,
+        verbose: bool = False
+    ) -> pd.DataFrame:
+        """
+        Retrieve element results using base element type for filtering and dynamic
+        decorated-name matching from HDF5 structure.
+
+        Parameters
+        ----------
+        results_name : str
+            e.g. 'globalForces'
+        element_type : str
+            Base type (e.g. '203-ASDShellQ4') — not the decorated name
+        element_ids : list[int]
+            Element IDs to retrieve
+        model_stage : str, optional
+            Defaults to the first model stage
+        verbose : bool
+            Print debug info
+
+        Returns
+        -------
+        pd.DataFrame
+            Results indexed by (element_id, step)
+        """
+        if not element_ids:
+            raise ValueError("No element IDs provided.")
+
+        if model_stage is None:
+            model_stage = self.dataset.model_stages[0]
+
+        # Step 1: Filter from memory
+        df_info = self.dataset.elements_info['dataframe']
+        df_info = df_info[df_info['element_type'].str.startswith(element_type)]
+        df_info = df_info[df_info['element_id'].isin(element_ids)]
+
+        if df_info.empty:
+            raise ValueError(f"No matching elements found for base type '{element_type}'.")
+
+        if verbose:
+            print(f"[INFO] {len(df_info)} matching elements found for '{element_type}'")
+            print(df_info[['element_id', 'file_name', 'element_type']].to_string(index=False))
+
+        collected = []
+
+        # Step 2: group by partition only (not by element_type)
+        for file_id, df_group in df_info.groupby('file_name'):
+            file_path = self.dataset.results_partitions[file_id]
+            idx_list = df_group['element_idx'].to_numpy(dtype=int)
+            id_list = df_group['element_id'].to_numpy(dtype=int)
+
+            with h5py.File(file_path, 'r') as f:
+                base_results_path = f"{model_stage}/RESULTS/ON_ELEMENTS/{results_name}"
+                if base_results_path not in f:
+                    if verbose:
+                        print(f"[WARN] '{base_results_path}' not found in partition {file_id}")
+                    continue
+
+                candidates = list(f[base_results_path].keys())
+                matching_names = [name for name in candidates if name.startswith(element_type)]
+
+                if not matching_names:
+                    if verbose:
+                        print(f"[WARN] No match for base '{element_type}' under '{base_results_path}'")
+                    continue
+
+                for decorated_type in matching_names:
+                    h5_path = f"{base_results_path}/{decorated_type}/DATA"
+                    if h5_path not in f:
+                        if verbose:
+                            print(f"[WARN] Path not found: {h5_path}")
+                        continue
+
+                    for step_idx, step_name in enumerate(f[h5_path]):
+                        dset = f[f"{h5_path}/{step_name}"]
+                        values = dset[idx_list]
+
+                        df = pd.DataFrame(
+                            values,
+                            columns=[f"val_{i+1}" for i in range(values.shape[1])]
+                        )
+                        df['step'] = step_idx
+                        df['element_id'] = id_list
+                        collected.append(df)
+
+        if not collected:
+            if verbose:
+                print("[INFO] No result data collected.")
+            return pd.DataFrame()
+
+        out = pd.concat(collected, axis=0)
+        out.set_index(['element_id', 'step'], inplace=True)
+        return out.sort_index()
+
+    def get_element_results_by_selection_and_z(
+        self,
+        results_name: str,
+        selection_set_id: int,
+        list_z: list[float],
+        element_type: str | None = None,
+        model_stage: str | None = None,
+        verbose: bool = False
+    ) -> dict[str, pd.DataFrame]:
+        """
+        Filter elements by selection set + Z-levels, then delegate to get_element_results().
+        Returns result DataFrames grouped by decorated element type.
+        """
+        # Step 1: Get all elements in selection set intersecting Z
+        df_filtered = self.get_elements_in_selection_at_z_levels(
+            selection_set_id=selection_set_id,
+            list_z=list_z,
+            element_type=element_type,
+            verbose=verbose
+        )
+
+        if df_filtered.empty:
+            if verbose:
+                print("[INFO] No elements found at Z-levels in selection set.")
+            return {}
+
+        # Step 2: Get mapping of element_id → element_type (decorated) and file_name
+        df_info = self.dataset.elements_info['dataframe'][['element_id', 'file_name', 'element_type']]
+        df_merged = pd.merge(df_filtered, df_info, on=['element_id', 'file_name'], suffixes=('', '_decorated'))
+        df_merged['element_type'] = df_merged['element_type_decorated']
+
+        # Step 3: Group by real decorated type
+        results_by_type: dict[str, pd.DataFrame] = {}
+
+        for decorated_type, df_group in df_merged.groupby('element_type'):
+            element_ids = df_group['element_id'].unique().tolist()
+
+            if verbose:
+                print(f"\n↳ {decorated_type}: {len(element_ids)} elements to fetch")
+
+            df_result = self.get_element_results(
+                results_name=results_name,
+                element_type=decorated_type,  # <- full name for HDF5
+                element_ids=element_ids,
+                model_stage=model_stage,
+                verbose=verbose
+            )
+
+            if df_result.empty:
+                continue
+
+            # Attach z_level info
+            df_with_z = pd.merge(
+                df_result.reset_index(),
+                df_group[['element_id', 'z_level']].drop_duplicates(),
+                on='element_id',
+                how='left'
+            ).set_index(['element_id', 'step'])
+
+            results_by_type[decorated_type] = df_with_z.sort_index()
+
+        return results_by_type
 
 
-        ax.set_xlabel('X')
-        ax.set_ylabel('Y')
-        ax.set_zlabel('Z')
-
-        # === Escala igual en 3D ===
-        xlim = ax.get_xlim3d()
-        ylim = ax.get_ylim3d()
-        zlim = ax.get_zlim3d()
-
-        x_range = abs(xlim[1] - xlim[0])
-        y_range = abs(ylim[1] - ylim[0])
-        z_range = abs(zlim[1] - zlim[0])
-        max_range = max(x_range, y_range, z_range) / 2.0
-
-        x_middle = np.mean(xlim)
-        y_middle = np.mean(ylim)
-        z_middle = np.mean(zlim)
-
-        ax.set_xlim3d([x_middle - max_range, x_middle + max_range])
-        ax.set_ylim3d([y_middle - max_range, y_middle + max_range])
-        ax.set_zlim3d([z_middle - max_range, z_middle + max_range])
 
 
 
-        ax.set_title('Shell Elements')
-
-        ax.view_init(elev=0, azim=-90)
-        ax.set_proj_type('ortho')
-        plt.tight_layout()
-        plt.show()
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
