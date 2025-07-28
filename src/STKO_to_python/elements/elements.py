@@ -401,7 +401,9 @@ class Elements:
         df = pd.DataFrame(all_results)
         return df.sort_values(by=['element_id', 'step', 'point_id']).reset_index(drop=True)
 
+
     def plot_shell_elements(self, df_elements: pd.DataFrame, highlight_ids: list[int] = None , show_labels=False , show_nodes=False):
+
         """
         Dibuja elementos tipo Shell y nodos, con opción de resaltar ciertos elementos.
 
@@ -436,15 +438,23 @@ class Elements:
             poly = Poly3DCollection([coords], facecolor=color, edgecolor='k', alpha=alpha)
             ax.add_collection3d(poly)
 
+<<<<<<< HEAD
             if show_labels:
                 ax.text(row['centroid_x'], row['centroid_y'], row['centroid_z'],
                         str(row['element_id']), color='black', fontsize=8, ha='center')
             if show_nodes:
                 ax.scatter(df_nodes['x'], df_nodes['y'], df_nodes['z'], color='black', s=5)
+=======
+            ax.text(row['centroid_x'], row['centroid_y'], row['centroid_z'],
+                    str(row['element_id']), color='black', fontsize=8, ha='center')
+
+        ax.scatter(df_nodes['x'], df_nodes['y'], df_nodes['z'], color='black', s=5)
+>>>>>>> a792702e93ae55a242a2c834e7b55420dc007281
 
         ax.set_xlabel('X')
         ax.set_ylabel('Y')
         ax.set_zlabel('Z')
+<<<<<<< HEAD
         # === Escala igual en 3D ===
         xlim = ax.get_xlim3d()
         ylim = ax.get_ylim3d()
@@ -464,6 +474,8 @@ class Elements:
         ax.set_zlim3d([z_middle - max_range, z_middle + max_range])
 
 
+=======
+>>>>>>> a792702e93ae55a242a2c834e7b55420dc007281
         ax.set_title('Shell Elements')
 
         ax.view_init(elev=0, azim=-90)
