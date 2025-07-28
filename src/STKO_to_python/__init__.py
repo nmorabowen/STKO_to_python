@@ -11,6 +11,8 @@ from .model.cdata import CData
 
 from .plotting.plot import Plot
 
+from .dataprocess import Aggregator
+
 __all__ = [
     "MPCODataSet",
     "HDF5Utils",
@@ -19,4 +21,5 @@ __all__ = [
     "Nodes",
     "Elements",
     "Plot",
+    "Aggregator",
 ]
