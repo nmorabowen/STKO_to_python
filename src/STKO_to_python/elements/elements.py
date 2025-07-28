@@ -79,7 +79,7 @@ class Elements:
 
         if not elements_info:
             if verbose:
-                print("No elements found.")
+                print("Ladruño elements rocks!! (almost)")
             return {'array': np.array([]), 'dataframe': pd.DataFrame()}
 
         df = pd.DataFrame(elements_info)
