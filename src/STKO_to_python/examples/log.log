@@ -1,9 +1,23 @@
-2025-05-03 02:18:14,607 - INFO - Memory usage for structured array (NODES): 0.10 MB
-2025-05-03 02:18:14,607 - INFO - Memory usage for DataFrame (NODES): 0.10 MB
-2025-05-03 02:18:14,608 - INFO - _get_all_nodes_ids executed in 0.01 seconds
-2025-05-03 02:18:15,120 - INFO - _get_stage_results executed in 0.48 seconds
-2025-05-03 02:18:15,120 - INFO - get_nodal_results executed in 0.48 seconds
-2025-05-03 02:18:16,418 - INFO - _get_stage_results executed in 1.29 seconds
-2025-05-03 02:18:16,418 - INFO - get_nodal_results executed in 1.29 seconds
-2025-05-03 02:18:16,918 - INFO - _get_stage_results executed in 0.50 seconds
-2025-05-03 02:18:16,918 - INFO - get_nodal_results executed in 0.50 seconds
+2025-07-27 01:30:33,335 - INFO - STKO analysis started at 2025-07-25 21:27:13
+2025-07-27 01:30:33,335 - INFO - STKO analysis ended at 2025-07-26 05:44:28
+2025-07-27 01:30:33,335 - INFO - Elapsed time: 497.25 seconds
+2025-07-27 01:30:33,337 - INFO - Dataset folder size: 19.55 GB
+2025-07-27 01:30:34,480 - INFO - Memory usage for structured array (NODES): 0.00 MB
+2025-07-27 01:30:34,480 - INFO - Memory usage for DataFrame (NODES): 0.00 MB
+2025-07-27 01:30:34,480 - INFO - _get_all_nodes_ids executed in 0.01 seconds
+2025-07-27 01:30:40,151 - INFO - _get_stage_results executed in 5.41 seconds
+2025-07-27 01:30:40,151 - INFO - get_nodal_results executed in 5.41 seconds
+2025-07-27 01:30:42,614 - INFO - _get_stage_results executed in 2.15 seconds
+2025-07-27 01:30:42,615 - INFO - get_nodal_results executed in 2.16 seconds
+2025-07-27 01:30:48,326 - INFO - _get_stage_results executed in 5.52 seconds
+2025-07-27 01:30:48,326 - INFO - get_nodal_results executed in 5.52 seconds
+2025-07-27 01:30:57,047 - INFO - _get_stage_results executed in 6.98 seconds
+2025-07-27 01:30:57,047 - INFO - get_nodal_results executed in 6.98 seconds
+2025-07-27 01:31:07,582 - INFO - _get_stage_results executed in 7.60 seconds
+2025-07-27 01:31:07,582 - INFO - get_nodal_results executed in 7.60 seconds
+2025-07-27 01:31:15,162 - INFO - _get_stage_results executed in 7.31 seconds
+2025-07-27 01:31:15,162 - INFO - get_nodal_results executed in 7.31 seconds
+2025-07-27 01:31:22,432 - INFO - _get_stage_results executed in 7.02 seconds
+2025-07-27 01:31:22,432 - INFO - get_nodal_results executed in 7.02 seconds
+2025-07-27 01:31:32,057 - INFO - _get_stage_results executed in 6.92 seconds
+2025-07-27 01:31:32,057 - INFO - get_nodal_results executed in 6.92 seconds
