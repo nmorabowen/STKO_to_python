@@ -3,9 +3,12 @@ import os
 import re
 from typing import TYPE_CHECKING
 from collections import defaultdict
-from typing import Optional, Dict
+from typing import Optional, Dict, List, Sequence, Any
 import h5py
 import pandas as pd
+import logging
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from ..core.dataset import MPCODataSet
@@ -139,41 +142,53 @@ class ModelInfo:
 
         return model_stages    
     
-    def _get_node_results_names(self, model_stage=None, verbose=False):
+    def _get_node_results_names(
+            self,
+            model_stage: Optional[str] = None,
+            verbose: bool = False,
+            raise_if_empty: bool = False
+    ) -> List[str]:
         """
-        Retrieve the names of node results names for a given model stage.
+        Retrieve the names of nodal results for a given model stage.
 
         Args:
-            model_stage (str, optional): Name of the model stage. If None, retrieve results for all model stages.
-            verbose (bool, optional): If True, prints the node results names.
+            model_stage (str, optional): Model stage name. If None, search all stages.
+            verbose (bool, optional): Print the discovered result names.
+            raise_if_empty (bool, optional): If True, raise ValueError when nothing is found.
+                                            If False (default) return an empty list instead.
 
         Returns:
-            list: List of node results names.
+            list[str]: Sorted list of nodal result names (may be empty).
         """
-        if model_stage is None:
-            model_stages = self.dataset.model_stages
-        else:
-            # Check for model stage errors
-            # self._model_stages_error(model_stage) (ERROR CONTROL PENDING)
-            model_stages = [model_stage]
+        # 1. Determine which stages to inspect
+        model_stages = [model_stage] if model_stage else self.dataset.model_stages
 
-        node_results_names = set()
+        node_results_names: set[str] = set()
 
+        # 2. Scan every partition for every requested stage
         for stage in model_stages:
             for _, partition_path in self.dataset.results_partitions.items():
-                with h5py.File(partition_path, 'r') as results:
-                    nodes_groups = results.get(self.dataset.RESULTS_ON_NODES_PATH.format(model_stage=stage))
-                    if nodes_groups is None:
-                        continue  # Skip this partition if the nodes group is not found
-                    node_results_names.update(nodes_groups.keys())
+                with h5py.File(partition_path, "r") as results:
+                    nodes_group = results.get(
+                        self.dataset.RESULTS_ON_NODES_PATH.format(model_stage=stage)
+                    )
+                    if nodes_group:
+                        node_results_names.update(nodes_group.keys())
 
             if verbose:
-                print(f"Node results names for model stage '{stage}': {list(node_results_names)}")
+                print(f"Node results in '{stage}': {sorted(node_results_names)}")
 
+        # 3. Handle empty results according to caller’s wishes
         if not node_results_names:
-            raise ValueError(f"Model Info: No node results found for model stage(s): {', '.join(model_stages)} in the result partitions.")
+            message = (
+                f"No nodal results found for stage(s): {', '.join(model_stages)} "
+                f"in {len(self.dataset.results_partitions)} partition(s)."
+            )
+            if raise_if_empty:
+                raise ValueError(message)
+            logger.warning(message)
 
-        return list(node_results_names)
+        return sorted(node_results_names)
     
     def _get_elements_results_names(self, model_stage=None, verbose=False):
         """
@@ -375,107 +390,217 @@ class ModelInfo:
 
         return df
     
-    def _get_time_series(self):
+    def _get_time_series(self) -> pd.DataFrame:
         """
-        Retrieve and consolidate the unique time series data across all model stages,
-        storing them in a MultiIndex Pandas DataFrame.
+        Consolidate the unique STEP–TIME pairs for every model stage,
+        even if a stage contains only nodal *or* only element results.
 
-        Returns:
-            pd.DataFrame: A MultiIndex DataFrame with index ['MODEL_STAGE', 'STEP'] 
-                        and column ['TIME'], sorted by MODEL_STAGE and STEP.
+        Returns
+        -------
+        pd.DataFrame
+            Multi-index ['MODEL_STAGE', 'STEP'] → ['TIME'].
         """
 
-        model_stages = self.dataset.model_stages  # Get all model stages
-        model_elements_types = self.dataset.element_types['element_types_dict']  # Result name -> Element types
+        # ── convenience ─────────────────────────────────────────────────────────
+        node_names: list[str] = (self.dataset.node_results_names or [])
+        elem_names: list[str] = (self.dataset.element_results_names or [])
+        elem_types_dict: dict[str, list[str]] = self.dataset.element_types.get(
+            "element_types_dict", {}
+        )
 
-        all_time_series = []  # List to store results for all model stages
+        all_time_series: list[pd.DataFrame] = []
 
-        for model_stage in model_stages:
-            time_series_df = None  # Initialize per-stage DataFrame
+        for stage in self.dataset.model_stages:
+            time_df: pd.DataFrame | None = None
 
-            # Check if nodal results exist
-            if self.dataset.node_results_names is not None:
-                # Get the time series from nodes
-                time_series_df = self._get_time_series_on_nodes_for_stage(model_stage, self.dataset.node_results_names[0])
-            
-            elif self.dataset.element_results_names is not None:
-                # Find the first valid element result
-                for result, element_list in model_elements_types.items():
-                    if result is not None and element_list:
-                        element_type = element_list[0]  # Use the first element type
-                        time_series_df = self._get_time_series_on_elements_for_stage(model_stage, result, element_type)
-                        break
+            # 1) Try every nodal result (if any) until one yields data
+            for n_result in node_names:
+                df = self._get_time_series_on_nodes_for_stage(stage, n_result)
+                if not df.empty:
+                    time_df = df
+                    break                                       # ← success!
 
-            if time_series_df is not None:
-                # Add MODEL_STAGE as a new column
-                time_series_df["MODEL_STAGE"] = model_stage
-                all_time_series.append(time_series_df)
+            # 2) If still empty, try the element results
+            if time_df is None or time_df.empty:
+                for e_result in elem_names:
+                    e_types = elem_types_dict.get(e_result, [])
+                    for e_type in e_types:                       # try each element type
+                        df = self._get_time_series_on_elements_for_stage(
+                            stage, e_result, e_type
+                        )
+                        if not df.empty:
+                            time_df = df
+                            break
+                    if time_df is not None and not time_df.empty:
+                        break                                   # ← success!
+            # 3) No data at all → raise a *stage-specific* error
+            if time_df is None or time_df.empty:
+                raise ValueError(
+                    f"Model Info Error: No time-series data found for model stage "
+                    f"'{stage}'. Checked {len(node_names)} nodal results and "
+                    f"{len(elem_names)} element results."
+                )
 
-            else:
-                raise ValueError(f"Model Info Error: No nodal or element results found for model stage: {model_stage}")
+            # tag with stage and collect
+            time_df["MODEL_STAGE"] = stage
+            all_time_series.append(time_df)
 
-        # Concatenate all time series DataFrames and set MultiIndex
-        final_df = pd.concat(all_time_series).set_index(["MODEL_STAGE", "STEP"]).sort_index()
-
+        # ── union ───────────────────────────────────────────────────────────────
+        final_df = (
+            pd.concat(all_time_series, copy=False)
+            .set_index(["MODEL_STAGE", "STEP"])
+            .sort_index()
+        )
         return final_df
     
-    def _get_number_of_steps(self):
+    def _get_number_of_steps(self) -> Dict[str, int]:
         """
-        Retrieves and stores the number of steps (datasets) for each model stage 
-        based on available nodal or element results.
+        Determine how many analysis steps exist in each model stage,
+        regardless of whether the data are stored under ON_NODES or ON_ELEMENTS.
 
-        Returns:
-            dict: A dictionary mapping model stages to their respective number of steps.
+        Returns
+        -------
+        dict[str, int]
+            Mapping {MODEL_STAGE: n_steps}.
         """
-        # Dictionary to store steps for each model stage
-        steps_info = {}
+        # convenience handles -------------------------------------------------
+        node_names: List[str] = self.dataset.node_results_names or []
+        elem_names: List[str] = self.dataset.element_results_names or []
+        elem_types_dict: Dict[str, List[str]] = self.dataset.element_types.get(
+            "element_types_dict", {}
+        )
+        partitions = list(self.dataset.results_partitions.values())
 
-        # Get all model stages
-        model_stages = self.dataset.model_stages
+        steps_info: Dict[str, int] = {}
 
-        # Iterate through each model stage
-        for stage in model_stages:
-            try:
-                # Try nodal results first
-                nodal_results = self._get_node_results_names(stage)
-                if nodal_results:
-                    # Use the first nodal result to get the step count
-                    results_name = nodal_results[0]
-                    node_partition = self.dataset.nodes_info['dataframe']['file_id'][0]  # Get the partition
-                    base_path = f"{stage}/RESULTS/ON_NODES/{results_name}/DATA"
+        for stage in self.dataset.model_stages:
+            step_ids: set[int] = set()
 
-                    with h5py.File(self.dataset.results_partitions[int(node_partition)], 'r') as results:
-                        data_group = results.get(base_path)
-                        if data_group is None:
-                            raise ValueError(f"DATA group not found in path '{base_path}'.")
-                        
-                        # Number of datasets directly represents the number of steps
-                        steps_info[stage] = len(data_group)
-                    continue
+            # 1) nodal results ------------------------------------------------
+            for n_res in node_names:
+                for part_path in partitions:
+                    with h5py.File(part_path, "r") as f:
+                        grp = f.get(f"{stage}/RESULTS/ON_NODES/{n_res}/DATA")
+                        if grp is not None:
+                            step_ids.update(self._to_step_int(k) for k in grp.keys())
+                if step_ids:
+                    break  # found data → stop searching nodal
 
-                # If no nodal results, try element results
-                element_results = self._get_elements_results_names(stage)
-                
-                if element_results:
-                    results_name = element_results[0]
-                    element_types = self._get_element_types(stage, results_name)[results_name]
-                    if element_types:
-                        element_partition = 0  # Adjust if partition handling is needed
-                        base_path = f"{stage}/RESULTS/ON_ELEMENTS/{results_name}/{element_types[0]}/DATA"
+            # 2) element results ---------------------------------------------
+            if not step_ids:
+                for e_res in elem_names:
+                    for e_type in elem_types_dict.get(e_res, []):
+                        for part_path in partitions:
+                            with h5py.File(part_path, "r") as f:
+                                grp = f.get(
+                                    f"{stage}/RESULTS/ON_ELEMENTS/{e_res}/{e_type}/DATA"
+                                )
+                                if grp is not None:
+                                    step_ids.update(
+                                        self._to_step_int(k) for k in grp.keys()
+                                    )
+                        if step_ids:
+                            break
+                    if step_ids:
+                        break
 
-                        with h5py.File(self.dataset.results_partitions[element_partition], 'r') as results:
-                            data_group = results.get(base_path)
-                            if data_group is None:
-                                raise ValueError(f"DATA group not found in path '{base_path}'.")
+            # 3) error if nothing found --------------------------------------
+            if not step_ids:
+                raise ValueError(
+                    f"Model Info Error: no STEP datasets located for model stage "
+                    f"'{stage}'. Checked {len(node_names)} nodal results and "
+                    f"{len(elem_names)} element results."
+                )
 
-                            # Number of datasets directly represents the number of steps
-                            steps_info[stage] = len(data_group)
-
-            except Exception as e:
-                print(f'Model Info Error: retrieving steps for model stage "{stage}": {e}')
-                steps_info[stage] = None
+            steps_info[stage] = len(step_ids)
 
         return steps_info
+
+    def get_node_coordinates(
+        self,
+        *,
+        node_ids: Sequence[int] | None = None,
+        selection_set_id: int | None = None,
+        as_dict: bool = False,
+    ) -> pd.DataFrame | dict[int, dict[str, Any]]:
+        """
+        Return full rows (node_id, file_id, index, x, y, z, …) from
+        ``self.dataset.nodes_info``.
+
+        Exactly **one** of *node_ids* or *selection_set_id* is required.
+        """
+        # --- XOR check ---------------------------------------------------- #
+        if (node_ids is None) == (selection_set_id is None):
+            raise ValueError(
+                "Specify **either** 'node_ids' **or** 'selection_set_id' (one, not both)."
+            )
+
+        # --- resolve IDs -------------------------------------------------- #
+        if node_ids is None:
+            if not hasattr(self.dataset.nodes, "get_nodes_in_selection_set"):
+                raise AttributeError(
+                    "self.dataset.nodes lacks 'get_nodes_in_selection_set'. "
+                    "Implement it or pass explicit 'node_ids'."
+                )
+            node_ids = self.dataset.nodes.get_nodes_in_selection_set(selection_set_id)
+
+        # preserve caller order, drop duplicates
+        node_ids = list(dict.fromkeys(node_ids))
+
+        # --- master table ------------------------------------------------- #
+        df_all = (
+            self.dataset.nodes_info["dataframe"]
+            if isinstance(self.dataset.nodes_info, dict)
+            else self.dataset.nodes_info
+        )
+
+        # --- verify existence -------------------------------------------- #
+        missing = set(node_ids) - set(df_all["node_id"])
+        if missing:
+            raise KeyError(f"Unknown node IDs: {sorted(missing)}")
+
+        # --- slice while keeping order ----------------------------------- #
+        sub = (
+            df_all.set_index("node_id")
+            .loc[node_ids]              # preserves specified order
+            .reset_index()
+        )
+
+        # --- return format ----------------------------------------------- #
+        if as_dict:
+            return {row.node_id: row._asdict() for row in sub.itertuples(index=False)}
+        return sub
+    # ─────────────────────────────────────────────────────────────────────────
+    @staticmethod
+    def _to_step_int(step_key: str | bytes, pattern: str = r"(\d+)$") -> int:
+        """
+        Convert an HDF5 dataset key to its integer STEP index.
+
+        Parameters
+        ----------
+        step_key : str | bytes
+            Raw dataset key from HDF5 (e.g. 'STEP_0', b'3', 'Step-12').
+        pattern : str, optional
+            Regex that captures the numeric portion; default grabs trailing digits.
+
+        Returns
+        -------
+        int
+            Numeric STEP value.
+        """
+        if isinstance(step_key, bytes):           # h5py may yield bytes
+            step_key = step_key.decode()
+
+        # Fast path: key is already numeric
+        if step_key.isdigit():
+            return int(step_key)
+
+        # Fallback: extract digits with regex
+        match = re.search(pattern, step_key)
+        if match:
+            return int(match.group(1))
+
+        raise ValueError(f"Un-recognisable STEP key: {step_key!r}")
     
     
     

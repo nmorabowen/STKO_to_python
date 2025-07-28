@@ -682,6 +682,49 @@ class Nodes:
         
         logger.info(f"Results saved to {output_file}")
         return output_file
+    
+    @lru_cache(maxsize=128)
+    def get_nodes_in_selection_set(self, selection_set_id: int) -> np.ndarray:
+        """
+        Return the node IDs belonging to a given STKO selection set.
+
+        Parameters
+        ----------
+        selection_set_id
+            Numeric ID of the selection set (as shown in STKO).
+
+        Returns
+        -------
+        np.ndarray
+            Sorted, **unique** node IDs (dtype=int64).
+
+        Raises
+        ------
+        AttributeError
+            If `self.dataset` has no `.selection_set` attribute.
+        ValueError
+            If the selection set is missing or does not contain nodes.
+        """
+        if not hasattr(self.dataset, "selection_set"):
+            raise AttributeError(
+                "Dataset object has no 'selection_set' attribute. "
+                "Make sure you parse selection-set metadata when "
+                "building the MPCODataSet."
+            )
+
+        sel_dict = self.dataset.selection_set
+
+        if selection_set_id not in sel_dict:
+            raise ValueError(f"Selection set ID '{selection_set_id}' not found.")
+
+        sel_entry = sel_dict[selection_set_id]
+
+        if "NODES" not in sel_entry or not sel_entry["NODES"]:
+            raise ValueError(f"Selection set {selection_set_id} does not contain any nodes.")
+
+        # Return as a clean, unique, sorted NumPy array
+        return np.unique(np.asarray(sel_entry["NODES"], dtype=np.int64))
+
 
 
 # REVISAR -----------------------------------------------------
@@ -794,3 +837,4 @@ class Nodes:
         df_summary = pd.DataFrame(summary_rows) if summary_rows else pd.DataFrame()
 
         return df_full, df_summary
+
