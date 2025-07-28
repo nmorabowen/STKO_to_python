@@ -724,7 +724,7 @@ class Nodes:
 
         # Return as a clean, unique, sorted NumPy array
         return np.unique(np.asarray(sel_entry["NODES"], dtype=np.int64))
-=======
+
 
 
 # REVISAR -----------------------------------------------------
