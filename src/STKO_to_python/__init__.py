@@ -13,6 +13,8 @@ from .plotting.plot import Plot
 
 from .dataprocess import Aggregator
 
+from.utilities import H5RepairTool
+
 __all__ = [
     "MPCODataSet",
     "HDF5Utils",
@@ -22,4 +24,5 @@ __all__ = [
     "Elements",
     "Plot",
     "Aggregator",
+    "H5RepairTool",
 ]

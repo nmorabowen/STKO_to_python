@@ -307,7 +307,6 @@ class Elements:
 
         return results_by_partition
 
-
     def get_elements_in_selection_at_z_levels(
         self,
         selection_set_id: int,
