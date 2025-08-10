@@ -7,6 +7,7 @@ from ..model.model_info import ModelInfo
 from ..model.cdata import CData
 from ..plotting.plot import Plot
 from ..io.info import Info
+from .dataclasses import MetaData
 
 
 class MPCODataSet:
@@ -119,6 +120,9 @@ class MPCODataSet:
         self.name=name
         self.file_extension = file_extension
         self.verbose = verbose
+        
+        # Initialize the metadata
+        self.metadata = MetaData()
         
         # Instanciate the composite classes
         self.nodes=Nodes(self)
