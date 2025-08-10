@@ -322,115 +322,223 @@ class PlotNodes:
         self,
         model_stage: str,
         direction: str | int,
+        ax: plt.Axes | None = None,
         *,
         node_ids: Sequence[int] | None = None,
         selection_set_id: int | None = None,
         normalize: bool = True,
         scaling_factor: float = 1.0,
+        z_round: int = 3,
+        top_z: float | None = None,
+        bottom_z: float | None = None,
+        aggregate: str | Callable[[pd.Series], float] = "Mean",   # Mean, Median, Max, Min, or callable
         figsize: tuple[int, int] = (10, 4),
         linewidth: float = 1.4,
         marker: str | None = None,
-        **line_kwargs,
-    ) -> tuple[plt.Axes | None, dict[str, Any]]:
+        label: str | None = None,
+        rasterized: bool = False,
+        **plot_kwargs: Any,
+    ) -> tuple[plt.Axes, dict[str, Any]]:
         """
-        Plot roof drift: Δu(t) = u_top(t) − u_bottom(t), optionally normalised by height.
-        Averages displacements per Z-level if multiple nodes are present.
-        """
-        results_name = "DISPLACEMENT"
+        Plot roof drift Δu(t) = u_top(t) − u_bot(t) (optionally normalized by height)
+        for a set of nodes (direct or via selection set). If multiple nodes exist at
+        a Z-level, their displacements are aggregated into a single trace.
 
+        Parameters
+        ----------
+        model_stage : str
+            Stage name, e.g. 'MODEL_STAGE[5]'.
+        direction : {'x','y','z'} or {1,2,3}
+            Component to plot. 1/2/3 map to x/y/z.
+        ax : plt.Axes | None
+            Existing axes to draw on. If None, a new figure/axes is created.
+        node_ids : Sequence[int] | None
+            Explicit node IDs. Mutually exclusive with selection_set_id.
+        selection_set_id : int | None
+            Selection set that defines nodes. Mutually exclusive with node_ids.
+        normalize : bool
+            If True, plot drift ratio (Δu/h). Otherwise plot Δu in result units.
+        scaling_factor : float
+            Additional scaling (applied last).
+        z_round : int
+            Decimal rounding for Z to define floor/roof groups (default 3).
+        top_z, bottom_z : float | None
+            Force specific Z levels (in model units) *after rounding*. If None, use
+            max/min Z levels present in the selected nodes.
+        aggregate : str | Callable
+            Aggregation across nodes within one Z-level. One of:
+            'Mean','Median','Max','Min' or a callable(pd.Series) -> scalar.
+        figsize : tuple
+            Only used if ax is None.
+        linewidth, marker, label, rasterized
+            Matplotlib styling.
+        **plot_kwargs
+            Forwarded to `Axes.plot` (safe—sanitized here).
+
+        Returns
+        -------
+        (ax, meta) : (plt.Axes, dict)
+            meta = {'time','drift','top_z','bottom_z','top_ids','bottom_ids','height'}
+        """
+        # ── input checks ──────────────────────────────────────────────────────
         if (node_ids is None) == (selection_set_id is None):
-            raise ValueError("Provide either node_ids or selection_set_id (not both).")
+            raise ValueError("Provide either `node_ids` or `selection_set_id` (not both).")
+
+        # direction → column index or name
+        if isinstance(direction, str):
+            dmap = {"x": 0, "y": 1, "z": 2}
+            dkey = direction.lower()
+            if dkey not in dmap:
+                raise ValueError("direction must be 'x','y','z' or 1,2,3")
+            dir_idx = dmap[dkey]
+            dir_lbl = dkey
+        else:
+            if direction not in (1, 2, 3):
+                raise ValueError("direction must be 'x','y','z' or 1,2,3")
+            dir_idx = direction - 1
+            dir_lbl = ["x", "y", "z"][dir_idx]
+
+        # node set
         if node_ids is None:
             node_ids = self.dataset.nodes.get_nodes_in_selection_set(selection_set_id)
-        node_ids = np.unique(node_ids)
-        if len(node_ids) < 2:
-            raise ValueError("Need at least two nodes to compute roof drift.")
+        node_ids = np.unique(np.asarray(node_ids, dtype=int))
+        if node_ids.size < 2:
+            raise ValueError("Need at least two nodes (top & bottom) to compute roof drift.")
 
-        # ── direction index -------------------------------------------------- #
-        if isinstance(direction, str):
-            direction = {"x": 1, "y": 2, "z": 3}.get(direction.lower(), None)
-        if direction not in (1, 2, 3):
-            raise ValueError("direction must be 'x','y','z' or 1,2,3")
-
-        # ── coordinates + Z grouping ---------------------------------------- #
+        # ── coordinates + Z grouping ──────────────────────────────────────────
         coords_df = (
             self.dataset.nodes_info["dataframe"]
             if isinstance(self.dataset.nodes_info, dict)
             else self.dataset.nodes_info
-        ).drop_duplicates("node_id").set_index("node_id")
+        )
+        coords_df = coords_df.drop_duplicates("node_id").set_index("node_id")
+        try:
+            coords_sub = coords_df.loc[node_ids, ["x", "y", "z"]].copy()
+        except KeyError as e:
+            missing = set(node_ids) - set(coords_df.index)
+            raise ValueError(f"Some nodes missing in nodes_info: {sorted(missing)[:10]} ...") from e
 
-        coords_sub = coords_df.loc[list(node_ids), ["x", "y", "z"]].copy()
-        coords_sub["_z_group"] = coords_sub["z"].round(3)
+        coords_sub["_z_group"] = coords_sub["z"].round(z_round)
         level_groups = coords_sub.groupby("_z_group")
-
         if len(level_groups) < 2:
             raise ValueError("Need at least two Z-levels to compute roof drift.")
 
-        z_levels = sorted(level_groups.groups.keys())
-        z_bot, z_top = z_levels[0], z_levels[-1]
-        ids_bot = level_groups.get_group(z_bot).index.tolist()
-        ids_top = level_groups.get_group(z_top).index.tolist()
+        # choose bottom/top Z
+        z_levels = np.array(sorted(level_groups.groups.keys()), dtype=float)
+        z_bot = float(bottom_z) if bottom_z is not None else float(z_levels.min())
+        z_top = float(top_z) if top_z is not None else float(z_levels.max())
+        if z_bot == z_top:
+            raise ValueError("Top and bottom Z-levels coincide (height = 0).")
+        if z_bot not in level_groups.groups or z_top not in level_groups.groups:
+            raise ValueError(
+                f"Requested z-levels not found. Available: {z_levels.tolist()}, "
+                f"requested top={z_top}, bottom={z_bot} (after rounding to {z_round})."
+            )
+        ids_bot = level_groups.get_group(z_bot).index.to_list()
+        ids_top = level_groups.get_group(z_top).index.to_list()
         height = abs(z_top - z_bot)
-
         if normalize and height == 0:
             raise ValueError("Zero height between top and bottom levels.")
 
-        # ── batched results fetch ------------------------------------------- #
-        all_ids = np.unique(ids_bot + ids_top)
+        # ── batched results fetch ─────────────────────────────────────────────
+        all_ids = np.unique(np.concatenate([ids_bot, ids_top]))
         df_all = self.dataset.nodes.get_nodal_results(
             model_stage=model_stage,
-            results_name=results_name,
-            node_ids=list(all_ids),
+            results_name="DISPLACEMENT",
+            node_ids=all_ids.tolist(),
         )
         if df_all is None or df_all.empty:
-            raise ValueError("No valid displacement data found.")
+            raise ValueError("No displacement data found for the requested nodes/stage.")
 
-        # ── helper: average across group ------------------------------------ #
+        # resolve column for direction: support either ['x','y','z'] labels or numeric columns
+        if dir_idx < df_all.shape[1]:
+            col_series = lambda df: df.iloc[:, dir_idx]
+        else:
+            # try labeled columns
+            try:
+                col_series = lambda df: df[dir_lbl]
+            except Exception as e:
+                raise ValueError("Unexpected displacement columns layout.") from e
+
+        # aggregator
+        if isinstance(aggregate, str):
+            agg_key = aggregate.lower()
+            if agg_key == "mean":
+                agg_fn = np.mean
+            elif agg_key == "median":
+                agg_fn = np.median
+            elif agg_key == "max":
+                agg_fn = np.max
+            elif agg_key == "min":
+                agg_fn = np.min
+            else:
+                raise ValueError("aggregate must be one of 'Mean','Median','Max','Min' or a callable.")
+        else:
+            agg_fn = aggregate  # callable(pd.Series) -> scalar
+
         def avg_disp(ids: list[int]) -> np.ndarray:
-            dfs = []
+            # Collect each node series for chosen direction
+            series_list: list[np.ndarray] = []
             for nid in ids:
                 try:
-                    df = df_all.xs(nid, level=0)
+                    df_node = df_all.xs(nid, level=0)
                 except KeyError:
                     continue
-                dfs.append(df.iloc[:, direction - 1].to_numpy())
-            if not dfs:
-                raise ValueError("No valid displacement data in group.")
-            return np.mean(np.vstack(dfs), axis=0)
+                s = col_series(df_node).to_numpy()
+                series_list.append(s)
+            if not series_list:
+                raise ValueError("No valid displacement data for one of the Z groups.")
+            # stack → aggregate across nodes per time step
+            arr = np.vstack(series_list)  # (n_nodes, n_steps)
+            return agg_fn(arr, axis=0)
 
         u_top = avg_disp(ids_top)
         u_bot = avg_disp(ids_bot)
-        Δu = u_top - u_bot
+        drift = u_top - u_bot
 
         if normalize:
-            Δu /= height
-        Δu *= scaling_factor
+            drift = drift / height
+        drift = drift * float(scaling_factor)
 
-        # ── TIME vector ------------------------------------------------------ #
-        time_df = self.dataset.time.loc[model_stage]
-        time_arr = (time_df["TIME"] if "TIME" in time_df else time_df.index).to_numpy()
+        # time vector
+        try:
+            time_df = self.dataset.time.loc[model_stage]
+            time_arr = (time_df["TIME"] if "TIME" in time_df else time_df.index).to_numpy()
+        except Exception:
+            # Fallback: infer from dataframe index level 1 if structured like (node_id, step)
+            if isinstance(df_all.index, pd.MultiIndex) and df_all.index.nlevels >= 2:
+                time_arr = df_all.index.get_level_values(1).unique().to_numpy()
+            else:
+                raise
 
-        # ── plot ------------------------------------------------------------- #
-        fig, ax = plt.subplots(figsize=figsize)
-        ax.plot(time_arr, Δu, lw=linewidth, marker=marker, **line_kwargs)
+        # ── plot ──────────────────────────────────────────────────────────────
+        # sanitize kwargs (avoid accidental 'ax' etc.)
+        plot_kwargs.pop("ax", None)
+
+        if ax is None:
+            _, ax = plt.subplots(figsize=figsize)
+
+        line, = ax.plot(time_arr, drift, lw=linewidth, marker=marker, label=label, rasterized=rasterized, **plot_kwargs)
         ax.grid(True)
-
-        ylabel = "Drift ratio (Δu/h)" if normalize else f"Δu [{results_name}]"
         ax.set_xlabel("Time [s]")
-        ax.set_ylabel(ylabel)
+        ax.set_ylabel("Drift ratio (Δu/h)" if normalize else "Δu [DISPLACEMENT]")
+        ax.set_title(f"Roof Drift – dir {dir_lbl}  (z={z_bot:.3f} → {z_top:.3f})")
 
-        comp_lbl = ["x", "y", "z"][direction]
-        ax.set_title(f"Roof Drift – dir {comp_lbl}  (z={z_top:.2f} to {z_bot:.2f})")
+        if label is not None:
+            ax.legend()
 
         meta = {
             "time": time_arr,
-            "drift": Δu,
+            "drift": drift,
             "top_z": z_top,
             "bottom_z": z_bot,
+            "height": height,
             "top_ids": ids_top,
             "bottom_ids": ids_bot,
+            "line": line,
         }
         return ax, meta
+
 
     def plot_story_drifts(
         self,
@@ -583,7 +691,6 @@ class PlotNodes:
 
         fig.tight_layout()
         return fig, meta
-
     
     def plot_drift_profile(
         self,
@@ -726,7 +833,6 @@ class PlotNodes:
             "drift_min": np.array(drift_min),
             "drift_max": np.array(drift_max),
         }
-
   
     def plot_orbit(
         self,
