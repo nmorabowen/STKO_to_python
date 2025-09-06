@@ -190,47 +190,54 @@ class ModelInfo:
 
         return sorted(node_results_names)
     
-    def _get_elements_results_names(self, model_stage=None, verbose=False):
+    def _get_elements_results_names(
+            self,
+            model_stage: Optional[str] = None,
+            verbose: bool = False,
+            raise_if_empty: bool = False
+    ) -> list[str]:
         """
-        Retrieve the names of element results for a given model stage from all result partitions.
-        
+        Retrieve the names of element results for a given model stage.
+
         Args:
-            model_stage (str): Name of the model stage.
-            verbose (bool, optional): If True, prints the element results names.
-        
+            model_stage (str, optional): Name of the model stage. If None, search all stages.
+            verbose (bool, optional): Print the discovered result names.
+            raise_if_empty (bool, optional): If True, raise ValueError when nothing is found.
+                                            If False (default) return an empty list instead.
+
         Returns:
-            list: List of element results names across all partitions.
+            list[str]: Sorted list of element result names (may be empty).
         """
-        if model_stage is None:
-            model_stages=self.dataset.model_stages
-        else:
-            # Check for model stage errors
-            # self._model_stages_error(model_stage)(ERROR CONTROL PENDING)
-            model_stages=[model_stage]
-        
-        element_results_names = []
-        for model_stage in model_stages:
-            # Iterate over all result partitions
+        # 1. Determine which stages to inspect
+        model_stages = [model_stage] if model_stage else self.dataset.model_stages
+
+        element_results_names: set[str] = set()
+
+        # 2. Scan every partition for every requested stage
+        for stage in model_stages:
             for _, partition_path in self.dataset.results_partitions.items():
-                with h5py.File(partition_path, 'r') as results:
-                    # Get the element results for the given model stage
-                    ele_results = results.get(self.dataset.RESULTS_ON_ELEMENTS_PATH.format(model_stage=model_stage))
-                    if ele_results is None:
-                        continue  # Skip this partition if the element results group is not found
-                    
-                    # Append the element results names from this partition
-                    element_results_names.extend(ele_results.keys())
-            
-            # Remove duplicates by converting to a set and then back to a list
-            element_results_names = list(set(element_results_names))
-            
-            if not element_results_names:
-                raise ValueError(f"Model Info: No element results found for model stage '{model_stage}' in the result partitions.")
-            
+                with h5py.File(partition_path, "r") as results:
+                    ele_group = results.get(
+                        self.dataset.RESULTS_ON_ELEMENTS_PATH.format(model_stage=stage)
+                    )
+                    if ele_group:
+                        element_results_names.update(ele_group.keys())
+
             if verbose:
-                print(f'Model Info: The element results names found across partitions for model stage "{model_stage}" are: {element_results_names}')
-        
-        return element_results_names
+                print(f"Element results in '{stage}': {sorted(element_results_names)}")
+
+        # 3. Handle empty results according to caller’s wishes
+        if not element_results_names:
+            message = (
+                f"No element results found for stage(s): {', '.join(model_stages)} "
+                f"in {len(self.dataset.results_partitions)} partition(s)."
+            )
+            if raise_if_empty:
+                raise ValueError(message)
+            logger.warning(message)
+
+        return sorted(element_results_names)
+
     
     def _get_element_types(self, model_stage=None, results_name=None, verbose=False):
         """
