@@ -35,7 +35,7 @@ class H5RepairTool:
         directory: str | Path,
         pattern: str = "results.part-*.mpco",
         *,
-        h5clear_cmd: str | None = None,
+        h5clear_cmd: str = None, #r"C:\Program Files\HDF_Group\HDF5\1.14.6\bin\h5clear.exe"
     ) -> None:
         self.directory = Path(directory)
         self.pattern = pattern
