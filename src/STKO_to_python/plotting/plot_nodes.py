@@ -204,53 +204,39 @@ class PlotNodes:
     ) -> tuple[plt.Figure | None, dict[str, Any]]:
         """
         Plot raw nodal time-history curves (no aggregation) with TIME on the X-axis.
+        Uses Nodes.get_time_history() for all data fetching & sorting.
         """
-        # ── resolve node_ids ------------------------------------------------ #
-        if node_ids is None and selection_set_id is not None:
-            node_ids = self.dataset.nodes.get_nodes_in_selection_set(selection_set_id)
-        elif node_ids is None:
-            node_ids = self.dataset.nodes_info["dataframe"]["node_id"].to_numpy()
-        node_ids = tuple(np.unique(node_ids))
+
+        # ---- fetch prepared data -------------------------------------------- #
+        try:
+            bundle = self.dataset.nodes.get_time_history(
+                model_stage=model_stage,
+                results_name=results_name,
+                node_ids=node_ids,
+                selection_set_id=selection_set_id,
+                scaling_factor=scaling_factor,
+                sort_by=sort_by,
+                reverse_sort=reverse_sort,
+            )
+        except RuntimeError as e:
+            warnings.warn(str(e), RuntimeWarning)
+            return None, {}
+
+        time_arr = bundle.time
+        df_all   = bundle.df              # MultiIndex rows: (node_id, step)
+        node_ids = bundle.node_ids        # already sorted per sort_by
+        coords_map = bundle.coords_map
+        comp_names = bundle.component_names
+
         if not node_ids:
             warnings.warn("[plot_time_history] No node IDs to plot.", RuntimeWarning)
             return None, {}
 
-        # ── TIME ------------------------------------------------------------ #
-        time_df = self.dataset.time.loc[model_stage]
-        time_arr = (time_df["TIME"] if "TIME" in time_df else time_df.index).to_numpy()
-
-        # ── coordinates & sorting ------------------------------------------ #
-        coords_df = (
-            self.dataset.nodes_info["dataframe"]
-            if isinstance(self.dataset.nodes_info, dict)
-            else self.dataset.nodes_info
-        ).drop_duplicates("node_id").set_index("node_id")
-
-        if sort_by not in {"x", "y", "z"}:
-            warnings.warn(f"sort_by '{sort_by}' not recognised. Using 'z'.", RuntimeWarning)
-            sort_by = "z"
-
-        coords_subset = coords_df.loc[list(node_ids), ["x", "y", "z"]].sort_values(
-            by=sort_by, ascending=not reverse_sort
-        )
-        node_ids = tuple(coords_subset.index)
-        coords_map = coords_subset.to_dict("index")
-
-        # ── single batch fetch of results ---------------------------------- #
-        df_all = self.dataset.nodes.get_nodal_results(
-            model_stage=model_stage,
-            results_name=results_name,
-            node_ids=list(node_ids),
-        )
-        if df_all is None or df_all.empty:
-            warnings.warn(f"No data found for result '{results_name}'.", RuntimeWarning)
-            return None, {}
-
-        # ── direction index mapping ---------------------------------------- #
+        # ---- map direction (1-based like before; allow 'x','y','z') --------- #
         if isinstance(direction, str):
             direction = {"x": 1, "y": 2, "z": 3}.get(direction.lower(), None)
 
-        # ── setup figure --------------------------------------------------- #
+        # ---- figure ---------------------------------------------------------- #
         if split_subplots:
             fig_height = figsize[1] * len(node_ids)
             fig, axes = plt.subplots(
@@ -265,10 +251,11 @@ class PlotNodes:
             axes = np.array([ax])
         axes_iter = iter(axes)
 
-        meta: dict[str, Any] = {"time": time_arr}
+        meta: dict[str, Any] = {"time": time_arr, "steps": getattr(bundle, "steps", None)}
         global_ymin, global_ymax = np.inf, -np.inf
+        last_ylabel = results_name  # will be refined with component label below
 
-        # ── plotting loop over node_ids ------------------------------------ #
+        # ---- plotting loop --------------------------------------------------- #
         for nid in node_ids:
             ax_i = next(axes_iter) if split_subplots else axes[0]
             try:
@@ -277,6 +264,7 @@ class PlotNodes:
                 warnings.warn(f"No data for node {nid}.", RuntimeWarning)
                 continue
 
+            # choose component
             if direction is None:
                 if df_node.shape[1] > 1:
                     warnings.warn(
@@ -285,39 +273,45 @@ class PlotNodes:
                         RuntimeWarning,
                     )
                 y = df_node.iloc[:, 0].to_numpy()
-            elif direction - 1 < df_node.shape[1]:
+                cname = comp_names[0] if comp_names else ""
+            elif (direction - 1) < df_node.shape[1]:
                 y = df_node.iloc[:, direction - 1].to_numpy()
+                cname = (
+                    comp_names[direction - 1]
+                    if comp_names and (direction - 1) < len(comp_names)
+                    else f"comp{direction}"
+                )
             else:
                 warnings.warn(f"Direction index {direction} out of range for node {nid}.", RuntimeWarning)
                 continue
 
-            y *= scaling_factor
+            last_ylabel = f"{results_name} ({cname})" if cname else results_name
             meta[nid] = y
 
-            global_ymin = min(global_ymin, y.min())
-            global_ymax = max(global_ymax, y.max())
+            global_ymin = min(global_ymin, float(np.min(y)))
+            global_ymax = max(global_ymax, float(np.max(y)))
 
             c = coords_map[nid]
             label = f"Node {nid} @({c['x']:.2f}, {c['y']:.2f}, {c['z']:.2f})"
             ax_i.plot(time_arr, y, lw=linewidth, marker=marker, label=label, **line_kwargs)
             ax_i.grid(True)
             if split_subplots:
-                ax_i.set_ylabel(results_name)
+                ax_i.set_ylabel(last_ylabel)
                 ax_i.legend(fontsize="small")
 
-        # ── unify limits and finalize plot --------------------------------- #
+        # ---- unify limits & finalize ---------------------------------------- #
         if split_subplots:
             for ax in axes:
                 ax.set_ylim(global_ymin, global_ymax)
 
         axes[-1].set_xlabel("Time [s]")
         if not split_subplots:
-            axes[0].set_ylabel(results_name)
+            axes[0].set_ylabel(last_ylabel)
             axes[0].legend(fontsize="small")
 
         fig.tight_layout()
         return fig, meta
-    
+  
     def plot_roof_drift(
         self,
         model_stage: str,
@@ -331,7 +325,7 @@ class PlotNodes:
         z_round: int = 3,
         top_z: float | None = None,
         bottom_z: float | None = None,
-        aggregate: str | Callable[[pd.Series], float] = "Mean",   # Mean, Median, Max, Min, or callable
+        aggregate: str | Callable[[pd.Series], float] = "Mean",   # accepts str or Series->float for BC
         figsize: tuple[int, int] = (10, 4),
         linewidth: float = 1.4,
         marker: str | None = None,
@@ -340,205 +334,72 @@ class PlotNodes:
         **plot_kwargs: Any,
     ) -> tuple[plt.Axes, dict[str, Any]]:
         """
-        Plot roof drift Δu(t) = u_top(t) − u_bot(t) (optionally normalized by height)
-        for a set of nodes (direct or via selection set). If multiple nodes exist at
-        a Z-level, their displacements are aggregated into a single trace.
-
-        Parameters
-        ----------
-        model_stage : str
-            Stage name, e.g. 'MODEL_STAGE[5]'.
-        direction : {'x','y','z'} or {1,2,3}
-            Component to plot. 1/2/3 map to x/y/z.
-        ax : plt.Axes | None
-            Existing axes to draw on. If None, a new figure/axes is created.
-        node_ids : Sequence[int] | None
-            Explicit node IDs. Mutually exclusive with selection_set_id.
-        selection_set_id : int | None
-            Selection set that defines nodes. Mutually exclusive with node_ids.
-        normalize : bool
-            If True, plot drift ratio (Δu/h). Otherwise plot Δu in result units.
-        scaling_factor : float
-            Additional scaling (applied last).
-        z_round : int
-            Decimal rounding for Z to define floor/roof groups (default 3).
-        top_z, bottom_z : float | None
-            Force specific Z levels (in model units) *after rounding*. If None, use
-            max/min Z levels present in the selected nodes.
-        aggregate : str | Callable
-            Aggregation across nodes within one Z-level. One of:
-            'Mean','Median','Max','Min' or a callable(pd.Series) -> scalar.
-        figsize : tuple
-            Only used if ax is None.
-        linewidth, marker, label, rasterized
-            Matplotlib styling.
-        **plot_kwargs
-            Forwarded to `Axes.plot` (safe—sanitized here).
-
-        Returns
-        -------
-        (ax, meta) : (plt.Axes, dict)
-            meta = {'time','drift','top_z','bottom_z','top_ids','bottom_ids','height'}
+        Plot roof drift Δu(t) = u_top(t) − u_bot(t) using Nodes.get_roof_drift().
         """
-        # ── input checks ──────────────────────────────────────────────────────
+
+        # enforce exactly one of node_ids / selection_set_id (matches get_roof_drift contract)
         if (node_ids is None) == (selection_set_id is None):
             raise ValueError("Provide either `node_ids` or `selection_set_id` (not both).")
 
-        # direction → column index or name
-        if isinstance(direction, str):
-            dmap = {"x": 0, "y": 1, "z": 2}
-            dkey = direction.lower()
-            if dkey not in dmap:
-                raise ValueError("direction must be 'x','y','z' or 1,2,3")
-            dir_idx = dmap[dkey]
-            dir_lbl = dkey
-        else:
-            if direction not in (1, 2, 3):
-                raise ValueError("direction must be 'x','y','z' or 1,2,3")
-            dir_idx = direction - 1
-            dir_lbl = ["x", "y", "z"][dir_idx]
-
-        # node set
-        if node_ids is None:
-            node_ids = self.dataset.nodes.get_nodes_in_selection_set(selection_set_id)
-        node_ids = np.unique(np.asarray(node_ids, dtype=int))
-        if node_ids.size < 2:
-            raise ValueError("Need at least two nodes (top & bottom) to compute roof drift.")
-
-        # ── coordinates + Z grouping ──────────────────────────────────────────
-        coords_df = (
-            self.dataset.nodes_info["dataframe"]
-            if isinstance(self.dataset.nodes_info, dict)
-            else self.dataset.nodes_info
-        )
-        coords_df = coords_df.drop_duplicates("node_id").set_index("node_id")
-        try:
-            coords_sub = coords_df.loc[node_ids, ["x", "y", "z"]].copy()
-        except KeyError as e:
-            missing = set(node_ids) - set(coords_df.index)
-            raise ValueError(f"Some nodes missing in nodes_info: {sorted(missing)[:10]} ...") from e
-
-        coords_sub["_z_group"] = coords_sub["z"].round(z_round)
-        level_groups = coords_sub.groupby("_z_group")
-        if len(level_groups) < 2:
-            raise ValueError("Need at least two Z-levels to compute roof drift.")
-
-        # choose bottom/top Z
-        z_levels = np.array(sorted(level_groups.groups.keys()), dtype=float)
-        z_bot = float(bottom_z) if bottom_z is not None else float(z_levels.min())
-        z_top = float(top_z) if top_z is not None else float(z_levels.max())
-        if z_bot == z_top:
-            raise ValueError("Top and bottom Z-levels coincide (height = 0).")
-        if z_bot not in level_groups.groups or z_top not in level_groups.groups:
-            raise ValueError(
-                f"Requested z-levels not found. Available: {z_levels.tolist()}, "
-                f"requested top={z_top}, bottom={z_bot} (after rounding to {z_round})."
-            )
-        ids_bot = level_groups.get_group(z_bot).index.to_list()
-        ids_top = level_groups.get_group(z_top).index.to_list()
-        height = abs(z_top - z_bot)
-        if normalize and height == 0:
-            raise ValueError("Zero height between top and bottom levels.")
-
-        # ── batched results fetch ─────────────────────────────────────────────
-        all_ids = np.unique(np.concatenate([ids_bot, ids_top]))
-        df_all = self.dataset.nodes.get_nodal_results(
-            model_stage=model_stage,
-            results_name="DISPLACEMENT",
-            node_ids=all_ids.tolist(),
-        )
-        if df_all is None or df_all.empty:
-            raise ValueError("No displacement data found for the requested nodes/stage.")
-
-        # resolve column for direction: support either ['x','y','z'] labels or numeric columns
-        if dir_idx < df_all.shape[1]:
-            col_series = lambda df: df.iloc[:, dir_idx]
-        else:
-            # try labeled columns
-            try:
-                col_series = lambda df: df[dir_lbl]
-            except Exception as e:
-                raise ValueError("Unexpected displacement columns layout.") from e
-
-        # aggregator
-        if isinstance(aggregate, str):
-            agg_key = aggregate.lower()
-            if agg_key == "mean":
-                agg_fn = np.mean
-            elif agg_key == "median":
-                agg_fn = np.median
-            elif agg_key == "max":
-                agg_fn = np.max
-            elif agg_key == "min":
-                agg_fn = np.min
-            else:
-                raise ValueError("aggregate must be one of 'Mean','Median','Max','Min' or a callable.")
-        else:
-            agg_fn = aggregate  # callable(pd.Series) -> scalar
-
-        def avg_disp(ids: list[int]) -> np.ndarray:
-            # Collect each node series for chosen direction
-            series_list: list[np.ndarray] = []
-            for nid in ids:
+        # Allow legacy callables that expect a pandas.Series by wrapping into ndarray->float
+        agg_param = aggregate
+        if callable(aggregate):
+            def _agg_wrapper(arr: np.ndarray) -> float:
                 try:
-                    df_node = df_all.xs(nid, level=0)
-                except KeyError:
-                    continue
-                s = col_series(df_node).to_numpy()
-                series_list.append(s)
-            if not series_list:
-                raise ValueError("No valid displacement data for one of the Z groups.")
-            # stack → aggregate across nodes per time step
-            arr = np.vstack(series_list)  # (n_nodes, n_steps)
-            return agg_fn(arr, axis=0)
+                    return float(aggregate(arr))  # user function already ndarray-aware
+                except Exception:
+                    # fallback for Series-based callables passed by older code
+                    return float(aggregate(pd.Series(arr)))
+            agg_param = _agg_wrapper  # pass ndarray-compatible callable to nodes layer
 
-        u_top = avg_disp(ids_top)
-        u_bot = avg_disp(ids_bot)
-        drift = u_top - u_bot
+        # --- compute drift with the method on Nodes --------------------------------
+        res = self.dataset.nodes.get_roof_drift(
+            model_stage=model_stage,
+            direction=direction,
+            node_ids=node_ids,
+            selection_set_id=selection_set_id,
+            normalize=normalize,
+            scaling_factor=scaling_factor,
+            z_round=z_round,
+            top_z=top_z,
+            bottom_z=bottom_z,
+            aggregate=agg_param,  # str or ndarray->float callable
+        )
 
-        if normalize:
-            drift = drift / height
-        drift = drift * float(scaling_factor)
-
-        # time vector
-        try:
-            time_df = self.dataset.time.loc[model_stage]
-            time_arr = (time_df["TIME"] if "TIME" in time_df else time_df.index).to_numpy()
-        except Exception:
-            # Fallback: infer from dataframe index level 1 if structured like (node_id, step)
-            if isinstance(df_all.index, pd.MultiIndex) and df_all.index.nlevels >= 2:
-                time_arr = df_all.index.get_level_values(1).unique().to_numpy()
-            else:
-                raise
-
-        # ── plot ──────────────────────────────────────────────────────────────
-        # sanitize kwargs (avoid accidental 'ax' etc.)
-        plot_kwargs.pop("ax", None)
-
+        # --- plot ------------------------------------------------------------------
+        plot_kwargs.pop("ax", None)  # sanitize accidental kw
         if ax is None:
             _, ax = plt.subplots(figsize=figsize)
 
-        line, = ax.plot(time_arr, drift, lw=linewidth, marker=marker, label=label, rasterized=rasterized, **plot_kwargs)
+        line, = ax.plot(
+            res.time, res.drift,
+            lw=linewidth, marker=marker, label=label,
+            rasterized=rasterized, **plot_kwargs
+        )
         ax.grid(True)
         ax.set_xlabel("Time [s]")
         ax.set_ylabel("Drift ratio (Δu/h)" if normalize else "Δu [DISPLACEMENT]")
-        ax.set_title(f"Roof Drift – dir {dir_lbl}  (z={z_bot:.3f} → {z_top:.3f})")
+        ax.set_title(f"Roof Drift – dir {res.direction}  (z={res.bottom_z:.3f} → {res.top_z:.3f})")
 
         if label is not None:
             ax.legend()
 
-        meta = {
-            "time": time_arr,
-            "drift": drift,
-            "top_z": z_top,
-            "bottom_z": z_bot,
-            "height": height,
-            "top_ids": ids_top,
-            "bottom_ids": ids_bot,
+        meta: dict[str, Any] = {
+            "time": res.time,
+            "steps": res.steps,
+            "drift": res.drift,
+            "u_top": res.u_top,
+            "u_bot": res.u_bot,
+            "top_z": res.top_z,
+            "bottom_z": res.bottom_z,
+            "height": res.height,
+            "top_ids": res.top_ids,
+            "bottom_ids": res.bottom_ids,
+            "direction": res.direction,
+            "component": res.component_name,
             "line": line,
         }
         return ax, meta
-
 
     def plot_story_drifts(
         self,
@@ -552,88 +413,34 @@ class PlotNodes:
         split_subplots: bool = False,
         sort_by: str = "z",
         reverse_sort: bool = False,
+        z_round: int = 3,
         figsize: tuple[int, int] = (10, 4),
         linewidth: float = 1.2,
         marker: str | None = None,
         sharey: bool = False,
+        aggregate: str | Callable[[np.ndarray], float] = "Mean",
         **line_kwargs,
-    ) -> tuple[plt.Figure | None, dict[str, Any]]:
-        """
-        Plot inter-storey drifts (Δu or Δu / height) over time with Z-aware node grouping.
-        Labels now include Z-coordinate info for each storey.
-        """
-        results_name = "DISPLACEMENT"
-        if results_name not in self.dataset.node_results_names:
-            warnings.warn(f"No '{results_name}' result found. Drift plot may fail.", RuntimeWarning)
-
-        if (node_ids is None) == (selection_set_id is None):
-            raise ValueError("Specify *either* node_ids *or* selection_set_id (not both).")
-
-        if node_ids is None:
-            node_ids = self.dataset.nodes.get_nodes_in_selection_set(selection_set_id)
-        node_ids = np.unique(node_ids)
-        if node_ids.size < 2:
-            raise ValueError("Need ≥2 nodes to compute storey drifts.")
-
-        # --- get node coordinates --------------------------------------------- #
-        coords_df = (
-            self.dataset.nodes_info["dataframe"]
-            if isinstance(self.dataset.nodes_info, dict)
-            else self.dataset.nodes_info
-        ).drop_duplicates("node_id").set_index("node_id")
-
-        coords_sub = coords_df.loc[list(node_ids), ["x", "y", "z"]].copy()
-
-        if sort_by not in {"x", "y", "z"}:
-            warnings.warn(f"sort_by '{sort_by}' invalid. Using 'z'.", RuntimeWarning)
-            sort_by = "z"
-
-        coords_sub["_z_group"] = coords_sub[sort_by].round(3)
-        level_groups = coords_sub.groupby("_z_group")
-
-        z_levels = sorted(level_groups.groups.keys(), reverse=reverse_sort)
-        if len(z_levels) < 2:
-            raise ValueError("Need ≥2 Z levels to compute storey drifts.")
-
-        # --- direction index -------------------------------------------------- #
-        if isinstance(direction, str):
-            direction = {"x": 1, "y": 2, "z": 3}.get(direction.lower(), None)
-        if direction not in (1, 2, 3):
-            raise ValueError("direction must be 'x','y','z' or 1,2,3")
-
-        # --- batched results fetch -------------------------------------------- #
-        df_all = self.dataset.nodes.get_nodal_results(
+    ) -> tuple["plt.Figure | None", dict[str, Any]]:
+        """Thin plotting wrapper over get_story_drifts()."""
+ 
+        res = self.dataset.nodes.get_story_drifts(
             model_stage=model_stage,
-            results_name=results_name,
-            node_ids=list(node_ids),
+            node_ids=node_ids,
+            selection_set_id=selection_set_id,
+            direction=direction,
+            normalize=normalize,
+            scaling_factor=scaling_factor,
+            sort_by=sort_by,
+            reverse_sort=reverse_sort,
+            z_round=z_round,
+            aggregate=aggregate,
         )
-        if df_all is None or df_all.empty:
-            raise ValueError("No displacement data available for requested nodes.")
 
-        # --- helper: avg time series across level group ----------------------- #
-        def avg_disp(ids: list[int]) -> np.ndarray:
-            dfs = []
-            for nid in ids:
-                try:
-                    df = df_all.xs(nid, level=0)
-                except KeyError:
-                    continue
-                dfs.append(df.iloc[:, direction - 1].to_numpy())
-            if not dfs:
-                raise ValueError("No valid displacement data in level group.")
-            return np.mean(np.vstack(dfs), axis=0)
-
-        # --- time array ------------------------------------------------------- #
-        time_df = self.dataset.time.loc[model_stage]
-        time_arr = (time_df["TIME"] if "TIME" in time_df else time_df.index).to_numpy()
-
-        # --- prepare figure --------------------------------------------------- #
-        n_stories = len(z_levels) - 1
+        n_stories = len(res.labels)
         if split_subplots:
-            fig_height = figsize[1] * n_stories
             fig, axes = plt.subplots(
                 n_stories, 1,
-                figsize=(figsize[0], fig_height),
+                figsize=(figsize[0], figsize[1] * n_stories),
                 sharex=True,
                 sharey=sharey,
             )
@@ -641,49 +448,27 @@ class PlotNodes:
         else:
             fig, ax = plt.subplots(figsize=figsize)
             axes = np.array([ax])
-        axes_iter = iter(axes)
 
-        meta: dict[str, Any] = {"time": time_arr}
-        global_ymin, global_ymax = np.inf, -np.inf
+        meta: dict[str, Any] = {"time": res.time}
+        ymin, ymax = np.inf, -np.inf
 
-        # --- loop over storeys ------------------------------------------------ #
-        for i in range(n_stories):
-            z1, z2 = z_levels[i], z_levels[i + 1]
-            group1_ids = level_groups.get_group(z1).index.tolist()
-            group2_ids = level_groups.get_group(z2).index.tolist()
-
-            u1 = avg_disp(group1_ids)
-            u2 = avg_disp(group2_ids)
-            Δu = u2 - u1
-            height = abs(z2 - z1)
-
-            if normalize:
-                if height == 0:
-                    warnings.warn(f"Zero height between levels {z1} and {z2}; skipping.", RuntimeWarning)
-                    continue
-                Δu = Δu / height
-            Δu *= scaling_factor
-
-            label = f"{z1:.2f}→{z2:.2f}"
-            meta[label] = Δu
-
-            ax_i = next(axes_iter) if split_subplots else axes[0]
-            ax_i.plot(time_arr, Δu, lw=linewidth, marker=marker, label=f"Story {label}", **line_kwargs)
+        for i, label in enumerate(res.labels):
+            y = res.drift[i]
+            ax_i = axes[i] if split_subplots else axes[0]
+            ax_i.plot(res.time, y, lw=linewidth, marker=marker, label=f"Story {label}", **line_kwargs)
             ax_i.grid(True)
-
             if split_subplots:
                 ax_i.set_ylabel("Drift" + (" ratio" if normalize else ""))
                 ax_i.legend(fontsize="small")
+            if np.isfinite(y).any():
+                ymin = min(ymin, np.nanmin(y))
+                ymax = max(ymax, np.nanmax(y))
+            meta[label] = y
 
-            global_ymin = min(global_ymin, Δu.min())
-            global_ymax = max(global_ymax, Δu.max())
-
-        # --- Y-axis alignment ------------------------------------------------- #
-        if split_subplots:
+        if split_subplots and np.isfinite(ymin) and np.isfinite(ymax):
             for ax in axes:
-                ax.set_ylim(global_ymin, global_ymax)
+                ax.set_ylim(ymin, ymax)
 
-        # --- final labels ----------------------------------------------------- #
         axes[-1].set_xlabel("Time [s]")
         if not split_subplots:
             axes[0].set_ylabel("Drift" + (" ratio" if normalize else ""))
@@ -706,133 +491,73 @@ class PlotNodes:
         limits: list[float] | None = None,
         fill: bool = False,
         ax: Optional[plt.Axes] = None,
-        show_legend: bool = True,
+        show_legend: bool = False,
         **plot_kwargs,
     ) -> tuple[plt.Axes, dict[str, Any]]:
         """
-        Plot max/min drift envelope per storey (Δu or Δu / height) vs. height using Z-grouping.
-        Anchors zero drift at the absolute base height, and uses actual Z-levels as ticks.
+        Plot max/min drift envelope per storey (Δu or Δu / height) vs. height.
+        Uses Nodes.get_story_drifts(...) to compute the time-histories and envelopes.
         """
-        results_name = "DISPLACEMENT"
+        import numpy as np
+        import matplotlib.pyplot as plt
 
-        # ── validate input ───────────────────────────────────────────────────── #
-        if (node_ids is None) == (selection_set_id is None):
-            raise ValueError("Specify *either* node_ids *or* selection_set_id (not both).")
-        if node_ids is None:
-            node_ids = self.dataset.nodes.get_nodes_in_selection_set(selection_set_id)
-        node_ids = np.unique(node_ids)
-        if node_ids.size < 2:
-            raise ValueError("Need ≥2 nodes to compute story drifts.")
-
-        # ── coordinates and grouping ─────────────────────────────────────────── #
-        coords_df = (
-            self.dataset.nodes_info["dataframe"]
-            if isinstance(self.dataset.nodes_info, dict)
-            else self.dataset.nodes_info
-        ).drop_duplicates("node_id").set_index("node_id")
-
-        if sort_by not in {"x", "y", "z"}:
-            warnings.warn(f"sort_by '{sort_by}' invalid. Defaulting to 'z'.", RuntimeWarning)
-            sort_by = "z"
-
-        coords_sub = coords_df.loc[list(node_ids), ["x", "y", "z"]]
-        coords_sub["_z_group"] = coords_sub["z"].round(3)
-        level_groups = coords_sub.groupby("_z_group")
-        z_levels = sorted(level_groups.groups.keys(), reverse=reverse_sort)
-
-        if len(z_levels) < 2:
-            raise ValueError("Need ≥2 Z levels to compute inter-storey drifts.")
-
-        # ── direction index ───────────────────────────────────────────────────── #
-        if isinstance(direction, str):
-            direction = {"x": 1, "y": 2, "z": 3}.get(direction.lower(), None)
-        if direction not in (1, 2, 3):
-            raise ValueError("direction must be 'x','y','z' or 1,2,3")
-
-        # ── batched results fetch ─────────────────────────────────────────────── #
-        df_all = self.dataset.nodes.get_nodal_results(
+        # Compute storey drifts + envelopes in one pass (no extra HDF5 reads here)
+        res = self.dataset.nodes.get_story_drifts(
             model_stage=model_stage,
-            results_name=results_name,
-            node_ids=list(node_ids),
+            node_ids=node_ids,
+            selection_set_id=selection_set_id,
+            direction=direction,
+            normalize=normalize,
+            scaling_factor=scaling_factor,
+            sort_by=sort_by,
+            reverse_sort=reverse_sort,
+            z_round=3,           # match previous behaviour
+            aggregate="Mean",    # average across nodes at a level
         )
-        if df_all is None or df_all.empty:
-            raise ValueError("No valid displacement data found.")
 
-        # ── helper: average nodal series ─────────────────────────────────────── #
-        def avg_disp(nids: list[int]) -> np.ndarray:
-            dfs = []
-            for nid in nids:
-                try:
-                    df = df_all.xs(nid, level=0)
-                except KeyError:
-                    continue
-                dfs.append(df.iloc[:, direction - 1].to_numpy())
-            if not dfs:
-                raise ValueError("No valid displacement data in level group.")
-            return np.mean(np.vstack(dfs), axis=0)
+        # Build plotting arrays (anchor at base with 0 drift)
+        z_for_plot = np.concatenate([[res.z_base], res.z_tops])
+        min_for_plot = np.concatenate([[0.0], res.envelope_min])
+        max_for_plot = np.concatenate([[0.0], res.envelope_max])
 
-        # ── compute drifts per level transition ──────────────────────────────── #
-        z_tops, z_bottoms = [], []
-        drift_min, drift_max = [], []
-
-        for z1, z2 in zip(z_levels[:-1], z_levels[1:]):
-            ids1 = level_groups.get_group(z1).index.tolist()
-            ids2 = level_groups.get_group(z2).index.tolist()
-
-            u1 = avg_disp(ids1)
-            u2 = avg_disp(ids2)
-            Δu = u2 - u1
-            height = abs(z2 - z1)
-
-            if normalize:
-                if height == 0:
-                    warnings.warn(f"Zero height between levels {z1} and {z2}.", RuntimeWarning)
-                    continue
-                Δu /= height
-            Δu *= scaling_factor
-
-            drift_min.append(Δu.min())
-            drift_max.append(Δu.max())
-            z_tops.append(z2)
-            z_bottoms.append(z1)
-
-        if not drift_min:
-            raise ValueError("No valid story drifts computed.")
-
-        # ── prepend base level ───────────────────────────────────────────────── #
-        z_base = min(z_levels)
-        z_tops = [z_base] + z_tops
-        drift_min = [0.0] + drift_min
-        drift_max = [0.0] + drift_max
-
-        # ── plot ─────────────────────────────────────────────────────────────── #
+        # Create axes if needed
         if ax is None:
-            fig, ax = plt.subplots(figsize=(6, 8))
+            _, ax = plt.subplots(figsize=(6, 8))
 
-        ax.plot(drift_min, z_tops, "-", label="Min Drift", **plot_kwargs)
-        ax.plot(drift_max, z_tops, "-", label="Max Drift", **plot_kwargs)
+        # Draw min/max curves and optional fill
+        ax.plot(min_for_plot, z_for_plot, "-", label="Min Drift", **plot_kwargs)
+        ax.plot(max_for_plot, z_for_plot, "-", label="Max Drift", **plot_kwargs)
         if fill:
-            ax.fill_betweenx(z_tops, drift_min, drift_max, alpha=0.2)
+            ax.fill_betweenx(z_for_plot, min_for_plot, max_for_plot, alpha=0.2)
 
+        # Optional vertical limit lines
         if limits is not None:
             for lim in limits:
                 ax.axvline(lim, color="gray", linestyle="--", alpha=0.5, label=f"Limit {lim:g}")
 
-        ax.set_xlabel("Drift Ratio" if normalize else f"Δu [{results_name}]")
+        # Labels, ticks, grid, legend
+        xlabel = "Drift Ratio" if normalize else "Δu [DISPLACEMENT]"
         if scaling_factor != 1.0:
-            ax.set_xlabel(ax.get_xlabel() + f" ×{scaling_factor:g}")
+            xlabel += f" ×{scaling_factor:g}"
+        ax.set_xlabel(xlabel)
         ax.set_ylabel("Height [Z]")
-        ax.set_yticks(z_levels)
+        ax.set_yticks(np.unique(np.concatenate([[res.z_base], res.z_tops])))
         ax.grid(True)
         if show_legend:
             ax.legend()
 
-        return ax, {
-            "story_bottom_z": np.insert(z_bottoms, 0, z_base),
-            "story_top_z": np.array(z_tops),
-            "drift_min": np.array(drift_min),
-            "drift_max": np.array(drift_max),
+        # Meta payload (consistent with your previous return)
+        meta = {
+            "story_bottom_z": np.array([b for b, _ in res.z_pairs]),
+            "story_top_z": res.z_tops,
+            "drift_min": res.envelope_min,
+            "drift_max": res.envelope_max,
+            "labels": res.labels,
+            "heights": res.heights,
+            "direction": res.direction,
+            "component_name": res.component_name,
         }
+        return ax, meta
   
     def plot_orbit(
         self,

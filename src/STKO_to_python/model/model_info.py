@@ -190,121 +190,251 @@ class ModelInfo:
 
         return sorted(node_results_names)
     
-    def _get_elements_results_names(self, model_stage=None, verbose=False):
+    def _get_elements_results_names(
+            self,
+            model_stage: Optional[str] = None,
+            verbose: bool = False,
+            raise_if_empty: bool = False
+    ) -> list[str]:
         """
-        Retrieve the names of element results for a given model stage from all result partitions.
-        
-        Args:
-            model_stage (str): Name of the model stage.
-            verbose (bool, optional): If True, prints the element results names.
-        
-        Returns:
-            list: List of element results names across all partitions.
-        """
-        if model_stage is None:
-            model_stages=self.dataset.model_stages
-        else:
-            # Check for model stage errors
-            # self._model_stages_error(model_stage)(ERROR CONTROL PENDING)
-            model_stages=[model_stage]
-        
-        element_results_names = []
-        for model_stage in model_stages:
-            # Iterate over all result partitions
-            for _, partition_path in self.dataset.results_partitions.items():
-                with h5py.File(partition_path, 'r') as results:
-                    # Get the element results for the given model stage
-                    ele_results = results.get(self.dataset.RESULTS_ON_ELEMENTS_PATH.format(model_stage=model_stage))
-                    if ele_results is None:
-                        continue  # Skip this partition if the element results group is not found
-                    
-                    # Append the element results names from this partition
-                    element_results_names.extend(ele_results.keys())
-            
-            # Remove duplicates by converting to a set and then back to a list
-            element_results_names = list(set(element_results_names))
-            
-            if not element_results_names:
-                raise ValueError(f"Model Info: No element results found for model stage '{model_stage}' in the result partitions.")
-            
-            if verbose:
-                print(f'Model Info: The element results names found across partitions for model stage "{model_stage}" are: {element_results_names}')
-        
-        return element_results_names
-    
-    def _get_element_types(self, model_stage=None, results_name=None, verbose=False):
-        """
-        Retrieve the element types for a given result name and model stage.
-        If results_name is None, get types for all results.
+        Retrieve the names of element results for a given model stage.
 
         Args:
-            model_stage (str, optional): Name of the model stage. If None, retrieve results for all model stages.
-            results_name (str, optional): Name of the results group.
-            verbose (bool, optional): If True, prints the element types.
+            model_stage (str, optional): Name of the model stage. If None, search all stages.
+            verbose (bool, optional): Print the discovered result names.
+            raise_if_empty (bool, optional): If True, raise ValueError when nothing is found.
+                                            If False (default) return an empty list instead.
 
         Returns:
-            dict: Dictionary mapping results names to their element types.
+            list[str]: Sorted list of element result names (may be empty).
         """
-        if model_stage is None:
-            model_stages = self.dataset.model_stages
-        else:
-            # Check for model stage errors
-            # self._model_stages_error(model_stage) (ERROR CONTROL PENDING)
-            model_stages = [model_stage]
-            
-        if results_name is None:
-            results_names = self.dataset.element_results_names
-        else:
-            # self._element_results_name_error(results_name, stage) (ERROR CONTROL PENDING)
-            results_names = [results_name]
+        # 1. Determine which stages to inspect
+        model_stages = [model_stage] if model_stage else self.dataset.model_stages
 
-        element_types_dict = {}
+        element_results_names: set[str] = set()
+
+        # 2. Scan every partition for every requested stage
         for stage in model_stages:
-            for partition, partition_path in self.dataset.results_partitions.items():
-                with h5py.File(partition_path, 'r') as results:
-                    for name in results_names:
-                        ele_types = results.get(self.dataset.RESULTS_ON_ELEMENTS_PATH.format(model_stage=stage) + f"/{name}")
-                        if ele_types is None:
-                            raise ValueError(f"Model Info Error: Element types group not found for {name} in partition {partition}")
-                        if name not in element_types_dict:
-                            element_types_dict[name] = []
-                            element_types_dict[name].extend(list(ele_types.keys()))
+            for _, partition_path in self.dataset.results_partitions.items():
+                with h5py.File(partition_path, "r") as results:
+                    ele_group = results.get(
+                        self.dataset.RESULTS_ON_ELEMENTS_PATH.format(model_stage=stage)
+                    )
+                    if ele_group:
+                        element_results_names.update(ele_group.keys())
 
-        unique_element_types = set()
-        
-        unique_element_types = set()
-        for name in element_types_dict:
-            unique_element_types.update(element_types_dict[name])
+            if verbose:
+                print(f"Element results in '{stage}': {sorted(element_results_names)}")
+
+        # 3. Handle empty results according to caller’s wishes
+        if not element_results_names:
+            message = (
+                f"No element results found for stage(s): {', '.join(model_stages)} "
+                f"in {len(self.dataset.results_partitions)} partition(s)."
+            )
+            if raise_if_empty:
+                raise ValueError(message)
+            logger.warning(message)
+
+        return sorted(element_results_names)
+
+    def _get_element_types(
+            self,
+            model_stage: Optional[str] = None,
+            results_name: Optional[str] = None,
+            *,
+            verbose: bool = False,
+            raise_if_empty: bool = False,
+    ) -> dict[str, Any]:
+        """
+        Retrieve element types (full decorated names) per element-results group, across
+        the requested model stages and all partitions.
+
+        Behavior:
+        - If `model_stage` is None, inspects all stages in `self.dataset.model_stages`.
+        - If `results_name` is None, discovers element-results names per stage using
+        `_get_elements_results_names(stage)`.
+        - Skips stages with no element results.
+        - Aggregates across partitions; deduplicates; returns sorted outputs.
+        - Does not raise when nothing is found unless `raise_if_empty=True`.
+
+        Args:
+            model_stage (str, optional): Stage to query; if None, query all stages.
+            results_name (str, optional): Specific element-results group to query; if None,
+                                        all groups found per stage are used.
+            verbose (bool): Print progress/details.
+            raise_if_empty (bool): Raise ValueError if nothing found.
+
+        Returns:
+            dict[str, Any]:
+                {
+                    "element_types_dict": dict[str, list[str]],  # result_name -> sorted list of types
+                    "unique_element_types": list[str],           # sorted unique across all results
+                    "skipped_stages": list[str],                 # stages skipped due to emptiness
+                    "scanned_stages": list[str],                 # stages actually scanned
+                }
+        """
+        stages = [model_stage] if model_stage else list(self.dataset.model_stages)
+
+        element_types_dict: dict[str, set[str]] = {}
+        skipped_stages: list[str] = []
+        scanned_stages: list[str] = []
+
+        for stage in stages:
+            # Determine which result groups to look at for this stage
+            if results_name is None:
+                result_names = self._get_elements_results_names(
+                    model_stage=stage, verbose=False, raise_if_empty=False
+                )
+            else:
+                result_names = [results_name]
+
+            if not result_names:
+                skipped_stages.append(stage)
+                if verbose:
+                    print(f"[info] Skipping stage '{stage}': no element results found.")
+                continue
+
+            scanned_stages.append(stage)
+
+            # Walk all partitions, gather element type groups per result name
+            for _, partition_path in self.dataset.results_partitions.items():
+                with h5py.File(partition_path, "r") as results:
+                    base_group = results.get(
+                        self.dataset.RESULTS_ON_ELEMENTS_PATH.format(model_stage=stage)
+                    )
+                    if base_group is None:
+                        # This partition has no elements group for this stage
+                        continue
+
+                    for name in result_names:
+                        grp = base_group.get(name)
+                        if grp is None:
+                            # This partition lacks this particular result group
+                            continue
+
+                        # Initialize set for this result group
+                        if name not in element_types_dict:
+                            element_types_dict[name] = set()
+
+                        # Keep FULL decorated element type names
+                        element_types_dict[name].update(grp.keys())
+
+            if verbose:
+                counts = {k: len(v) for k, v in element_types_dict.items()}
+                print(f"[info] Stage '{stage}': collected types (counts per result) -> {counts}")
+
+        # Finalize / convert sets -> sorted lists
+        element_types_dict_sorted: dict[str, list[str]] = {
+            name: sorted(types_set) for name, types_set in element_types_dict.items()
+        }
+
+        # Unique across all
+        unique_all: list[str] = sorted(
+            set().union(*element_types_dict_sorted.values()) if element_types_dict_sorted else set()
+        )
+
+        # Handle emptiness policy
+        if not element_types_dict_sorted:
+            msg = (
+                "No element types found. "
+                f"Checked stages: {', '.join(stages)}. "
+                f"Skipped (empty) stages: {', '.join(skipped_stages) if skipped_stages else 'none'}. "
+                f"Partitions scanned: {len(self.dataset.results_partitions)}."
+            )
+            if raise_if_empty:
+                raise ValueError(f"Model Info: {msg}")
+            logger.warning(f"Model Info: {msg}")
 
         if verbose:
-            print(f'The element types found are: {unique_element_types}')
-            
-        results = {'element_types_dict': element_types_dict, 'unique_element_types': unique_element_types}
-        
-        return results
+            print(f"[info] Unique element types ({len(unique_all)}): {unique_all}")
+
+        return {
+            "element_types_dict": element_types_dict_sorted,
+            "unique_element_types": unique_all,
+            "skipped_stages": skipped_stages,
+            "scanned_stages": scanned_stages,
+        }
+
     
-    def _get_all_types(self, model_stage=None):
-        
-        if model_stage is None:
-            model_stages = self.dataset.model_stages
-        else:
-            # Check for model stage errors
-            # self._model_stages_error(model_stage) (ERROR CONTROL PENDING)
-            model_stages = [model_stage]
-        
-        element_types = set()
-        for model_stage in model_stages:
+    def _get_all_types(
+            self,
+            model_stage: Optional[str] = None,
+            *,
+            verbose: bool = False,
+            raise_if_empty: bool = False,
+    ) -> list[str]:
+        """
+        Collect ALL element 'type' groups present under every element-result name
+        across the requested model stages and partitions.
+
+        - Skips model stages that have no element results.
+        - Uses full decorated element type names (e.g., '203-ASDShellQ4[201:0:0]').
+
+        Args:
+            model_stage (str, optional): Single stage to query. If None, query all.
+            verbose (bool): If True, prints per-stage info.
+            raise_if_empty (bool): If True, raises if nothing is found.
+
+        Returns:
+            list[str]: Sorted unique element type names (decorated).
+        """
+        # 1) Which stages?
+        stages = [model_stage] if model_stage else self.dataset.model_stages
+
+        element_types: set[str] = set()
+        skipped_stages: list[str] = []
+
+        # 2) For each stage, get its element result names once
+        for stage in stages:
+            result_names = self._get_elements_results_names(
+                model_stage=stage,
+                verbose=False,
+                raise_if_empty=False,  # don't raise here; we'll decide below
+            )
+            if not result_names:
+                skipped_stages.append(stage)
+                if verbose:
+                    print(f"[info] Skipping stage '{stage}': no element results found.")
+                continue  # nothing to do for this stage
+
+            # 3) Walk all partitions and harvest element type groups per result name
             for _, partition_path in self.dataset.results_partitions.items():
-                with h5py.File(partition_path, 'r') as results:
-                    results_names = self._get_elements_results_names(model_stage)
-                    for name in results_names:
-                        ele_types = results.get(self.dataset.RESULTS_ON_ELEMENTS_PATH.format(model_stage=model_stage) + f"/{name}")
-                        if ele_types is None:
-                            raise ValueError(f"Model Info Error: Element types group not found for {name}")
-                        element_types.update([key.split('[')[0] for key in ele_types.keys()])
-            
-                
-            return sorted(list(element_types))
+                with h5py.File(partition_path, "r") as results:
+                    base_group = results.get(
+                        self.dataset.RESULTS_ON_ELEMENTS_PATH.format(model_stage=stage)
+                    )
+                    if base_group is None:
+                        # This partition has no elements group for this stage; skip
+                        continue
+
+                    for name in result_names:
+                        grp = base_group.get(name)
+                        if grp is None:
+                            # This partition lacks this particular result name; skip
+                            continue
+                        # IMPORTANT: keep full decorated type names
+                        element_types.update(grp.keys())
+
+            if verbose:
+                found = sorted(element_types)
+                print(f"[info] Stage '{stage}': collected {len(found)} type(s) so far.")
+
+        # 4) Finalize
+        if not element_types:
+            msg = (
+                "No element types found. "
+                f"Checked stages: {', '.join(stages)}. "
+                f"Skipped (empty) stages: {', '.join(skipped_stages) if skipped_stages else 'none'}. "
+                f"Partitions scanned: {len(self.dataset.results_partitions)}."
+            )
+            if raise_if_empty:
+                raise ValueError(f"Model Info: {msg}")
+            logger.warning(f"Model Info: {msg}")
+            return []
+
+        return sorted(element_types)
+
     
     def _get_time_series_on_nodes_for_stage(self, model_stage, results_name):
         """
