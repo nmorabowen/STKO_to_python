@@ -11,7 +11,7 @@ AggregateFn = Callable[[np.ndarray], float]
 
 from concurrent.futures import ThreadPoolExecutor
 
-from .nodal_results_dataclass import NodalResults
+from ..results.nodal_results_dataclass import NodalResults
 
 import logging
 from functools import lru_cache
@@ -21,7 +21,7 @@ import warnings
 
 if TYPE_CHECKING:
     from ..core.dataset import MPCODataSet
-    from .nodal_results_dataclass import NodalResults
+    from ..results.nodal_results_dataclass import NodalResults
 
 # Set up logging instead of using print statements
 logging.basicConfig(
