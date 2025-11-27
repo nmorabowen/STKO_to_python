@@ -731,6 +731,7 @@ class Nodes:
                 coords_map=coords_map,
                 component_names=component_names,
                 stages=stages_used,
+                plot_settings=self.dataset.plot_settings,
             )
 
     def _get_all_stages_results(

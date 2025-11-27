@@ -1,10 +1,17 @@
 from __future__ import annotations
+from typing import TYPE_CHECKING
 
 from dataclasses import dataclass
 from typing import Dict, Tuple, Optional, Any
 
+from .nodal_results_plotting import NodalResultsPlotter
+
 import numpy as np
 import pandas as pd
+
+if TYPE_CHECKING:
+    from .nodal_results_plotting import NodalResultsPlotter
+    from ..plotting.plot_dataclasses import ModelPlotSettings
 
 
 # ───────────────────────────────────────────────────────────────────── #
@@ -80,6 +87,7 @@ class NodalResults:
     coords_map: Optional[Dict[int, Dict[str, float]]] = None
     component_names: Optional[Tuple[str, ...]] = None
     stages: Optional[Tuple[str, ...]] = None
+    plot_settings: ModelPlotSettings | None = None
 
     # internal cache of _ResultView objects (result_name -> _ResultView)
     _views: Dict[str, _ResultView] = None  # set in __post_init__
@@ -294,6 +302,22 @@ class NodalResults:
         # Fall back to default behaviour
         raise AttributeError(f"{type(self).__name__!r} object has no attribute {item!r}")
 
+    @property
+    def plot(self) -> "NodalResultsPlotter":
+        """
+        Access a plotting helper bound to this NodalResults object.
+
+        Examples
+        --------
+        results.plot.xy(
+            y="ACCELERATION",
+            y_direction=1,
+            y_operation="Sum",
+            x="TIME",
+        )
+        """
+        return NodalResultsPlotter(self)
+    
     def __dir__(self):
         """
         Extend dir() so that interactive tools (like VS Code's REPL)
