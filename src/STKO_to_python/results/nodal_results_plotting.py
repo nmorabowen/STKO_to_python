@@ -8,6 +8,8 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
+from ..dataprocess.aggregator import Aggregator, StrOp
+
 if TYPE_CHECKING:
     from .nodal_results_dataclass import NodalResults
     from ..plotting.plot_dataclasses import ModelPlotSettings
@@ -19,18 +21,26 @@ class NodalResultsPlotter:
 
     Usage
     -----
-    results.plot.xy(
-        y_results_name="ACCELERATION",
-        y_direction=1,
-        y_operation="Sum",
-        x_results_name="TIME",  # 'TIME', 'STEP', or another result_name
-    )
+    Basic X–Y aggregation plot:
 
-    results.plot.plot_TH(
-        result_name="ACCELERATION",
-        component=1,
-        node_ids=[14, 25],
-    )
+        results.plot.xy(
+            y_results_name="ACCELERATION",
+            y_direction=1,                  # component index / label
+            y_operation="Sum",              # one of:
+                                           #   'Sum', 'Mean', 'Max', 'Min', 'Std',
+                                           #   'Percentile', 'Envelope',
+                                           #   'Cumulative', 'SignedCumulative',
+                                           #   'RunningEnvelope'
+            x_results_name="TIME",          # 'TIME', 'STEP', or another result_name
+        )
+
+    Raw time history for specific nodes:
+
+        results.plot.plot_TH(
+            result_name="ACCELERATION",
+            component=1,
+            node_ids=[14, 25],
+        )
     """
 
     def __init__(self, results: "NodalResults"):
@@ -104,12 +114,12 @@ class NodalResultsPlotter:
         # Y-axis ----------------------------------------------------------- #
         y_results_name: str,
         y_direction: str | int | None = None,
-        y_operation: str | Sequence[str] = "Sum",
+        y_operation: StrOp | Sequence[StrOp] = "Sum",
         y_scale: float = 1.0,
         # X-axis ----------------------------------------------------------- #
         x_results_name: str = "TIME",   # 'TIME', 'STEP', or result_name
         x_direction: str | int | None = None,
-        x_operation: str | Sequence[str] = "Sum",
+        x_operation: StrOp | Sequence[StrOp] = "Sum",
         x_scale: float = 1.0,
         # Aggregator extras ----------------------------------------------- #
         operation_kwargs: dict[str, Any] | None = None,
@@ -144,10 +154,10 @@ class NodalResultsPlotter:
         # ------------------------------------------------------------------ #
         def _axis_value(
             what: str,
-            direction,
-            op,
+            direction: str | int | None,
+            op: StrOp | Sequence[StrOp],
             scale: float,
-        ):
+        ) -> np.ndarray | pd.Series | pd.DataFrame:
             # ---- TIME ------------------------------------------------------ #
             if what.upper() == "TIME":
                 t = res.time

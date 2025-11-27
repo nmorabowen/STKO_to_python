@@ -1,3 +1,3 @@
-from .aggregator import Aggregator
+from .aggregator import Aggregator, StrOp
 
-__all__ = ["Aggregator"]
+__all__ = ["Aggregator","StrOp"]
