@@ -1,5 +1,5 @@
-
-
+from __future__ import annotations
+from typing import Dict, Optional, Tuple, Any
 
 from ..nodes.nodes import Nodes
 from ..elements.elements import Elements
@@ -8,6 +8,7 @@ from ..model.cdata import CData
 from ..plotting.plot import Plot
 from ..io.info import Info
 from .dataclasses import MetaData
+from ..plotting.plot_dataclasses import ModelPlotSettings
 
 
 class MPCODataSet:
@@ -113,9 +114,8 @@ class MPCODataSet:
         name=None, # The model name, if None it will be extracted from the folder name
         file_extension='*.mpco',
         verbose=False,
+        plot_settings: Optional[ModelPlotSettings] = None,
     ):
-        
-        self._print_welcome_message()
         
         self.hdf5_directory = hdf5_directory
         self.recorder_name = recorder_name
@@ -133,9 +133,13 @@ class MPCODataSet:
         self.cdata=CData(self)
         self.plot=Plot(self)
         self.info=Info(self)
+        self.plot_settings = plot_settings or ModelPlotSettings()
         
         # Create the object attributes
         self._create_object_attributes()
+        
+        # Print welcome message
+        self._print_welcome_message()
 
         
     def _create_object_attributes(self):
@@ -266,10 +270,10 @@ class MPCODataSet:
     def _print_welcome_message(self):
         
         text=f"""
-
+            ============================================================================
             Hola Ladruños!
             Working on file:{self.hdf5_directory}
-            ==============================================
+            ============================================================================
             """
 
         print(text)

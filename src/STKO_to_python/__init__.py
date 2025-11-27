@@ -10,6 +10,7 @@ from .model.model_info import ModelInfo
 from .model.cdata import CData
 
 from .plotting.plot import Plot
+from .plotting.plot_dataclasses import ModelPlotSettings
 
 from .dataprocess import Aggregator
 

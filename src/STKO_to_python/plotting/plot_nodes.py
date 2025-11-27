@@ -116,12 +116,15 @@ class PlotNodes:
             if rname == "TIME":
                 return self.dataset.time.loc[model_stage]["TIME"].to_numpy() * scale
 
-            df = self.dataset.nodes.get_nodal_results(
+            results = self.dataset.nodes.get_nodal_results(
                 model_stage=model_stage,
                 results_name=rname,
                 node_ids=nids,
                 selection_set_id=ssid,
             )
+            
+            df = results.df
+            
             if df is None or df.empty:
                 raise ValueError(f"No data for result '{rname}'")
 

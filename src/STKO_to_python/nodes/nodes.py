@@ -1,4 +1,4 @@
-from __future__ import annotations  # lets you annotate TimeHistoryResults before it's defined
+from __future__ import annotations  
 import warnings
 from typing import TYPE_CHECKING
 
@@ -17,10 +17,11 @@ import logging
 from functools import lru_cache
 import time
 import gc
+import warnings
 
 if TYPE_CHECKING:
     from ..core.dataset import MPCODataSet
-    from .nodes_results_dataclass import NodalResults
+    from .nodal_results_dataclass import NodalResults
 
 # Set up logging instead of using print statements
 logging.basicConfig(
@@ -213,24 +214,29 @@ class Nodes:
             ('z', 'f8')
         ]
     
-    @lru_cache(maxsize=32)
     def get_node_files_and_indices(self, node_ids=None) -> pd.DataFrame:
         """
-        Return a canonical mapping (one row per node_id) to (file_id, index).
-
-        Policy:
-            - If a node appears in multiple partitions, choose the smallest file_id.
-            - Results are sorted by node_id and include columns: ['node_id', 'file_id', 'index'].
-
-        Notes:
-            - This function is cached. Do NOT mutate the returned DataFrame in place.
-            If you need to modify it, call `.copy()` first.
+        Public API. Accepts ndarray/list/tuple/int/None.
+        Internally dispatches to a cached helper with a hashable key.
         """
-        # Normalize node_ids to a hashable tuple for the cache key
+        # Normalize to a cache key that is always hashable
         if isinstance(node_ids, np.ndarray):
-            node_ids = tuple(node_ids.tolist())
+            node_ids_key = tuple(node_ids.tolist())
         elif isinstance(node_ids, list):
-            node_ids = tuple(node_ids)
+            node_ids_key = tuple(node_ids)
+        else:
+            # int, tuple, None are already hashable and fine
+            node_ids_key = node_ids
+
+        return self._get_node_files_and_indices_cached(node_ids_key)
+
+    @lru_cache(maxsize=32)
+    def _get_node_files_and_indices_cached(self, node_ids_key) -> pd.DataFrame:
+        """
+        Internal cached implementation. `node_ids_key` must be hashable.
+        """
+        # Recover the original node_ids representation (tuple/int/None is fine)
+        node_ids = node_ids_key
 
         # Ensure node metadata is cached
         if "all_nodes" not in self._node_info_cache:
@@ -252,8 +258,10 @@ class Nodes:
 
             if filtered["node_id"].nunique() < len(node_id_array):
                 missing = set(node_id_array) - set(filtered["node_id"].to_numpy())
-                logger.warning(f"Some node IDs were not found: {sorted(list(missing))[:10]}"
-                            f"{'…' if len(missing) > 10 else ''}")
+                logger.warning(
+                    f"Some node IDs were not found: {sorted(list(missing))[:10]}"
+                    f"{'…' if len(missing) > 10 else ''}"
+                )
 
         # Canonicalize: pick one file per node (smallest file_id), deterministic
         before = len(filtered)
@@ -266,11 +274,12 @@ class Nodes:
         )
         dropped = before - len(filtered)
         if dropped > 0:
-            logger.info(f"Dropped {dropped} duplicate (node_id, file_id) rows while canonicalizing nodes.")
+            logger.info(
+                f"Dropped {dropped} duplicate (node_id, file_id) rows "
+                f"while canonicalizing nodes."
+            )
 
-        # Important because this function is cached: avoid returning a frame
-        # that callers might mutate in-place.
-        return filtered.copy(deep=False)
+        return filtered.copy(deep=True)
     
     def _validate_and_prepare_inputs(self, model_stage, results_name, node_ids, selection_set_id):
         """
@@ -292,22 +301,52 @@ class Nodes:
         
         if node_ids is None and selection_set_id is None:
             raise ValueError("You must specify either 'node_ids' or 'selection_set_id'.")
-        
-        # --- Check available results ---
+
+        # --- Check available results (now supports multi) ---
         if not hasattr(self.dataset, 'node_results_names'):
             # Dynamically get available results if not already cached
             self._cache_available_results()
-            
-        if results_name not in self.dataset.node_results_names:
+
+        # Normalize names to a tuple[str, ...] for validation
+        if isinstance(results_name, str):
+            result_names_list = [results_name]
+        else:
+            try:
+                result_names_list = list(results_name)
+            except TypeError:
+                raise ValueError(
+                    "results_name must be a string or a sequence of strings."
+                )
+
+        missing = [r for r in result_names_list if r not in self.dataset.node_results_names]
+        if missing:
             raise ValueError(
-                f"Result name '{results_name}' not found. Available options: {self.dataset.node_results_names}"
+                f"Result name(s) {missing} not found. "
+                f"Available options: {sorted(self.dataset.node_results_names)}"
             )
         
-        # --- Validate model_stage if provided ---
-        if model_stage is not None and model_stage not in self.dataset.model_stages:
-            raise ValueError(
-                f"Model stage '{model_stage}' not found. Available stages: {self.dataset.model_stages}"
-            )
+        # --- Validate model_stage (can be str, sequence, or None) ---
+        if model_stage is not None:
+            # single string
+            if isinstance(model_stage, str):
+                if model_stage not in self.dataset.model_stages:
+                    raise ValueError(
+                        f"Model stage '{model_stage}' not found. Available stages: {self.dataset.model_stages}"
+                    )
+            # multiple stages (sequence of strings)
+            else:
+                try:
+                    stages = list(model_stage)
+                except TypeError:
+                    raise ValueError(
+                        "model_stage must be a string, a sequence of strings, or None."
+                    )
+                missing = [s for s in stages if s not in self.dataset.model_stages]
+                if missing:
+                    raise ValueError(
+                        f"Some requested stages are not in dataset.model_stages: {missing}. "
+                        f"Available: {list(self.dataset.model_stages)}"
+                    )
         
         # --- Resolve selection_set efficiently ---
         if selection_set_id is not None:
@@ -527,90 +566,226 @@ class Nodes:
     
     @profile_execution
     def get_nodal_results(
-        self, 
-        model_stage=None, 
-        results_name=None, 
-        node_ids=None, 
-        selection_set_id=None,
-        chunk_size=None,
-        memory_limit_mb=None
+            self, 
+            results_name: str | Sequence[str] | None = None,
+            model_stage=None,   # str | Sequence[str] | None
+            node_ids=None, 
+            selection_set_id=None,
+            chunk_size=None,
+            memory_limit_mb=None
+        ) -> NodalResults:
+            """
+            Get nodal results wrapped in a NodalResults container.
+
+            Parameters
+            ----------
+            model_stage
+                - str: single stage (index: (node_id, step))
+                - Sequence[str]: subset of stages (index: (stage, node_id, step))
+                - None: all stages (index: (stage, node_id, step))
+            results_name
+                - str: single result type (e.g. 'DISPLACEMENT')
+                - Sequence[str]: multiple result types; columns become a MultiIndex
+                (result_name, component_index)
+                - None: use **all available** nodal results in the dataset.
+            node_ids / selection_set_id
+                Mutually exclusive ways of specifying nodes.
+            """
+            # 0. Resolve "None" → all available nodal results
+            # ------------------------------------------------
+            if results_name is None:
+                # ensure cache exists
+                if not hasattr(self.dataset, "node_results_names"):
+                    self._cache_available_results()
+
+                all_results = getattr(self.dataset, "node_results_names", None)
+                if not all_results:
+                    raise RuntimeError(
+                        "[get_nodal_results] results_name=None but dataset has no "
+                        "discoverable nodal results."
+                    )
+
+                # deterministic order
+                effective_results_name = tuple(sorted(all_results))
+            else:
+                effective_results_name = results_name
+
+            # 1. Override default memory settings
+            # ------------------------------------------------
+            if memory_limit_mb is not None:
+                self.MAX_MEMORY_BUDGET_MB = memory_limit_mb
+            
+            if chunk_size is not None:
+                self.DEFAULT_CHUNK_SIZE = chunk_size
+            
+            # 2. Validate inputs (now supports model_stage as str | seq | None)
+            #    and multi-result names
+            # ------------------------------------------------
+            node_ids_arr = self._validate_and_prepare_inputs(
+                model_stage=model_stage,
+                results_name=effective_results_name,   # <- use resolved list
+                node_ids=node_ids,
+                selection_set_id=selection_set_id
+            )
+
+            # Normalize result names to a tuple[str, ...]
+            results_tuple = self._normalize_result_names(effective_results_name)
+
+            # ---- metadata: node_ids_sorted & coords_map ---------------------- #
+            node_ids_sorted, coords_map = self.resolve_node_ids_and_coords(
+                node_ids=node_ids_arr,
+                selection_set_id=None,   # already resolved above
+                sort_by="z",
+                reverse_sort=False,
+            )
+            
+            # 3. Dynamic Memory Estimation (scale by number of results)
+            # ------------------------------------------------
+            if model_stage is None:
+                # All stages
+                n_steps = sum(self.dataset.number_of_steps.values())
+                stages_used = tuple(self.dataset.model_stages)
+            elif isinstance(model_stage, str):
+                n_steps = self.dataset.number_of_steps.get(model_stage, 10)
+                stages_used = (model_stage,)
+            else:
+                # Sequence of stages
+                stages_list = list(model_stage)
+                n_steps = sum(self.dataset.number_of_steps.get(s, 0) for s in stages_list)
+                if n_steps == 0:
+                    n_steps = 10  # conservative fallback
+                stages_used = tuple(stages_list)
+            
+            # conservative: assume ~6 components per result
+            estimated_components_per_result = 6
+            estimated_components = estimated_components_per_result * len(results_tuple)
+            estimated_memory_mb = (len(node_ids_arr) * n_steps * estimated_components * 8) / (1024 * 1024)
+            
+            should_use_chunking = estimated_memory_mb > self.MAX_MEMORY_BUDGET_MB
+            
+            if should_use_chunking:
+                logger.info(
+                    f"Memory Check: Needed {estimated_memory_mb:.2f} MB > "
+                    f"Budget {self.MAX_MEMORY_BUDGET_MB} MB. Chunking enabled."
+                )
+            
+            # 4. Fetch Data (single vs multi stage, multi result aware)
+            # ------------------------------------------------
+            if model_stage is None:
+                # all stages
+                df = self._get_all_stages_results(results_tuple, node_ids_arr, stages=None)
+            
+            elif isinstance(model_stage, str):
+                # single stage, possibly multiple results
+                if len(results_tuple) == 1:
+                    rname = results_tuple[0]
+                    df = self._get_stage_results(
+                        model_stage, 
+                        rname, 
+                        node_ids_arr,
+                        self.DEFAULT_CHUNK_SIZE if should_use_chunking else None
+                    )
+                    # ⬇️ enforce MultiIndex: (result_name, component_idx)
+                    df.columns = pd.MultiIndex.from_product([[rname], df.columns])
+
+                else:
+                    # combine results into MultiIndex columns (result_name, component_idx)
+                    per_res = []
+                    for rname in results_tuple:
+                        part = self._get_stage_results(
+                            model_stage,
+                            rname,
+                            node_ids_arr,
+                            self.DEFAULT_CHUNK_SIZE if should_use_chunking else None
+                        )
+                        part.columns = pd.MultiIndex.from_product([[rname], part.columns])
+                        per_res.append(part)
+                    df = pd.concat(per_res, axis=1, copy=False)
+
+            
+            else:
+                # multiple explicit stages
+                df = self._get_all_stages_results(results_tuple, node_ids_arr, stages=stages_used)
+
+            # 5. Component names from columns -------------------------------- #
+            if isinstance(df.columns, pd.MultiIndex):
+                component_names = tuple("|".join(map(str, c)) for c in df.columns.to_list())
+            else:
+                component_names = tuple(map(str, df.columns.to_list()))
+            
+            # --- real time arrays ------------------------------------------- #
+            if len(stages_used) == 1:
+                stage = stages_used[0]
+                time_out = self.get_time_array_for_stage(stage)
+            else:
+                time_out = {
+                    stage: self.get_time_array_for_stage(stage)
+                    for stage in stages_used
+                }
+
+            return NodalResults(
+                df=df,
+                time=time_out,
+                name=self.dataset.name,
+                node_ids=node_ids_sorted,
+                coords_map=coords_map,
+                component_names=component_names,
+                stages=stages_used,
+            )
+
+    def _get_all_stages_results(
+        self,
+        results_names,        # str | Sequence[str]
+        node_ids,
+        stages=None,
     ):
         """
-        Get nodal results optimized for numerical operations.
-        Returns results as a structured DataFrame for efficient computation.
+        Get results for all or a subset of stages with improved memory management.
+
+        If multiple results are requested, columns are a MultiIndex:
+            (result_name, component_index)
 
         Args:
-            model_stage (str, optional): The model stage name. If None, gets results for all stages.
-            results_name (str): The name of the result to retrieve (e.g., 'Displacement', 'Reaction').
-            node_ids (int, list, or np.ndarray, optional): Specific node IDs to filter. Ignored if selection_set_id is used.
-            selection_set_id (int, optional): The ID of the selection set to use for filtering node IDs.
-            chunk_size (int, optional): Size of chunks for processing large node sets.
-            memory_limit_mb (int, optional): Memory limit in MB to control chunking.
-
-        Returns:
-            pd.DataFrame: If model_stage is None, returns MultiIndex DataFrame (stage, node_id, step).
-                        Otherwise, returns Index (node_id, step). Columns represent result components.
-        """
-        # Override default memory settings if provided
-        if memory_limit_mb is not None:
-            self.MAX_MEMORY_BUDGET_MB = memory_limit_mb
-        
-        if chunk_size is not None:
-            self.DEFAULT_CHUNK_SIZE = chunk_size
-        
-        # --- Validate and determine node_ids ---
-        node_ids = self._validate_and_prepare_inputs(
-            model_stage=model_stage,
-            results_name=results_name,
-            node_ids=node_ids,
-            selection_set_id=selection_set_id
-        )
-        
-        # Estimate the result size to determine chunking
-        estimated_steps = 10  # Conservative estimate
-        estimated_components = 6  # Common value for displacements, stresses, etc.
-        estimated_memory_mb = (len(node_ids) * estimated_steps * estimated_components * 8) / (1024 * 1024)
-        should_use_chunking = estimated_memory_mb > self.MAX_MEMORY_BUDGET_MB
-        
-        if should_use_chunking:
-            logger.info(f"Estimated memory {estimated_memory_mb:.2f} MB exceeds budget. Using chunked processing.")
-        
-        # Process all stages or a specific stage
-        if model_stage is None:
-            return self._get_all_stages_results(results_name, node_ids)
-        
-        # If a specific model stage is requested, delegate to _get_stage_results
-        df = self._get_stage_results(
-            model_stage, 
-            results_name, 
-            node_ids,
-            self.DEFAULT_CHUNK_SIZE if should_use_chunking else None
-        )
-        
-        return df
-    
-    def _get_all_stages_results(self, results_name, node_ids):
-        """
-        Get results for all stages with improved memory management.
-        
-        Args:
-            results_name: Type of result to retrieve
+            results_names: single result name or iterable of result names
             node_ids: Array of node IDs
-            
+            stages: Optional iterable of stage names. If None, use all dataset.model_stages.
         Returns:
-            pd.DataFrame: Combined results with stage, node_id, step index
+            pd.DataFrame: Combined results with index (stage, node_id, step)
         """
+        # normalize to tuple[str, ...]
+        if isinstance(results_names, str):
+            results_tuple = (results_names,)
+        else:
+            results_tuple = tuple(results_names)
+
+        if stages is None:
+            stages_iter = list(self.dataset.model_stages)
+        else:
+            stages_iter = list(stages)
+        
         all_results = []
         
-        for stage in self.dataset.model_stages:
+        for stage in stages_iter:
             try:
                 logger.info(f"Processing stage '{stage}'")
-                stage_df = self._get_stage_results(stage, results_name, node_ids)
-                
+
+                # --- single vs multiple results on this stage -------------
+                per_stage_frames = []
+                for rname in results_tuple:
+                    stage_df = self._get_stage_results(stage, rname, node_ids, None)
+                    # tag columns with the result name for MultiIndex
+                    stage_df.columns = pd.MultiIndex.from_product(
+                        [[rname], stage_df.columns]
+                    )
+                    per_stage_frames.append(stage_df)
+
+                # concatenate all results for this stage along columns
+                stage_all = pd.concat(per_stage_frames, axis=1, copy=False)
+
                 # Add stage column to the data (not the index yet)
-                stage_df = stage_df.reset_index()
-                stage_df['stage'] = stage
-                all_results.append(stage_df)
+                stage_all = stage_all.reset_index()
+                stage_all['stage'] = stage
+                all_results.append(stage_all)
                 
                 # Force garbage collection after each stage
                 gc.collect()
@@ -683,33 +858,7 @@ class Nodes:
                     yield chunk_df
                 except Exception as e:
                     logger.warning(f"Could not retrieve results for stage '{model_stage}' chunk: {str(e)}")
-    
-    def save_to_hdf5(self, output_file, model_stage=None, results_name=None, 
-                    node_ids=None, selection_set_id=None, chunk_size=1000):
-        """
-        Save nodal results directly to an HDF5 file without keeping all data in memory.
-        
-        Args:
-            output_file (str): Path to output HDF5 file
-            model_stage (str, optional): The model stage name. If None, saves results for all stages.
-            results_name (str): The name of the result to retrieve.
-            node_ids (int, list, or np.ndarray, optional): Specific node IDs to filter.
-            selection_set_id (int, optional): The ID of the selection set to use for filtering.
-            chunk_size (int): Number of nodes to process in each chunk.
-            
-        Returns:
-            str: Path to the output file
-        """
-        with pd.HDFStore(output_file, mode='w') as store:
-            for chunk_df in self.iter_nodal_results(
-                model_stage, results_name, node_ids, selection_set_id, chunk_size
-            ):
-                # For each chunk, append to the store
-                store.append('nodal_results', chunk_df, format='table')
-        
-        logger.info(f"Results saved to {output_file}")
-        return output_file
-    
+
     @lru_cache(maxsize=128)
     def get_nodes_in_selection_set(self, selection_set_id: int) -> np.ndarray:
         """
@@ -810,11 +959,14 @@ class Nodes:
         coords_map = coords_subset.to_dict("index")
 
         # ---- batched results fetch --------------------------------------- #
-        df_all = self.get_nodal_results(
+        results = self.get_nodal_results(
             model_stage=model_stage,
             results_name=results_name,
             node_ids=list(node_ids_sorted),
         )
+        
+        df_all = results.df
+        
         if df_all is None or df_all.empty:
             raise RuntimeError(f"[nodes.get_time_history] No data for result '{results_name}'.")
 
@@ -830,9 +982,10 @@ class Nodes:
             df_all = df_all * float(scaling_factor)
 
 
+        n_steps = len(time_arr)
         return TimeHistoryResults(
             time=np.asarray(time_arr, dtype=float).reshape(-1),
-            steps=self.dataset.number_of_steps,
+            steps=np.arange(n_steps, dtype=int),
             df=df_all,
             node_ids=node_ids_sorted,
             coords_map=coords_map,
@@ -1264,7 +1417,164 @@ class Nodes:
         )
 
 
-# REVISAR -----------------------------------------------------
+# Utility methods for Nodes class ------------------------------------ #
+
+    @profile_execution
+    def resolve_node_ids_and_coords(
+        self,
+        *,
+        node_ids: Sequence[int] | None = None,
+        selection_set_id: int | None = None,
+        sort_by: str = "z",
+        reverse_sort: bool = False,
+    ) -> Tuple[Tuple[int, ...], Dict[int, dict]]:
+        """
+        Resolve a set of node IDs (from explicit IDs or a selection set),
+        ensure uniqueness, sort them by coordinate, and return both the
+        unique node ID tuple and a coordinate map.
+
+        Parameters
+        ----------
+        node_ids
+            Explicit node IDs. If None and `selection_set_id` is provided,
+            nodes are taken from that selection set. If both are None, all
+            nodes in the model are used.
+        selection_set_id
+            STKO selection set ID used to obtain node IDs when `node_ids`
+            is not provided.
+        sort_by
+            Coordinate component to sort by ('x', 'y', or 'z').
+        reverse_sort
+            If True, sort in descending order.
+
+        Returns
+        -------
+        node_ids_sorted : tuple[int, ...]
+            Unique node IDs, sorted according to `sort_by` / `reverse_sort`.
+        coords_map : dict[int, dict[str, float]]
+            Mapping node_id -> {'x': float, 'y': float, 'z': float}.
+        """
+        ds = getattr(self, "_dataset", None) or getattr(self, "dataset", None)
+        if ds is None:
+            raise RuntimeError("[nodes.resolve_node_ids_and_coords] Missing dataset handle on Nodes object.")
+
+        # ---- resolve node_ids -------------------------------------------- #
+        if node_ids is None and selection_set_id is not None:
+            node_ids = self.get_nodes_in_selection_set(selection_set_id)
+        elif node_ids is None:
+            base_df = ds.nodes_info["dataframe"] if isinstance(ds.nodes_info, dict) else ds.nodes_info
+            node_ids = base_df["node_id"].to_numpy()
+
+        node_ids = tuple(np.unique(node_ids))
+        if not node_ids:
+            raise RuntimeError("[nodes.resolve_node_ids_and_coords] No node IDs to resolve.")
+
+        # ---- coordinates & sorting --------------------------------------- #
+        coords_df = (
+            ds.nodes_info["dataframe"]
+            if isinstance(ds.nodes_info, dict) else ds.nodes_info
+        ).drop_duplicates("node_id").set_index("node_id")
+
+        if sort_by not in {"x", "y", "z"}:
+            warnings.warn(
+                f"[nodes.resolve_node_ids_and_coords] sort_by '{sort_by}' not recognised. Using 'z'.",
+                RuntimeWarning
+            )
+            sort_by = "z"
+
+        coords_subset = coords_df.loc[list(node_ids), ["x", "y", "z"]].sort_values(
+            by=sort_by, ascending=not reverse_sort
+        )
+        node_ids_sorted = tuple(coords_subset.index)
+        coords_map = coords_subset.to_dict("index")
+
+        return node_ids_sorted, coords_map
+
+    def get_time_array_for_stage(
+        self,
+        model_stage: str,
+        *,
+        continuous: bool = False
+    ) -> np.ndarray:
+        """
+        Return the time array for one model stage as a 1D float NumPy array.
+
+        Parameters
+        ----------
+        model_stage : str
+            Stage to fetch time for.
+        continuous : bool, optional
+            If True, offset the time series by the accumulated duration
+            of all preceding stages, producing a 'global' continuous time axis.
+            If False (default), return the stage-local time as stored.
+
+        Logic
+        -----
+        - If TIME column exists → use it.
+        - Otherwise fallback to index (typical when TIME was not exported).
+        - continuous=True shifts the time so that each stage starts after the
+          previous stage ends.
+        """
+        ds = getattr(self, "_dataset", None) or getattr(self, "dataset", None)
+        if ds is None:
+            raise RuntimeError("[nodes.get_time_array_for_stage] Missing dataset handle.")
+
+        # ---- 1. fetch raw TIME or STEP ------------------------------------ #
+        try:
+            time_df = ds.time.loc[model_stage]
+        except Exception as e:
+            raise KeyError(
+                f"Time information for model stage '{model_stage}' not found."
+            ) from e
+
+        if "TIME" in time_df.columns:
+            time_arr = time_df["TIME"].to_numpy(dtype=float)
+        else:
+            time_arr = time_df.index.to_numpy(dtype=float)
+
+        time_arr = time_arr.reshape(-1)
+
+        # ---- 2. continuous time mode -------------------------------------- #
+        if not continuous:
+            return time_arr
+
+        # continuous=True: compute offset from previous stages
+        all_stages = list(ds.time.index.get_level_values(0).unique())
+        try:
+            stage_idx = all_stages.index(model_stage)
+        except ValueError:
+            raise KeyError(f"Stage '{model_stage}' not found in time index.")
+
+        # No previous stages → no offset
+        if stage_idx == 0:
+            return time_arr.copy()
+
+        # Sum last time of all preceding stages
+        offset = 0.0
+        for prev_stage in all_stages[:stage_idx]:
+            prev_df = ds.time.loc[prev_stage]
+            if "TIME" in prev_df.columns:
+                prev_last = float(prev_df["TIME"].iloc[-1])
+            else:
+                prev_last = float(prev_df.index[-1])
+            offset += prev_last
+
+        return time_arr + offset
+
+    def _normalize_result_names(self, results_name) -> tuple[str, ...]:
+        """
+        Normalize results_name (str | Sequence[str]) -> tuple[str, ...].
+        Assumes basic validation already done in _validate_and_prepare_inputs.
+        """
+        if isinstance(results_name, str):
+            return (results_name,)
+        try:
+            return tuple(results_name)
+        except TypeError as e:
+            raise TypeError(
+                "results_name must be a string or a sequence of strings."
+            ) from e
+
     def get_nodes_at_z_levels(self, list_z: list[float], tol: float = 1e-3) -> dict:
         """
         Devuelve los node_id presentes en cada altura especificada.
@@ -1301,7 +1611,7 @@ class Nodes:
         results_name: str,
         nodes_by_level: dict,
         reduction: str = "sum",
-        direction: int = 1
+        direction: int = 1,
     ) -> Tuple[pd.DataFrame, pd.DataFrame]:
         """
         Calcula los resultados por nivel Z utilizando un diccionario de nodos prefiltrados por altura.
@@ -1311,50 +1621,67 @@ class Nodes:
             results_name (str): Nombre del resultado (ej: 'REACTION_FORCE').
             nodes_by_level (dict): Diccionario con alturas Z como clave y lista de node_ids como valor.
             reduction (str): Operación a aplicar por step: 'sum', 'mean', 'max', 'min'.
-            direction (int): Componente (1, 2 o 3) a extraer del resultado.
+            direction (int): Componente (1, 2 o 3, etc.) a extraer del resultado.
 
         Returns:
             Tuple[pd.DataFrame, pd.DataFrame]:
                 - df_full: Resultados por nodo, step, x, y, z y valor.
                 - df_summary: Una fila por z con min y max luego de aplicar la reducción por step.
         """
-        import pandas as pd
-
         reduction = reduction.lower()
-        if reduction not in ['sum', 'mean', 'max', 'min']:
+        if reduction not in ["sum", "mean", "max", "min"]:
             raise ValueError("Reducción no válida. Usa: 'sum', 'mean', 'max', 'min'.")
 
         # Cargar geometría de nodos si no está en caché
-        if 'all_nodes' not in self._node_info_cache:
+        if "all_nodes" not in self._node_info_cache:
             self._get_all_nodes_ids()
-        node_df = self._node_info_cache['all_nodes']['dataframe']
+        node_df = self._node_info_cache["all_nodes"]["dataframe"]
 
-        full_rows = []
-        summary_rows = []
+        full_rows: list[pd.DataFrame] = []
+        summary_rows: list[dict] = []
 
         for z, node_ids in nodes_by_level.items():
             if not node_ids:
                 continue
 
-            df_res = self.get_nodal_results(
+            # --- obtener resultados nodales como DataFrame -------------------- #
+            bundle = self.get_nodal_results(
                 model_stage=model_stage,
                 results_name=results_name,
-                node_ids=node_ids
-            ).reset_index()  # columnas: ['node_id', 'step', 1, 2, 3]
+                node_ids=node_ids,
+            )
+            df_res = bundle.df.reset_index()  # index → columnas: node_id, step, ...
 
+            # Si por alguna razón los nombres de columnas están en MultiIndex,
+            # “aplastamos” al segundo nivel (el componente)
+            if isinstance(df_res.columns, pd.MultiIndex):
+                df_res.columns = [
+                    c[1] if isinstance(c, tuple) and len(c) > 1 else c
+                    for c in df_res.columns
+                ]
+
+            # direction se espera que coincida con el nombre de la columna de componente
             if direction not in df_res.columns:
-                continue
+                raise KeyError(
+                    f"Componente '{direction}' no existe en resultados "
+                    f"para '{results_name}'. Columnas: {list(df_res.columns)}"
+                )
 
-            # Agregar coordenadas x, y, z
-            df_coords = node_df[node_df['node_id'].isin(node_ids)][['node_id', 'x', 'y', 'z']]
-            df_merged = pd.merge(df_res, df_coords, on='node_id', how='left')
+            # --- agregar coordenadas x, y, z ---------------------------------- #
+            df_coords = node_df[node_df["node_id"].isin(node_ids)][
+                ["node_id", "x", "y", "z"]
+            ]
+            df_merged = pd.merge(df_res, df_coords, on="node_id", how="left")
 
-            # Renombrar componente
-            df_merged = df_merged[['step', 'node_id', 'x', 'y', 'z', direction]].rename(columns={direction: 'value'})
+            # Quedarnos con las columnas clave y renombrar componente a 'value'
+            df_merged = df_merged[["step", "node_id", "x", "y", "z", direction]].rename(
+                columns={direction: "value"}
+            )
+            df_merged["z_level"] = z
             full_rows.append(df_merged)
 
-            # Reducción por step
-            grouped = df_merged.groupby("step")['value']
+            # --- reducción por step ------------------------------------------- #
+            grouped = df_merged.groupby("step")["value"]
             if reduction == "sum":
                 reduced = grouped.sum()
             elif reduction == "mean":
@@ -1363,17 +1690,23 @@ class Nodes:
                 reduced = grouped.max()
             elif reduction == "min":
                 reduced = grouped.min()
-            
-            summary_rows.append({
-                "z": z,
-                "min_comp": reduced.min(),
-                "max_comp": reduced.max()
-            })
+            else:
+                # ya validado arriba, pero dejamos el else por seguridad
+                raise ValueError("Reducción no válida.")
+
+            summary_rows.append(
+                {
+                    "z": z,
+                    "min_comp": float(reduced.min()),
+                    "max_comp": float(reduced.max()),
+                }
+            )
 
         df_full = pd.concat(full_rows, ignore_index=True) if full_rows else pd.DataFrame()
         df_summary = pd.DataFrame(summary_rows) if summary_rows else pd.DataFrame()
 
         return df_full, df_summary
+
 
 # ───────────────────────────────────────────────────────────────────── #
 # Helper @dataclass to store info
