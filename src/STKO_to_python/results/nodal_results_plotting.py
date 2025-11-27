@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
-from ..dataprocess.aggregator import Aggregator, StrOp
+from ..dataprocess.aggregator import StrOp
 
 if TYPE_CHECKING:
     from .nodal_results_dataclass import NodalResults
@@ -262,12 +262,18 @@ class NodalResultsPlotter:
 
         elif not multi_x and multi_y:
             # multiple Y columns, one X
-            for col in sorted(y_vals.columns):
-                suffix = str(col)
-                final_label = self._make_label(
-                    suffix=suffix,
-                    explicit=base_label,
-                )
+            for j, col in enumerate(sorted(y_vals.columns)):
+                if base_label is None:
+                    # default behaviour: use component name as suffix
+                    suffix = str(col)
+                    final_label = self._make_label(
+                        suffix=suffix,
+                        explicit=None,
+                    )
+                else:
+                    # explicit label provided -> only first curve gets it
+                    final_label = base_label if j == 0 else None
+
                 ax.plot(
                     x_vals,
                     y_vals[col],
@@ -278,12 +284,17 @@ class NodalResultsPlotter:
 
         else:  # multi_x and not multi_y
             # multiple X columns, one Y
-            for col in sorted(x_vals.columns):
-                suffix = str(col)
-                final_label = self._make_label(
-                    suffix=suffix,
-                    explicit=base_label,
-                )
+            for j, col in enumerate(sorted(x_vals.columns)):
+                if base_label is None:
+                    suffix = str(col)
+                    final_label = self._make_label(
+                        suffix=suffix,
+                        explicit=None,
+                    )
+                else:
+                    # explicit label provided -> only first curve gets it
+                    final_label = base_label if j == 0 else None
+
                 ax.plot(
                     x_vals[col],
                     y_vals,
@@ -291,6 +302,7 @@ class NodalResultsPlotter:
                     rasterized=True,
                     **common_line_kwargs,
                 )
+
 
         if ax.get_legend_handles_labels()[0]:
             ax.legend()
@@ -307,6 +319,7 @@ class NodalResultsPlotter:
             meta["dataframe"] = x_vals if multi_x else y_vals
 
         return ax, meta
+
 
     # ------------------------------------------------------------------ #
     # Simple time-history plot: plot_TH
