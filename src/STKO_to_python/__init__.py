@@ -14,6 +14,7 @@ from .plotting.plot import Plot
 from .dataprocess import Aggregator
 
 from.utilities import H5RepairTool
+from .utilities.attribute_dictionary_class import AttrDict
 
 __all__ = [
     "MPCODataSet",
@@ -25,4 +26,5 @@ __all__ = [
     "Plot",
     "Aggregator",
     "H5RepairTool",
+    "AttrDict",
 ]

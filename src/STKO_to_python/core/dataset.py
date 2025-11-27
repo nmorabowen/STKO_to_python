@@ -115,6 +115,8 @@ class MPCODataSet:
         verbose=False,
     ):
         
+        self._print_welcome_message()
+        
         self.hdf5_directory = hdf5_directory
         self.recorder_name = recorder_name
         self.name=name
@@ -260,6 +262,17 @@ class MPCODataSet:
         print(f"Number of unique element types: {len(self.unique_element_types)}")
         for name in self.unique_element_types:
             print(f"  - {name}")
+    
+    def _print_welcome_message(self):
+        
+        text=f"""
+
+            Hola Ladruños!
+            Working on file:{self.hdf5_directory}
+            ==============================================
+            """
+
+        print(text)
     
     def __str__(self):
         print(f"Model Name: {self.name}")
