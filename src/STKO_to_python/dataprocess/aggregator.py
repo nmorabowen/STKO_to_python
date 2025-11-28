@@ -12,6 +12,7 @@ StrOp = Literal[
     "Cumulative", "SignedCumulative", "RunningEnvelope",
 ]
 
+
 class Aggregator:
     """
     Fast 1-D aggregation helper for MPCO results DataFrames.
@@ -19,9 +20,14 @@ class Aggregator:
     Parameters
     ----------
     df : pd.DataFrame
-        Must have a ``"step"`` level/index and the given *direction* column.
-    direction : str | int
+        Must have some notion of "step", either:
+        - a column named 'step', or
+        - an index level named 'step', or
+        - a MultiIndex whose last level is 'step', or
+        - a simple index that *represents* step.
+    direction : str | int | None
         Column name or integer index to aggregate (``'x'``, ``'y'``, …).
+        If None and df has exactly one column, that column is used.
 
     Notes
     -----
@@ -37,13 +43,53 @@ class Aggregator:
     _CORE = ("sum", "mean", "std", "min", "max")   # allowed cached stats
 
     # ------------------------------------------------------------------ #
-    def __init__(self, df: pd.DataFrame, direction: str | int) -> None:
+    def __init__(self, df: pd.DataFrame, direction: str | int | None) -> None:
+        cols = list(df.columns)
+
+        # ---- resolve direction ---------------------------------------- #
+        if direction is None:
+            if len(cols) == 1:
+                direction = cols[0]
+            else:
+                raise ValueError(
+                    "Aggregator: 'direction' is None but DataFrame has multiple "
+                    f"columns {cols}. Specify a column name or index."
+                )
+        elif isinstance(direction, int) and direction not in df.columns:
+            # treat as positional index
+            try:
+                direction = cols[direction]
+            except IndexError as e:
+                raise KeyError(
+                    f"Integer direction index {direction} is out of range "
+                    f"for columns {cols}"
+                ) from e
+
         if direction not in df.columns:
             raise KeyError(
-                f"'{direction}' not found. Available columns: {list(df.columns)}"
+                f"'{direction}' not found. Available columns: {cols}"
             )
-        # one shared group-by object across all operations
-        self.group = df.groupby("step")[direction]
+
+        # ---- build a groupby on "step" -------------------------------- #
+        # Prefer a 'step' column if present
+        if "step" in df.columns:
+            self.group = df.groupby("step")[direction]
+        else:
+            idx = df.index
+            nlevels = getattr(idx, "nlevels", 1)
+
+            if nlevels > 1:
+                # MultiIndex: try level named 'step', else last level
+                names = list(idx.names) if idx.names is not None else []
+                if "step" in names:
+                    self.group = df.groupby(level="step")[direction]
+                else:
+                    # assume last level is step
+                    self.group = df.groupby(level=-1)[direction]
+            else:
+                # Simple Index: treat index values as steps
+                self.group = df.groupby(idx)[direction]
+
         self._cache: dict[str, pd.Series] = {}
 
     # =======================  private helpers  ======================== #
@@ -172,6 +218,8 @@ class Aggregator:
         return self.compute(*a, **kw)
 
     def __repr__(self) -> str:                      # pragma: no cover
-        return f"<Aggregator columns={list(self.group.obj.name)!r}>"
+        # group.obj is the underlying Series; its `.name` is the column
+        col = getattr(self.group.obj, "name", None)
+        return f"<Aggregator column={col!r}>"
 
-__all__ = ["Aggregator"]
+

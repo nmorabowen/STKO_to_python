@@ -5,8 +5,6 @@ from typing import TYPE_CHECKING
 from .plot_nodes import PlotNodes
 # from .plot_elements import PlotElements  # ← when ready
 
-print("Hola ladruño")
-
 
 if TYPE_CHECKING:
     from ..core.dataset import MPCODataSet

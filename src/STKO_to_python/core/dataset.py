@@ -273,6 +273,7 @@ class MPCODataSet:
             ============================================================================
             Hola Ladruños!
             Working on file:{self.hdf5_directory}
+            Model Name: {self.name if self.name else 'Not specified'}
             ============================================================================
             """
 
