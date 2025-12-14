@@ -140,7 +140,10 @@ class NodalResults:
         # rebuild views after restoring df
         self.__post_init__()
 
-    def save_pickle(self, path: str | Path, *, compress: bool | None = None, protocol: int = pickle.HIGHEST_PROTOCOL) -> Path:
+    def save_pickle(self, 
+                    path: str | Path, *, 
+                    compress: bool | None = None, 
+                    protocol: int = pickle.HIGHEST_PROTOCOL) -> Path:
         """
         Save this object to a pickle file.
 
