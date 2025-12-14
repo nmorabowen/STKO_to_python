@@ -3,6 +3,9 @@ from typing import TYPE_CHECKING
 
 from dataclasses import dataclass
 from typing import Dict, Tuple, Optional, Any
+from pathlib import Path
+import gzip
+import pickle
 
 from .nodal_results_plotting import NodalResultsPlotter
 
@@ -112,6 +115,37 @@ class NodalResults:
 
         # frozen dataclass, so we must bypass normal setattr
         object.__setattr__(self, "_views", views)
+
+    # ------------------------------------------------------------------ #
+    # Pickle support
+    # ------------------------------------------------------------------ #
+
+    def __getstate__(self) -> dict[str, Any]:
+        state = {slot: getattr(self, slot) for slot in self.__slots__}
+        state["_views"] = None
+        return state
+    
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        for k, v in state.items():
+            object.__setattr__(self, k, v)
+        self.__post_init__()
+
+    def save_pickle(
+        self,
+        path: str | Path,
+        *,
+        compress: bool | None = None,
+        protocol: int = pickle.HIGHEST_PROTOCOL,
+    ) -> Path:
+
+    @classmethod
+    def load_pickle(
+        cls,
+        path: str | Path,
+        *,
+        compress: bool | None = None,
+    ) -> "NodalResults":
+
 
     # ------------------------------------------------------------------ #
     # Introspection helpers
