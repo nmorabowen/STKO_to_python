@@ -121,30 +121,63 @@ class NodalResults:
     # ------------------------------------------------------------------ #
 
     def __getstate__(self) -> dict[str, Any]:
-        state = {slot: getattr(self, slot) for slot in self.__slots__}
+        """
+        Control what gets pickled.
+
+        We purposely drop `_views` because it contains objects referencing `self`.
+        We'll rebuild it in `__setstate__`.
+        """
+        state = {slot: getattr(self, slot) for slot in self.__slots__}  # type: ignore[attr-defined]
         state["_views"] = None
         return state
-    
+
     def __setstate__(self, state: dict[str, Any]) -> None:
+        """
+        Restore state and rebuild `_views`.
+        """
         for k, v in state.items():
             object.__setattr__(self, k, v)
+        # rebuild views after restoring df
         self.__post_init__()
 
-    def save_pickle(
-        self,
-        path: str | Path,
-        *,
-        compress: bool | None = None,
-        protocol: int = pickle.HIGHEST_PROTOCOL,
-    ) -> Path:
+    def save_pickle(self, path: str | Path, *, compress: bool | None = None, protocol: int = pickle.HIGHEST_PROTOCOL) -> Path:
+        """
+        Save this object to a pickle file.
+
+        - If `compress` is None: infer from suffix (.gz).
+        - If `compress` is True: gzip.
+        """
+        p = Path(path)
+        if compress is None:
+            compress = p.suffix.lower() == ".gz"
+
+        if compress:
+            with gzip.open(p, "wb") as f:
+                pickle.dump(self, f, protocol=protocol)
+        else:
+            with open(p, "wb") as f:
+                pickle.dump(self, f, protocol=protocol)
+        return p
 
     @classmethod
-    def load_pickle(
-        cls,
-        path: str | Path,
-        *,
-        compress: bool | None = None,
-    ) -> "NodalResults":
+    def load_pickle(cls, path: str | Path, *, compress: bool | None = None) -> "NodalResults":
+        """
+        Load a pickled NodalResults.
+        """
+        p = Path(path)
+        if compress is None:
+            compress = p.suffix.lower() == ".gz"
+
+        if compress:
+            with gzip.open(p, "rb") as f:
+                obj = pickle.load(f)
+        else:
+            with open(p, "rb") as f:
+                obj = pickle.load(f)
+
+        if not isinstance(obj, cls):
+            raise TypeError(f"Pickle at {p} is {type(obj)!r}, expected {cls.__name__}.")
+        return obj
 
 
     # ------------------------------------------------------------------ #
