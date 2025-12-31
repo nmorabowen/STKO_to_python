@@ -44,6 +44,141 @@ class Nodes:
             ("z", "f8"),
         ]
 
+    def _estimate_node_count(self) -> int:
+        """Estimate the total number of nodes without loading all data."""
+        total_nodes = 0
+        model_stage = self.dataset.model_stages[0]
+        
+        for part_number, partition_path in self.dataset.results_partitions.items():
+            try:
+                with h5py.File(partition_path, 'r') as partition:
+                    nodes_group = partition.get(self.dataset.MODEL_NODES_PATH.format(model_stage=model_stage))
+                    if nodes_group is None:
+                        continue
+                    
+                    for key in nodes_group.keys():
+                        if key.startswith("ID"):
+                            node_count = len(nodes_group[key])
+                            total_nodes += node_count
+                            # No need to load actual data, just get the count
+                            break
+            except Exception as e:
+                logger.warning(f"Error estimating nodes in partition {part_number}: {str(e)}")
+                
+        return total_nodes
+
+    def _get_all_nodes_ids(self, verbose=False, max_workers=4) -> Dict[str, Any]:
+        """
+        Retrieve all node IDs, file names, indices, and coordinates from the partition files.
+        
+        Optimized to use pre-allocation, vectorized operations, and parallel processing.
+
+        Args:
+            verbose (bool): If True, prints the memory usage of the structured array and DataFrame.
+            max_workers (int): Maximum number of worker threads for parallel processing.
+
+        Returns:
+            dict: A dictionary containing:
+                - 'array': A structured NumPy array with all node IDs, file names, indices, and coordinates.
+                - 'dataframe': A pandas DataFrame with the same data.
+        """
+        # Estimate total node count first to pre-allocate arrays
+        estimated_node_count = self._estimate_node_count()
+        
+        if verbose:
+            print(f"Estimated total nodes across all partitions: {estimated_node_count}")
+        
+        if estimated_node_count == 0:
+            return {'array': np.array([], dtype=self._get_node_dtype()), 'dataframe': pd.DataFrame()}
+        
+        # Check if we need chunked processing based on memory budget
+        estimated_memory_mb = estimated_node_count * 48 / 1024 / 1024  # Rough estimate: 6 fields * 8 bytes each
+        chunked_processing = estimated_memory_mb > self.MAX_MEMORY_BUDGET_MB
+        
+        # Define dtype for structured array
+        dtype = self._get_node_dtype()
+        
+        # Function to process a single partition in parallel
+        def process_partition(partition_info):
+            part_number, partition_path = partition_info
+            model_stage = self.dataset.model_stages[0]
+            partition_data = []
+            
+            try:
+                with h5py.File(partition_path, 'r') as partition:
+                    nodes_group = partition.get(self.dataset.MODEL_NODES_PATH.format(model_stage=model_stage))
+                    if nodes_group is None:
+                        return []
+                    
+                    for key in nodes_group.keys():
+                        if key.startswith("ID"):
+                            file_id = part_number
+                            node_ids = nodes_group[key][...]  # Use [...] for immediate loading
+                            coord_key = key.replace("ID", "COORDINATES")
+                            
+                            if coord_key in nodes_group:
+                                coords = nodes_group[coord_key][...]
+                                
+                                # Vectorized operation to create structured data
+                                indices = np.arange(len(node_ids))
+                                file_ids = np.full_like(node_ids, file_id)
+                                
+                                # Create structured array directly
+                                part_data = np.zeros(len(node_ids), dtype=dtype)
+                                part_data['node_id'] = node_ids
+                                part_data['file_id'] = file_ids
+                                part_data['index'] = indices
+                                if coords.shape[1] == 3:
+                                    part_data['x'] = coords[:, 0]
+                                    part_data['y'] = coords[:, 1]
+                                    part_data['z'] = coords[:, 2]
+                                elif coords.shape[1] == 2:
+                                    part_data['x'] = coords[:, 0]
+                                    part_data['y'] = coords[:, 1]
+                                    part_data['z'] = 0.0  # Pad with zeros for 2D models
+                                else:
+                                    raise ValueError(f"Unexpected number of coordinate components: {coords.shape[1]}")
+                                
+                                return part_data
+            
+            return []
+        
+        # Process partitions in parallel
+        all_data = []
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            results = list(executor.map(process_partition, self.dataset.results_partitions.items()))
+            all_data = [r for r in results if len(r) > 0]
+        
+        # Combine arrays
+        if not all_data:
+            return {'array': np.array([], dtype=dtype), 'dataframe': pd.DataFrame()}
+        
+        results_array = np.concatenate(all_data)
+        
+        # Convert to DataFrame efficiently using the structured array
+        df = pd.DataFrame({
+            'node_id': results_array['node_id'],
+            'file_id': results_array['file_id'],
+            'index': results_array['index'],
+            'x': results_array['x'],
+            'y': results_array['y'],
+            'z': results_array['z']
+        })
+        
+        results_dict = {
+            'array': results_array,
+            'dataframe': df
+        }
+        
+        if verbose:
+            array_memory = results_array.nbytes
+            df_memory = df.memory_usage(deep=True).sum()
+        
+        # Store in cache for future use
+        self._node_info_cache['all_nodes'] = results_dict
+        
+        return results_dict
+
     def _ensure_nodes_index(self, max_workers: int = 4) -> None:
         """
         Build/cache nodes_df once with one canonical row per node_id.
