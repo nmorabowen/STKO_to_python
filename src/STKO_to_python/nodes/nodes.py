@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, Optional, Sequence, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, Optional, Sequence, Tuple, Union
+import re
 
 import numpy as np
 import pandas as pd
@@ -12,34 +12,34 @@ if TYPE_CHECKING:
     from ..results.nodal_results_dataclass import NodalResults
 
 
-ResultName = str
-StageName = str
-
-
 class Nodes:
     """
-    Core nodal-results reader.
+    High-performance nodal-results reader (MPCO/HDF5).
 
-    Responsibilities
-    ---------------
-    1) Build/hold a canonical node index: node_id -> (file_id, local_index, coords)
-    2) Fetch nodal results from HDF5 (single/multi stage, single/multi result)
-    3) Provide time arrays for stages (local or continuous)
-    4) Resolve node ids from selection sets
+    Public API:
+        - _get_all_nodes_ids()   (needed by MPCODataSet init)
+        - get_nodal_results()    (the only public results method)
+
+    Notes
+    -----
+    - Assumes MPCO nodal datasets live at:
+        /{stage}/RESULTS/ON_NODES/{result}/DATA/<step_dataset>
+      with each step dataset shaped (n_nodes_in_partition, n_comp).
     """
 
     def __init__(self, dataset: "MPCODataSet") -> None:
         self.dataset = dataset
 
-        # cached node index (built once)
-        self._nodes_index_df: Optional[pd.DataFrame] = None
-        self._nodes_index_arr: Optional[np.ndarray] = None
+        # cached canonical node index (node_id -> file_id, local index, coords)
+        self._node_index_df: Optional[pd.DataFrame] = None
+        self._node_index_arr: Optional[np.ndarray] = None
 
-    # ---------------------------------------------------------------------
-    # 1) Node index (used by MPCODataSet during init)
-    # ---------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # Dataset init dependency
+    # ------------------------------------------------------------------
 
-    def _get_node_dtype(self):
+    @staticmethod
+    def _node_dtype() -> np.dtype:
         return np.dtype(
             [
                 ("node_id", "i8"),
@@ -53,96 +53,144 @@ class Nodes:
 
     def _get_all_nodes_ids(self, verbose: bool = False) -> Dict[str, Any]:
         """
-        Build node index across partitions: node_id, file_id, local index, coords.
-        Returns dict with keys: {'array', 'dataframe'} to preserve your dataset contract.
+        Build canonical node index across partitions and cache it.
+
+        Returns
+        -------
+        dict with:
+            - 'array' : structured ndarray
+            - 'dataframe' : DataFrame (node_id, file_id, index, x,y,z)
         """
-        dtype = self._get_node_dtype()
+        dtype = self._node_dtype()
         stage0 = self.dataset.model_stages[0]
 
-        parts: list[np.ndarray] = []
+        chunks: list[np.ndarray] = []
 
         for file_id, path in self.dataset.results_partitions.items():
             with h5py.File(path, "r") as h5:
-                nodes_group = h5.get(self.dataset.MODEL_NODES_PATH.format(model_stage=stage0))
-                if nodes_group is None:
+                gpath = self.dataset.MODEL_NODES_PATH.format(model_stage=stage0)
+                g = h5.get(gpath)
+                if g is None:
                     continue
 
-                # STKO convention: datasets named ID* and COORDINATES*
-                id_keys = [k for k in nodes_group.keys() if k.startswith("ID")]
+                id_keys = [k for k in g.keys() if k.startswith("ID")]
                 for id_key in id_keys:
-                    node_ids = nodes_group[id_key][...].astype(np.int64, copy=False)
+                    node_ids = g[id_key][...].astype(np.int64, copy=False)
 
                     coord_key = id_key.replace("ID", "COORDINATES")
-                    if coord_key not in nodes_group:
+                    if coord_key not in g:
                         continue
-
-                    coords = nodes_group[coord_key][...]
-                    if coords.shape[1] == 2:
-                        x = coords[:, 0]
-                        y = coords[:, 1]
-                        z = np.zeros_like(x, dtype=float)
-                    elif coords.shape[1] == 3:
-                        x = coords[:, 0]
-                        y = coords[:, 1]
-                        z = coords[:, 2]
-                    else:
-                        raise ValueError(f"Unexpected coords dim: {coords.shape}")
+                    coords = g[coord_key][...]
 
                     out = np.empty(node_ids.shape[0], dtype=dtype)
                     out["node_id"] = node_ids
                     out["file_id"] = int(file_id)
                     out["index"] = np.arange(node_ids.shape[0], dtype=np.int64)
-                    out["x"] = x
-                    out["y"] = y
-                    out["z"] = z
-                    parts.append(out)
 
-        if not parts:
-            arr = np.empty((0,), dtype=dtype)
-            df = pd.DataFrame(columns=["node_id", "file_id", "index", "x", "y", "z"])
-        else:
-            arr = np.concatenate(parts, axis=0)
+                    if coords.shape[1] == 3:
+                        out["x"] = coords[:, 0]
+                        out["y"] = coords[:, 1]
+                        out["z"] = coords[:, 2]
+                    elif coords.shape[1] == 2:
+                        out["x"] = coords[:, 0]
+                        out["y"] = coords[:, 1]
+                        out["z"] = 0.0
+                    else:
+                        raise ValueError(f"Unexpected COORDINATES shape: {coords.shape}")
+
+                    chunks.append(out)
+
+        if chunks:
+            arr = np.concatenate(chunks, axis=0)
             df = pd.DataFrame.from_records(arr)
-
-            # Canonicalize: deterministic mapping node_id -> smallest file_id
+            # canonicalize: deterministic mapping node_id -> smallest file_id
             df = (
                 df.sort_values(["node_id", "file_id", "index"], kind="mergesort")
                   .drop_duplicates(subset="node_id", keep="first")
                   .sort_values("node_id", kind="mergesort")
                   .reset_index(drop=True)
             )
+        else:
+            arr = np.empty((0,), dtype=dtype)
+            df = pd.DataFrame(columns=["node_id", "file_id", "index", "x", "y", "z"])
 
-        self._nodes_index_arr = arr
-        self._nodes_index_df = df
+        self._node_index_arr = arr
+        self._node_index_df = df
 
         if verbose:
-            print(f"[Nodes] node_index rows: {len(df)}")
+            print(f"[Nodes] cached node index: {len(df)} unique nodes")
 
         return {"array": arr, "dataframe": df}
 
-    def _ensure_node_index(self) -> pd.DataFrame:
-        if self._nodes_index_df is None:
-            # if dataset already computed it, use that
-            ni = getattr(self.dataset, "nodes_info", None)
-            if isinstance(ni, dict) and "dataframe" in ni and isinstance(ni["dataframe"], pd.DataFrame):
-                self._nodes_index_df = ni["dataframe"]
-            else:
-                self._get_all_nodes_ids(verbose=False)
-        assert self._nodes_index_df is not None
-        return self._nodes_index_df
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
 
-    def get_node_files_and_indices(self, node_ids: Sequence[int]) -> pd.DataFrame:
-        """
-        Return a DataFrame with columns: node_id, file_id, index for the requested node_ids.
-        """
-        df = self._ensure_node_index()
-        node_ids_arr = np.asarray(node_ids, dtype=np.int64)
-        sub = df.loc[df["node_id"].isin(node_ids_arr), ["node_id", "file_id", "index"]]
+    def _ensure_node_index_df(self) -> pd.DataFrame:
+        if self._node_index_df is not None:
+            return self._node_index_df
 
+        # If dataset already built nodes_info in init, reuse it
+        ni = getattr(self.dataset, "nodes_info", None)
+        if isinstance(ni, dict) and isinstance(ni.get("dataframe", None), pd.DataFrame):
+            self._node_index_df = ni["dataframe"]
+            return self._node_index_df
+
+        # Otherwise build it now
+        self._get_all_nodes_ids(verbose=False)
+        assert self._node_index_df is not None
+        return self._node_index_df
+
+    @staticmethod
+    def _normalize_stages(stages: Union[str, Sequence[str], None], all_stages: Sequence[str]) -> Tuple[str, ...]:
+        if stages is None:
+            return tuple(all_stages)
+        if isinstance(stages, str):
+            return (stages,)
+        return tuple(stages)
+
+    def _normalize_results(self, results: Union[str, Sequence[str], None]) -> Tuple[str, ...]:
+        if results is None:
+            # deterministic order
+            return tuple(sorted(self.dataset.node_results_names))
+        if isinstance(results, str):
+            return (results,)
+        return tuple(results)
+
+    @staticmethod
+    def _normalize_node_ids(node_ids: Union[int, Sequence[int], np.ndarray, None]) -> np.ndarray:
+        if node_ids is None:
+            raise ValueError("node_ids is required (or use selection_set_id).")
+        if isinstance(node_ids, (int, np.integer)):
+            return np.asarray([int(node_ids)], dtype=np.int64)
+        arr = np.asarray(node_ids, dtype=np.int64)
+        if arr.size == 0:
+            raise ValueError("node_ids is empty.")
+        return np.unique(arr)
+
+    def _resolve_node_ids(self, node_ids=None, selection_set_id=None) -> np.ndarray:
+        if (node_ids is None) == (selection_set_id is None):
+            raise ValueError("Provide exactly one of node_ids or selection_set_id.")
+        if selection_set_id is not None:
+            sel = self.dataset.selection_set
+            if selection_set_id not in sel:
+                raise ValueError(f"Selection set '{selection_set_id}' not found.")
+            ids = sel[selection_set_id].get("NODES", None)
+            if not ids:
+                raise ValueError(f"Selection set {selection_set_id} has no nodes.")
+            return np.unique(np.asarray(ids, dtype=np.int64))
+        return self._normalize_node_ids(node_ids)
+
+    def _node_file_map(self, node_ids: np.ndarray) -> pd.DataFrame:
+        """
+        Return DataFrame with columns: node_id, file_id, index for requested node_ids.
+        """
+        df = self._ensure_node_index_df()
+        sub = df.loc[df["node_id"].isin(node_ids), ["node_id", "file_id", "index"]]
         if sub.empty:
-            raise ValueError("None of the provided node IDs were found in the dataset.")
+            raise ValueError("None of the provided node IDs were found in nodes index.")
 
-        # preserve deterministic order: by node_id
+        # deterministic: one row per node (smallest file_id), sorted by node_id
         sub = (
             sub.sort_values(["node_id", "file_id", "index"], kind="mergesort")
                .drop_duplicates("node_id", keep="first")
@@ -151,200 +199,207 @@ class Nodes:
         )
         return sub
 
-    # ---------------------------------------------------------------------
-    # 2) Selection set helper (used by your public API)
-    # ---------------------------------------------------------------------
+    @staticmethod
+    def _sort_step_keys(keys: Sequence[str]) -> list[str]:
+        """
+        Sort step datasets robustly:
+        - if all keys are ints -> numeric sort
+        - else if keys contain a trailing integer (STEP_12, '12') -> sort by that
+        - else keep original order
+        """
+        if not keys:
+            return []
 
-    def get_nodes_in_selection_set(self, selection_set_id: int) -> np.ndarray:
-        sel = self.dataset.selection_set
-        if selection_set_id not in sel:
-            raise ValueError(f"Selection set ID '{selection_set_id}' not found.")
-        entry = sel[selection_set_id]
-        ids = entry.get("NODES", None)
-        if not ids:
-            raise ValueError(f"Selection set {selection_set_id} does not contain nodes.")
-        return np.unique(np.asarray(ids, dtype=np.int64))
+        # case 1: pure integer strings
+        try:
+            ints = [int(k) for k in keys]
+            return [k for _, k in sorted(zip(ints, keys))]
+        except Exception:
+            pass
 
-    def resolve_node_ids(self, *, node_ids=None, selection_set_id=None) -> np.ndarray:
-        if (node_ids is None) == (selection_set_id is None):
-            raise ValueError("Provide exactly one of node_ids or selection_set_id.")
-        if selection_set_id is not None:
-            return self.get_nodes_in_selection_set(selection_set_id)
-        if isinstance(node_ids, (int, np.integer)):
-            return np.asarray([node_ids], dtype=np.int64)
-        arr = np.asarray(node_ids, dtype=np.int64)
-        if arr.size == 0:
-            raise ValueError("node_ids is empty.")
-        return np.unique(arr)
-
-    # ---------------------------------------------------------------------
-    # 3) Time helper (because you attach time into NodalResults)
-    # ---------------------------------------------------------------------
-
-    def get_time_array_for_stage(self, stage: str, *, continuous: bool = False) -> np.ndarray:
-        ds = self.dataset
-        tdf = ds.time.loc[stage]
-        if "TIME" in tdf.columns:
-            t = tdf["TIME"].to_numpy(dtype=float)
-        else:
-            t = tdf.index.to_numpy(dtype=float)
-        t = t.reshape(-1)
-
-        if not continuous:
-            return t
-
-        # offset by sum of previous stage durations (stage order = ds.model_stages)
-        offset = 0.0
-        for s in ds.model_stages:
-            if s == stage:
+        # case 2: extract last integer in string
+        rx = re.compile(r"(\d+)(?!.*\d)")
+        nums = []
+        ok = True
+        for k in keys:
+            m = rx.search(k)
+            if not m:
+                ok = False
                 break
-            prev = ds.time.loc[s]
-            last = float(prev["TIME"].iloc[-1]) if "TIME" in prev.columns else float(prev.index[-1])
-            offset += last
-        return t + offset
+            nums.append(int(m.group(1)))
 
-    # ---------------------------------------------------------------------
-    # 4) Core: get_nodal_results (single/multi stage, single/multi result)
-    # ---------------------------------------------------------------------
+        if ok:
+            return [k for _, k in sorted(zip(nums, keys))]
 
-    def _normalize_stages(self, model_stage: str | Sequence[str] | None) -> Tuple[str, ...]:
-        if model_stage is None:
-            return tuple(self.dataset.model_stages)
-        if isinstance(model_stage, str):
-            return (model_stage,)
-        return tuple(model_stage)
+        return list(keys)
 
-    def _normalize_results(self, results_name: str | Sequence[str] | None) -> Tuple[str, ...]:
-        if results_name is None:
-            return tuple(sorted(self.dataset.node_results_names))
-        if isinstance(results_name, str):
-            return (results_name,)
-        return tuple(results_name)
-
-    def _read_one_file_one_stage_one_result(
-        self,
+    @staticmethod
+    def _read_all_steps_for_nodes(
         *,
-        file_path: str,
+        h5: h5py.File,
         base_path: str,
-        node_id_vals: np.ndarray,
-        node_local_idx: np.ndarray,
+        node_id_vals: np.ndarray,       # (n_nodes,)
+        node_local_idx: np.ndarray,     # (n_nodes,)
     ) -> pd.DataFrame:
         """
-        Reads all steps for (stage, result) from ONE mpco partition file and returns:
-        columns = component indices (1..ncomp)
-        index cols = node_id, step
+        Fast read all steps for one (stage, result) inside an already open h5 file.
+
+        Returns a DataFrame with columns [1..ncomp] + ['node_id','step'].
         """
-        with h5py.File(file_path, "r") as h5:
-            g = h5.get(base_path)
-            if g is None:
-                raise KeyError(f"Missing path: {base_path}")
+        g = h5.get(base_path)
+        if g is None:
+            raise KeyError(f"Missing path: {base_path}")
 
-            step_names = list(g.keys())
-            if not step_names:
-                raise ValueError(f"No steps in {base_path}")
+        step_names = Nodes._sort_step_keys(list(g.keys()))
+        if not step_names:
+            raise ValueError(f"No steps in {base_path}")
 
-            # infer ncomp from first step
-            first = g[step_names[0]]
-            sample = first[node_local_idx[:1]]
-            ncomp = sample.shape[1]
-            cols = [i + 1 for i in range(ncomp)]
+        node_id_vals = np.asarray(node_id_vals, dtype=np.int64)
+        node_local_idx = np.asarray(node_local_idx, dtype=np.int64)
 
-            frames: list[pd.DataFrame] = []
-            for step_i, step_name in enumerate(step_names):
-                dset = g[step_name]
-                data = dset[node_local_idx]  # (n_nodes, ncomp)
-                df = pd.DataFrame(data, columns=cols)
-                df["node_id"] = node_id_vals
-                df["step"] = step_i
-                frames.append(df)
+        # HDF5 fancy indexing: sort indices for speed/compat
+        order = np.argsort(node_local_idx, kind="mergesort")
+        idx_sorted = node_local_idx[order]
+        node_id_sorted = node_id_vals[order]
 
-        out = pd.concat(frames, axis=0, ignore_index=True, copy=False)
-        return out
+        inv = np.empty_like(order)
+        inv[order] = np.arange(order.size, dtype=order.dtype)
+
+        # infer ncomp
+        first = g[step_names[0]]
+        sample = first[idx_sorted[:1]]
+        if sample.ndim != 2:
+            raise ValueError(f"Expected (n_nodes, n_comp); got {sample.shape} at {base_path}/{step_names[0]}")
+        ncomp = int(sample.shape[1])
+        cols = [i + 1 for i in range(ncomp)]
+
+        n_steps = len(step_names)
+        n_nodes = idx_sorted.size
+        n_rows = n_steps * n_nodes
+
+        out_vals = np.empty((n_rows, ncomp), dtype=np.float64)
+
+        # build node_id, step vectors once (in requested/original order)
+        out_node = np.tile(node_id_vals, n_steps)
+        out_step = np.repeat(np.arange(n_steps, dtype=np.int32), n_nodes)
+
+        for s, step_name in enumerate(step_names):
+            dset = g[step_name]
+            block = dset[idx_sorted]          # (n_nodes, ncomp) in sorted idx order
+            if block.shape[1] != ncomp:
+                raise ValueError(
+                    f"Inconsistent ncomp at {base_path}/{step_name}: expected {ncomp}, got {block.shape[1]}"
+                )
+            block = block[inv, :]             # restore requested node order
+            i0 = s * n_nodes
+            i1 = i0 + n_nodes
+            out_vals[i0:i1, :] = block
+
+        df = pd.DataFrame(out_vals, columns=cols)
+        df["node_id"] = out_node
+        df["step"] = out_step
+        return df
+
+    # ------------------------------------------------------------------
+    # Public API: ONLY get_nodal_results
+    # ------------------------------------------------------------------
 
     def get_nodal_results(
         self,
         *,
-        results_name: str | Sequence[str] | None = None,
-        model_stage: str | Sequence[str] | None = None,
-        node_ids: Sequence[int] | int | None = None,
-        selection_set_id: int | None = None,
+        results_name: Union[str, Sequence[str], None] = None,
+        model_stage: Union[str, Sequence[str], None] = None,
+        node_ids: Union[int, Sequence[int], np.ndarray, None] = None,
+        selection_set_id: Optional[int] = None,
     ) -> "NodalResults":
         """
-        Minimal, deterministic, multi-stage + multi-result reader.
+        Get nodal results as NodalResults (fast).
 
-        - single stage -> index (node_id, step)
-        - multiple stages -> index (stage, node_id, step)
-        - multiple results -> MultiIndex columns (result_name, component)
+        Behavior
+        --------
+        - stages:
+            * single stage -> index (node_id, step)
+            * multiple stages -> index (stage, node_id, step)
+        - results:
+            * single result -> MultiIndex columns (result_name, component)
+            * multiple results -> same, concatenated along columns
         """
-        stages = self._normalize_stages(model_stage)
+        # --- resolve stages/results/nodes ---------------------------------
+        stages = self._normalize_stages(model_stage, self.dataset.model_stages)
         results = self._normalize_results(results_name)
 
-        ids = self.resolve_node_ids(node_ids=node_ids, selection_set_id=selection_set_id)
-        # deterministic node order (by coordinate later if you want; by node_id for now)
+        ids = self._resolve_node_ids(node_ids=node_ids, selection_set_id=selection_set_id)
         ids_sorted = np.sort(ids)
 
-        # node -> (file_id, local index)
-        nmap = self.get_node_files_and_indices(ids_sorted.tolist())
-        # group by file for fewer open/close operations
-        file_groups = {fid: g for fid, g in nmap.groupby("file_id")}
+        # node -> file mapping once
+        nmap = self._node_file_map(ids_sorted)
+        file_groups = {fid: grp for fid, grp in nmap.groupby("file_id")}
 
-        per_stage_frames: list[pd.DataFrame] = []
+        # coords_map once
+        idx_df = self._ensure_node_index_df().drop_duplicates("node_id").set_index("node_id")
+        coords_map = idx_df.loc[ids_sorted, ["x", "y", "z"]].to_dict("index")
+
+        # --- main loop -----------------------------------------------------
+        stage_frames: list[pd.DataFrame] = []
 
         for st in stages:
-            per_result_frames: list[pd.DataFrame] = []
+            per_stage_result_frames: list[pd.DataFrame] = []
 
+            # To reduce open/close overhead:
+            # open each file ONCE per stage, and read ALL requested results inside that open.
+            per_result_collect: dict[str, list[pd.DataFrame]] = {r: [] for r in results}
+
+            for fid, grp in file_groups.items():
+                file_path = self.dataset.results_partitions[int(fid)]
+                node_id_vals = grp["node_id"].to_numpy(dtype=np.int64, copy=False)
+                node_local_idx = grp["index"].to_numpy(dtype=np.int64, copy=False)
+
+                with h5py.File(file_path, "r") as h5:
+                    for rname in results:
+                        base_path = f"{st}/RESULTS/ON_NODES/{rname}/DATA"
+                        df_raw = self._read_all_steps_for_nodes(
+                            h5=h5,
+                            base_path=base_path,
+                            node_id_vals=node_id_vals,
+                            node_local_idx=node_local_idx,
+                        )
+                        per_result_collect[rname].append(df_raw)
+
+            # build per-result stage frame (index + MultiIndex columns)
             for rname in results:
-                base_path = f"{st}/RESULTS/ON_NODES/{rname}/DATA"
-
-                file_frames: list[pd.DataFrame] = []
-                for fid, grp in file_groups.items():
-                    file_path = self.dataset.results_partitions[int(fid)]
-                    node_id_vals = grp["node_id"].to_numpy(np.int64)
-                    node_local_idx = grp["index"].to_numpy(np.int64)
-
-                    df_file = self._read_one_file_one_stage_one_result(
-                        file_path=file_path,
-                        base_path=base_path,
-                        node_id_vals=node_id_vals,
-                        node_local_idx=node_local_idx,
-                    )
-                    file_frames.append(df_file)
-
-                df_r = pd.concat(file_frames, axis=0, ignore_index=True, copy=False)
+                df_r = pd.concat(per_result_collect[rname], axis=0, ignore_index=True, copy=False)
                 df_r = df_r.set_index(["node_id", "step"]).sort_index()
 
-                # tag columns for multi-result
+                # tag columns to MultiIndex (result_name, component)
+                comp_cols = [c for c in df_r.columns if c not in ("node_id", "step")]
+                df_r = df_r[comp_cols]
                 df_r.columns = pd.MultiIndex.from_product([[rname], df_r.columns.to_list()])
-                per_result_frames.append(df_r)
+                per_stage_result_frames.append(df_r)
 
-            df_stage = pd.concat(per_result_frames, axis=1, copy=False)
+            df_stage = pd.concat(per_stage_result_frames, axis=1, copy=False)
 
             if len(stages) > 1:
                 df_stage = df_stage.reset_index()
                 df_stage["stage"] = st
                 df_stage = df_stage.set_index(["stage", "node_id", "step"]).sort_index()
 
-            per_stage_frames.append(df_stage)
+            stage_frames.append(df_stage)
 
-        df = per_stage_frames[0] if len(per_stage_frames) == 1 else pd.concat(per_stage_frames, axis=0, copy=False).sort_index()
+        df_out = stage_frames[0] if len(stage_frames) == 1 else pd.concat(stage_frames, axis=0, copy=False).sort_index()
 
-        # time output
+        # --- time output ---------------------------------------------------
         if len(stages) == 1:
-            time_out = self.get_time_array_for_stage(stages[0])
+            time_out = self._time_array_for_stage(stages[0])
         else:
-            time_out = {s: self.get_time_array_for_stage(s) for s in stages}
+            time_out = {s: self._time_array_for_stage(s) for s in stages}
 
-        # coords map (needed by your NodalResults)
-        idx_df = self._ensure_node_index().drop_duplicates("node_id").set_index("node_id")
-        coords_map = idx_df.loc[ids_sorted, ["x", "y", "z"]].to_dict("index")
+        # component_names (flatten)
+        component_names = tuple("|".join(map(str, c)) for c in df_out.columns.to_list())
 
-        # component names (flatten multiindex to strings; you already do this pattern)
-        component_names = tuple("|".join(map(str, c)) for c in df.columns.to_list())
-
-        from ..results.nodal_results_dataclass import NodalResults  # local import to avoid cycles
+        from ..results.nodal_results_dataclass import NodalResults  # avoid circular import
 
         return NodalResults(
-            df=df,
+            df=df_out,
             time=time_out,
             name=self.dataset.name,
             node_ids=tuple(ids_sorted.tolist()),
@@ -353,3 +408,10 @@ class Nodes:
             stages=stages,
             plot_settings=self.dataset.plot_settings,
         )
+
+    # keep it private to avoid “more public methods”
+    def _time_array_for_stage(self, stage: str) -> np.ndarray:
+        tdf = self.dataset.time.loc[stage]
+        if "TIME" in tdf.columns:
+            return tdf["TIME"].to_numpy(dtype=float).reshape(-1)
+        return tdf.index.to_numpy(dtype=float).reshape(-1)
