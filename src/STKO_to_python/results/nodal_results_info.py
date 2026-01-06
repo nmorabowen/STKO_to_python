@@ -40,19 +40,9 @@ class NodalResultsInfo:
                             f"nodes_info DataFrame is missing {len(missing)} node ids "
                             f"(e.g. {missing[:5]})."
                         )
-
-            elif isinstance(nodes_info, np.ndarray):
-                if nodes_info.ndim != 2:
-                    raise ValueError(f"nodes_info ndarray must be 2D, got shape={nodes_info.shape}.")
-                if nodes_info.shape[1] < 2:
-                    raise ValueError(f"nodes_info ndarray must have >=2 columns, got shape={nodes_info.shape}.")
-                if nodes_ids is not None and nodes_info.shape[0] != len(nodes_ids):
-                    raise ValueError(
-                        f"nodes_info rows ({nodes_info.shape[0]}) != len(nodes_ids) ({len(nodes_ids)})."
-                    )
             else:
                 raise TypeError(
-                    "nodes_info must be a pandas DataFrame or a numpy ndarray "
+                    "nodes_info must be a pandas DataFrame"
                     f"(got {type(nodes_info)!r})."
                 )
 
