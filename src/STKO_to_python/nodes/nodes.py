@@ -321,9 +321,9 @@ class Nodes:
             df=df,
             time=time,
             name=self.dataset.name,
-            node_ids=tuple(ids_sorted),
-            coords_map=coords,
-            component_names=component_names,
-            stages=stages,
+            nodes_ids=tuple(ids_sorted),
+            nodes_info=coords,
+            results_components=component_names,
+            model_stages=stages,
             plot_settings=self.dataset.plot_settings,
         )
