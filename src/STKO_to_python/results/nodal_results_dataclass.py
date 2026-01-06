@@ -53,7 +53,7 @@ class NodalResults:
         name: str,
         *,
         nodes_ids: Optional[Tuple[int, ...]] = None,
-        nodes_info: Optional[pd.DataFrame | np.ndarray] = None,
+        nodes_info: Optional[pd.DataFrame] = None,
         results_components: Optional[Tuple[str, ...]] = None,
         model_stages: Optional[Tuple[str, ...]] = None,
         plot_settings: Optional["ModelPlotSettings"] = None,
@@ -63,7 +63,7 @@ class NodalResults:
         self.name = name
 
         self.info = NodalResultsInfo(
-            nodes_info=nodes_info['dataframe'],
+            nodes_info=nodes_info,
             nodes_ids=nodes_ids,
             model_stages=model_stages,
             results_components=results_components,
