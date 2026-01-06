@@ -27,24 +27,24 @@ class NodalResultsInfo:
         if results_components is not None:
             results_components = tuple(str(c) for c in results_components)
 
-        if nodes_info is not None:
-            if isinstance(nodes_info, pd.DataFrame):
-                if nodes_info.index.name is None:
-                    nodes_info = nodes_info.rename_axis("node_id")
+        # if nodes_info is not None:
+        #     if isinstance(nodes_info, pd.DataFrame):
+        #         if nodes_info.index.name is None:
+        #             nodes_info = nodes_info.rename_axis("node_id")
 
-                if nodes_ids is not None:
-                    idx = nodes_info.index
-                    missing = [i for i in nodes_ids if i not in idx]
-                    if missing:
-                        raise ValueError(
-                            f"nodes_info DataFrame is missing {len(missing)} node ids "
-                            f"(e.g. {missing[:5]})."
-                        )
-            else:
-                raise TypeError(
-                    "nodes_info must be a pandas DataFrame"
-                    f"(got {type(nodes_info)!r})."
-                )
+        #         if nodes_ids is not None:
+        #             idx = nodes_info.index
+        #             missing = [i for i in nodes_ids if i not in idx]
+        #             if missing:
+        #                 raise ValueError(
+        #                     f"nodes_info DataFrame is missing {len(missing)} node ids "
+        #                     f"(e.g. {missing[:5]})."
+        #                 )
+        #     else:
+        #         raise TypeError(
+        #             "nodes_info must be a pandas DataFrame"
+        #             f"(got {type(nodes_info)!r})."
+        #         )
 
         self.nodes_ids = nodes_ids
         self.nodes_info = nodes_info
