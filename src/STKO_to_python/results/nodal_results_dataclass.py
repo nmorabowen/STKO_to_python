@@ -684,7 +684,7 @@ class NodalResults:
         bottom: int | Sequence[float],
         component: object,
         result_name: str = "DISPLACEMENT",
-            : Optional[str] = None,
+        stage: Optional[str] = None,
         signed: bool = True,
         reduce: str = "series",   # "series" | "max"
     ) -> pd.Series | float:
