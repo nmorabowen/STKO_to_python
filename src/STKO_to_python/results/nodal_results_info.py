@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Sequence, overload
 
 import numpy as np
 import pandas as pd
@@ -55,6 +55,7 @@ class NodalResultsInfo:
     # Work methods
     # ------------------------------------------------------------------ #
 
+    @overload
     def nearest_node_id(
         self,
         x: float,
@@ -63,8 +64,59 @@ class NodalResultsInfo:
         *,
         file_id: Optional[int] = None,
         return_distance: bool = False,
-    ) -> int | Tuple[int, float]:
+    ) -> int | Tuple[int, float]: ...
 
+    @overload
+    def nearest_node_id(
+        self,
+        x: Sequence[float],
+        y: Sequence[float],
+        z: Optional[Sequence[float]] = None,
+        *,
+        file_id: Optional[int] = None,
+        return_distance: bool = False,
+    ) -> list[int] | Tuple[list[int], list[float]]: ...
+
+    @overload
+    def nearest_node_id(
+        self,
+        x: Sequence[Sequence[float]],
+        y: None = None,
+        z: None = None,
+        *,
+        file_id: Optional[int] = None,
+        return_distance: bool = False,
+    ) -> list[int] | Tuple[list[int], list[float]]: ...
+
+    def nearest_node_id(
+        self,
+        x,
+        y=None,
+        z=None,
+        *,
+        file_id: Optional[int] = None,
+        return_distance: bool = False,
+    ):
+        """
+        Find nearest node(s) to one or more query point(s).
+
+        Accepted inputs
+        ---------------
+        1) Scalar:
+            nearest_node_id(x, y, z=None)
+
+        2) Separate arrays:
+            nearest_node_id(x=[...], y=[...], z=[...] or None)
+
+        3) Points list:
+            nearest_node_id([(x1,y1), (x2,y2)])
+            nearest_node_id([(x1,y1,z1), (x2,y2,z2)])
+
+        Returns
+        -------
+        - single point -> int (or (int, float) if return_distance)
+        - multiple points -> list[int] (or (list[int], list[float]) if return_distance)
+        """
         if self.nodes_info is None:
             raise ValueError("nodes_info is None. Cannot search nearest node.")
         if not isinstance(self.nodes_info, pd.DataFrame):
@@ -72,41 +124,116 @@ class NodalResultsInfo:
 
         df = self.nodes_info
 
+        # optional file filter
         if file_id is not None:
             fid_col = self._resolve_column(df, "file_id")
             df = df.loc[df[fid_col].to_numpy() == int(file_id)]
             if df.empty:
                 raise ValueError(f"No nodes found for file_id={file_id}.")
 
+        # resolve columns
         xcol = self._resolve_column(df, "x")
         ycol = self._resolve_column(df, "y")
         zcol = self._resolve_column(df, "z", required=False)
 
         X = df[xcol].to_numpy(dtype=float, copy=False)
         Y = df[ycol].to_numpy(dtype=float, copy=False)
+        Z = df[zcol].to_numpy(dtype=float, copy=False) if zcol is not None else None
 
-        if z is None or zcol is None:
-            dx = X - float(x)
-            dy = Y - float(y)
-            d2 = dx * dx + dy * dy
-        else:
-            Z = df[zcol].to_numpy(dtype=float, copy=False)
-            dx = X - float(x)
-            dy = Y - float(y)
-            dz = Z - float(z)
-            d2 = dx * dx + dy * dy + dz * dz
+        # ---- parse query points into (Qx, Qy, Qz_or_None) arrays ----
+        Qx, Qy, Qz, is_single = self._coerce_query_points(x, y, z)
 
-        i = int(np.argmin(d2))
+        # if user did not provide z, or df has no z -> do 2D
+        use_3d = (Qz is not None) and (Z is not None)
 
-        if "node_id" in self._normalized_columns(df):
-            nid_col = self._resolve_column(df, "node_id")
-            node_id = int(df[nid_col].iloc[i])
-        else:
-            node_id = int(df.index[i])
+        nQ = Qx.shape[0]
+        out_ids = np.empty(nQ, dtype=np.int64)
+        out_d = np.empty(nQ, dtype=float)
 
+        # node_id resolution
+        has_node_id_col = "node_id" in self._normalized_columns(df)
+        nid_col = self._resolve_column(df, "node_id") if has_node_id_col else None
+        idx_values = df.index.to_numpy()
+
+        # ---- compute nearest for each query ----
+        # (loop over queries; node count can be huge; looping over queries is usually cheaper)
+        for k in range(nQ):
+            dx = X - Qx[k]
+            dy = Y - Qy[k]
+            if use_3d:
+                dz = Z - Qz[k]  # type: ignore[operator]
+                d2 = dx * dx + dy * dy + dz * dz
+            else:
+                d2 = dx * dx + dy * dy
+
+            i = int(np.argmin(d2))
+            out_d[k] = float(np.sqrt(d2[i]))
+
+            if nid_col is not None:
+                out_ids[k] = int(df[nid_col].iloc[i])
+            else:
+                out_ids[k] = int(idx_values[i])
+
+        if is_single:
+            nid = int(out_ids[0])
+            if return_distance:
+                return nid, float(out_d[0])
+            return nid
+
+        ids_list = [int(v) for v in out_ids.tolist()]
         if return_distance:
-            return node_id, float(np.sqrt(d2[i]))
-        return node_id
+            return ids_list, [float(v) for v in out_d.tolist()]
+        return ids_list
+
+    # --------------------------------------------------------------------- #
+    # Helpers
+    # --------------------------------------------------------------------- #
+    def _coerce_query_points(self, x, y, z):
+        """
+        Normalize query input into (Qx, Qy, Qz_or_None, is_single).
+        Supports:
+            - scalar x,y,(z)
+            - x,y arrays
+            - points list: x=[(x1,y1),(x2,y2)] or [(x1,y1,z1),...]
+        """
+        # Case A: points list passed in x, with y=None
+        if y is None and isinstance(x, (list, tuple, np.ndarray)):
+            arr = np.asarray(x, dtype=float)
+            if arr.ndim != 2 or arr.shape[1] not in (2, 3):
+                raise TypeError(
+                    "When passing a list of points, use [(x,y), ...] or [(x,y,z), ...]."
+                )
+            Qx = arr[:, 0]
+            Qy = arr[:, 1]
+            Qz = arr[:, 2] if arr.shape[1] == 3 else None
+            return Qx, Qy, Qz, False
+
+        # Case B: scalar x,y,(z)
+        if np.isscalar(x) and np.isscalar(y):
+            Qx = np.asarray([float(x)], dtype=float)
+            Qy = np.asarray([float(y)], dtype=float)
+            Qz = None if z is None else np.asarray([float(z)], dtype=float)
+            return Qx, Qy, Qz, True
+
+        # Case C: array-like x,y,(z)
+        if y is None:
+            raise TypeError("Provide y when x is array-like, or pass points as [(x,y),...].")
+
+        Qx = np.asarray(x, dtype=float).reshape(-1)
+        Qy = np.asarray(y, dtype=float).reshape(-1)
+        if Qx.shape[0] != Qy.shape[0]:
+            raise ValueError(f"x and y must have same length. Got {Qx.shape[0]} and {Qy.shape[0]}.")
+
+        if z is None:
+            Qz = None
+        else:
+            Qz = np.asarray(z, dtype=float).reshape(-1)
+            if Qz.shape[0] != Qx.shape[0]:
+                raise ValueError(
+                    f"z must have same length as x and y. Got {Qz.shape[0]} and {Qx.shape[0]}."
+                )
+
+        return Qx, Qy, Qz, False
 
     @staticmethod
     def _norm_col(name: object) -> str:
