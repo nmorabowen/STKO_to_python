@@ -272,12 +272,11 @@ class Nodes:
         fmap = self._node_file_map(ids_sorted)
         file_groups = {fid: g for fid, g in fmap.groupby("file_id")}
 
-        coords = (
+        coords_df = (
             self._ensure_node_index_df()
             .drop_duplicates("node_id")
             .set_index("node_id")
             .loc[ids_sorted, ["x", "y", "z"]]
-            .to_dict("index")
         )
 
         stage_frames = []
@@ -322,7 +321,7 @@ class Nodes:
             time=time,
             name=self.dataset.name,
             nodes_ids=tuple(ids_sorted),
-            nodes_info=coords,
+            nodes_info=coords_df,
             results_components=component_names,
             model_stages=stages,
             plot_settings=self.dataset.plot_settings,
