@@ -140,22 +140,103 @@ class Nodes:
             return (results,)
         return tuple(results)
 
+    @staticmethod
+    def _normalize_selection_names(
+        selection_set_name: Union[str, Sequence[str], None],
+    ) -> Tuple[str, ...]:
+        if selection_set_name is None:
+            return ()
+        if isinstance(selection_set_name, str):
+            return (selection_set_name,)
+        return tuple(selection_set_name)
+
+    def _selection_set_name_for(self, sid: int) -> str:
+        """
+        Best-effort extraction of selection set name from dataset.selection_set[sid].
+        Supports common key variants.
+        """
+        d = self.dataset.selection_set.get(int(sid), {})
+        if not isinstance(d, dict):
+            return ""
+        name = d.get("NAME", d.get("name", d.get("Name", "")))
+        return "" if name is None else str(name)
+
+    def _selection_set_ids_from_names(self, names: Sequence[str]) -> Tuple[int, ...]:
+        """
+        Resolve selection set names -> IDs (case-insensitive match).
+
+        Raises if:
+          - a name matches nothing
+          - a name matches multiple IDs (ambiguous)
+        """
+        if not names:
+            return ()
+
+        # Build lookup: normalized name -> [ids]
+        buckets: Dict[str, list[int]] = {}
+        for sid in self.dataset.selection_set.keys():
+            try:
+                sid_i = int(sid)
+            except Exception:
+                continue
+            nm = self._selection_set_name_for(sid_i)
+            key = nm.strip().lower()
+            if not key:
+                continue
+            buckets.setdefault(key, []).append(sid_i)
+
+        resolved: list[int] = []
+        for raw in names:
+            key = str(raw).strip().lower()
+            if not key:
+                continue
+
+            hits = buckets.get(key, [])
+            if len(hits) == 0:
+                available = sorted(buckets.keys())
+                preview = ", ".join(available[:30]) + (" ..." if len(available) > 30 else "")
+                raise ValueError(
+                    f"Selection set name not found: {raw!r}. "
+                    f"Available (normalized) names include: {preview}"
+                )
+            if len(hits) > 1:
+                raise ValueError(
+                    f"Ambiguous selection set name {raw!r}: matches IDs {sorted(hits)}. "
+                    f"Use selection_set_id instead."
+                )
+            resolved.append(hits[0])
+
+        return tuple(resolved)
+
     def _resolve_node_ids(
         self,
         *,
         node_ids: Union[int, Sequence[int], Sequence[Sequence[int]], np.ndarray, None],
         selection_set_id: Union[int, Sequence[int], None],
+        selection_set_name: Union[str, Sequence[str], None],
     ) -> np.ndarray:
         gathered: list[np.ndarray] = []
 
+        # ---- selection_set_name -> selection_set_id(s)
+        name_list = self._normalize_selection_names(selection_set_name)
+        if name_list:
+            ids_from_names = self._selection_set_ids_from_names(name_list)
+            for sid in ids_from_names:
+                nodes = self.dataset.selection_set.get(int(sid), {}).get("NODES")
+                if not nodes:
+                    raise ValueError(f"Selection set {sid} empty or missing NODES.")
+                gathered.append(np.asarray(nodes, dtype=np.int64))
+
+        # ---- selection_set_id(s)
         if selection_set_id is not None:
             sel_ids = [selection_set_id] if isinstance(selection_set_id, int) else selection_set_id
             for sid in sel_ids:
-                nodes = self.dataset.selection_set.get(sid, {}).get("NODES")
+                nodes = self.dataset.selection_set.get(int(sid), {}).get("NODES")
                 if not nodes:
-                    raise ValueError(f"Selection set {sid} empty or missing.")
+                    raise ValueError(f"Selection set {sid} empty or missing NODES.")
                 gathered.append(np.asarray(nodes, dtype=np.int64))
 
+        # ---- explicit node_ids
         if node_ids is not None:
             if isinstance(node_ids, (int, np.integer)):
                 gathered.append(np.asarray([node_ids], dtype=np.int64))
@@ -170,7 +251,7 @@ class Nodes:
                     gathered.append(np.asarray(node_ids, dtype=np.int64))
 
         if not gathered:
-            raise ValueError("Provide node_ids and/or selection_set_id.")
+            raise ValueError("Provide node_ids and/or selection_set_id and/or selection_set_name.")
 
         out = np.unique(np.concatenate(gathered))
         if out.size == 0:
@@ -236,7 +317,7 @@ class Nodes:
             out = np.empty((n_steps * n_nodes, ncomp))
             for s, step in enumerate(step_names):
                 arr = g[step][idx_sorted][:, :]
-                out[s*n_nodes:(s+1)*n_nodes, :] = arr[inv]
+                out[s * n_nodes : (s + 1) * n_nodes, :] = arr[inv]
 
             blocks.append(out)
             lvl0.extend([r] * ncomp)
@@ -261,12 +342,17 @@ class Nodes:
         model_stage: Union[str, Sequence[str], None] = None,
         node_ids: Union[int, Sequence[int], Sequence[Sequence[int]], np.ndarray, None] = None,
         selection_set_id: Union[int, Sequence[int], None] = None,
+        selection_set_name: Union[str, Sequence[str], None] = None,
     ) -> "NodalResults":
 
         stages = self._normalize_stages(model_stage, self.dataset.model_stages)
         results = self._normalize_results(results_name)
 
-        ids = self._resolve_node_ids(node_ids=node_ids, selection_set_id=selection_set_id)
+        ids = self._resolve_node_ids(
+            node_ids=node_ids,
+            selection_set_id=selection_set_id,
+            selection_set_name=selection_set_name,
+        )
         ids_sorted = np.sort(ids)
 
         fmap = self._node_file_map(ids_sorted)
