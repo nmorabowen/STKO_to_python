@@ -1,23 +1,36 @@
 from __future__ import annotations
 
-from typing import Optional, Tuple, Sequence, overload
+from typing import Optional, Sequence, Tuple
 
 import numpy as np
 import pandas as pd
 
 
 class NodalResultsInfo:
+    """
+    Metadata / helpers for nodal results.
+
+    Notes
+    -----
+    - This simplified version assumes `nodes_info` is a pandas DataFrame.
+    - `nearest_node_id` ONLY accepts query points as a list of points:
+        [(x,y), ...] or [(x,y,z), ...]
+      and returns a list of nearest node ids (and optionally distances).
+    """
+
     __slots__ = ("nodes_ids", "nodes_info", "model_stages", "results_components")
 
     def __init__(
         self,
         *,
         nodes_ids: Optional[tuple[int, ...]] = None,
-        nodes_info: Optional[pd.DataFrame | np.ndarray] = None,
+        nodes_info: Optional[pd.DataFrame] = None,
         model_stages: Optional[tuple[str, ...]] = None,
         results_components: Optional[tuple[str, ...]] = None,
     ) -> None:
-
+        # --------------------
+        # Normalize
+        # --------------------
         if nodes_ids is not None:
             nodes_ids = tuple(int(i) for i in nodes_ids)
 
@@ -27,24 +40,19 @@ class NodalResultsInfo:
         if results_components is not None:
             results_components = tuple(str(c) for c in results_components)
 
-        # if nodes_info is not None:
-        #     if isinstance(nodes_info, pd.DataFrame):
-        #         if nodes_info.index.name is None:
-        #             nodes_info = nodes_info.rename_axis("node_id")
+        # --------------------
+        # Basic validation
+        # --------------------
+        if nodes_info is not None and not isinstance(nodes_info, pd.DataFrame):
+            raise TypeError(
+                "nodes_info must be a pandas DataFrame "
+                f"(got {type(nodes_info)!r})."
+            )
 
-        #         if nodes_ids is not None:
-        #             idx = nodes_info.index
-        #             missing = [i for i in nodes_ids if i not in idx]
-        #             if missing:
-        #                 raise ValueError(
-        #                     f"nodes_info DataFrame is missing {len(missing)} node ids "
-        #                     f"(e.g. {missing[:5]})."
-        #                 )
-        #     else:
-        #         raise TypeError(
-        #             "nodes_info must be a pandas DataFrame"
-        #             f"(got {type(nodes_info)!r})."
-        #         )
+        # Optional nicety: name the index if it's node_id-like
+        if isinstance(nodes_info, pd.DataFrame) and nodes_info.index.name is None:
+            # Don't force it, but it helps downstream debugging/printing
+            nodes_info = nodes_info.rename_axis("node_id")
 
         self.nodes_ids = nodes_ids
         self.nodes_info = nodes_info
@@ -52,189 +60,118 @@ class NodalResultsInfo:
         self.results_components = results_components
 
     # ------------------------------------------------------------------ #
-    # Work methods
+    # Geometry helpers
     # ------------------------------------------------------------------ #
-
-    @overload
     def nearest_node_id(
         self,
-        x: float,
-        y: float,
-        z: Optional[float] = None,
+        points: Sequence[Sequence[float]],
         *,
         file_id: Optional[int] = None,
         return_distance: bool = False,
-    ) -> int | Tuple[int, float]: ...
-
-    @overload
-    def nearest_node_id(
-        self,
-        x: Sequence[float],
-        y: Sequence[float],
-        z: Optional[Sequence[float]] = None,
-        *,
-        file_id: Optional[int] = None,
-        return_distance: bool = False,
-    ) -> list[int] | Tuple[list[int], list[float]]: ...
-
-    @overload
-    def nearest_node_id(
-        self,
-        x: Sequence[Sequence[float]],
-        y: None = None,
-        z: None = None,
-        *,
-        file_id: Optional[int] = None,
-        return_distance: bool = False,
-    ) -> list[int] | Tuple[list[int], list[float]]: ...
-
-    def nearest_node_id(
-        self,
-        x,
-        y=None,
-        z=None,
-        *,
-        file_id: Optional[int] = None,
-        return_distance: bool = False,
-    ):
+    ) -> list[int] | Tuple[list[int], list[float]]:
         """
-        Find nearest node(s) to one or more query point(s).
+        Find nearest node(s) to a list of query points.
 
-        Accepted inputs
-        ---------------
-        1) Scalar:
-            nearest_node_id(x, y, z=None)
-
-        2) Separate arrays:
-            nearest_node_id(x=[...], y=[...], z=[...] or None)
-
-        3) Points list:
-            nearest_node_id([(x1,y1), (x2,y2)])
-            nearest_node_id([(x1,y1,z1), (x2,y2,z2)])
+        Parameters
+        ----------
+        points
+            Sequence of points with consistent dimensionality:
+                [(x, y), ...]    or
+                [(x, y, z), ...]
+        file_id
+            If provided, restrict search to nodes with that file_id
+            (requires `nodes_info` to contain a 'file_id' column).
+        return_distance
+            If True, also return Euclidean distance(s) to the nearest node.
 
         Returns
         -------
-        - single point -> int (or (int, float) if return_distance)
-        - multiple points -> list[int] (or (list[int], list[float]) if return_distance)
+        list[int]
+            Nearest node_id for each query point.
+
+        (list[int], list[float])
+            If return_distance=True.
         """
         if self.nodes_info is None:
             raise ValueError("nodes_info is None. Cannot search nearest node.")
         if not isinstance(self.nodes_info, pd.DataFrame):
-            raise TypeError("nearest_node_id currently expects nodes_info as a pandas DataFrame.")
+            # should be impossible with current __init__ validation,
+            # but keep it defensive if someone bypasses __init__.
+            raise TypeError("nearest_node_id expects nodes_info as a pandas DataFrame.")
 
         df = self.nodes_info
 
-        # optional file filter
+        # ---- optional file filter ------------------------------------- #
         if file_id is not None:
             fid_col = self._resolve_column(df, "file_id")
-            df = df.loc[df[fid_col].to_numpy() == int(file_id)]
+            mask = df[fid_col].to_numpy() == int(file_id)
+            df = df.loc[mask]
             if df.empty:
                 raise ValueError(f"No nodes found for file_id={file_id}.")
 
-        # resolve columns
+        # ---- parse points --------------------------------------------- #
+        pts = np.asarray(points, dtype=float)
+
+        if pts.ndim != 2 or pts.shape[1] not in (2, 3):
+            raise TypeError(
+                "points must be a sequence of (x,y) or (x,y,z) coordinates. "
+                "Example: [(0,0), (1,2)] or [(0,0,0), (1,2,3)]."
+            )
+
+        is_3d = pts.shape[1] == 3
+
+        # ---- resolve coordinate columns ------------------------------- #
         xcol = self._resolve_column(df, "x")
         ycol = self._resolve_column(df, "y")
-        zcol = self._resolve_column(df, "z", required=False)
+        zcol = self._resolve_column(df, "z", required=is_3d)
 
         X = df[xcol].to_numpy(dtype=float, copy=False)
         Y = df[ycol].to_numpy(dtype=float, copy=False)
-        Z = df[zcol].to_numpy(dtype=float, copy=False) if zcol is not None else None
 
-        # ---- parse query points into (Qx, Qy, Qz_or_None) arrays ----
-        Qx, Qy, Qz, is_single = self._coerce_query_points(x, y, z)
+        if is_3d:
+            assert zcol is not None
+            Z = df[zcol].to_numpy(dtype=float, copy=False)
+        else:
+            Z = None
 
-        # if user did not provide z, or df has no z -> do 2D
-        use_3d = (Qz is not None) and (Z is not None)
-
-        nQ = Qx.shape[0]
-        out_ids = np.empty(nQ, dtype=np.int64)
-        out_d = np.empty(nQ, dtype=float)
-
-        # node_id resolution
+        # ---- node id resolution --------------------------------------- #
         has_node_id_col = "node_id" in self._normalized_columns(df)
         nid_col = self._resolve_column(df, "node_id") if has_node_id_col else None
         idx_values = df.index.to_numpy()
 
-        # ---- compute nearest for each query ----
-        # (loop over queries; node count can be huge; looping over queries is usually cheaper)
-        for k in range(nQ):
-            dx = X - Qx[k]
-            dy = Y - Qy[k]
-            if use_3d:
-                dz = Z - Qz[k]  # type: ignore[operator]
+        out_ids: list[int] = []
+        out_dist: list[float] = []
+
+        # ---- compute nearest ------------------------------------------ #
+        # Loop over queries (usually small) to avoid building huge (n_nodes x n_queries) matrices.
+        for p in pts:
+            dx = X - p[0]
+            dy = Y - p[1]
+
+            if is_3d:
+                assert Z is not None
+                dz = Z - p[2]
                 d2 = dx * dx + dy * dy + dz * dz
             else:
                 d2 = dx * dx + dy * dy
 
             i = int(np.argmin(d2))
-            out_d[k] = float(np.sqrt(d2[i]))
 
             if nid_col is not None:
-                out_ids[k] = int(df[nid_col].iloc[i])
+                out_ids.append(int(df[nid_col].iloc[i]))
             else:
-                out_ids[k] = int(idx_values[i])
+                out_ids.append(int(idx_values[i]))
 
-        if is_single:
-            nid = int(out_ids[0])
             if return_distance:
-                return nid, float(out_d[0])
-            return nid
+                out_dist.append(float(np.sqrt(d2[i])))
 
-        ids_list = [int(v) for v in out_ids.tolist()]
         if return_distance:
-            return ids_list, [float(v) for v in out_d.tolist()]
-        return ids_list
+            return out_ids, out_dist
+        return out_ids
 
-    # --------------------------------------------------------------------- #
-    # Helpers
-    # --------------------------------------------------------------------- #
-    def _coerce_query_points(self, x, y, z):
-        """
-        Normalize query input into (Qx, Qy, Qz_or_None, is_single).
-        Supports:
-            - scalar x,y,(z)
-            - x,y arrays
-            - points list: x=[(x1,y1),(x2,y2)] or [(x1,y1,z1),...]
-        """
-        # Case A: points list passed in x, with y=None
-        if y is None and isinstance(x, (list, tuple, np.ndarray)):
-            arr = np.asarray(x, dtype=float)
-            if arr.ndim != 2 or arr.shape[1] not in (2, 3):
-                raise TypeError(
-                    "When passing a list of points, use [(x,y), ...] or [(x,y,z), ...]."
-                )
-            Qx = arr[:, 0]
-            Qy = arr[:, 1]
-            Qz = arr[:, 2] if arr.shape[1] == 3 else None
-            return Qx, Qy, Qz, False
-
-        # Case B: scalar x,y,(z)
-        if np.isscalar(x) and np.isscalar(y):
-            Qx = np.asarray([float(x)], dtype=float)
-            Qy = np.asarray([float(y)], dtype=float)
-            Qz = None if z is None else np.asarray([float(z)], dtype=float)
-            return Qx, Qy, Qz, True
-
-        # Case C: array-like x,y,(z)
-        if y is None:
-            raise TypeError("Provide y when x is array-like, or pass points as [(x,y),...].")
-
-        Qx = np.asarray(x, dtype=float).reshape(-1)
-        Qy = np.asarray(y, dtype=float).reshape(-1)
-        if Qx.shape[0] != Qy.shape[0]:
-            raise ValueError(f"x and y must have same length. Got {Qx.shape[0]} and {Qy.shape[0]}.")
-
-        if z is None:
-            Qz = None
-        else:
-            Qz = np.asarray(z, dtype=float).reshape(-1)
-            if Qz.shape[0] != Qx.shape[0]:
-                raise ValueError(
-                    f"z must have same length as x and y. Got {Qz.shape[0]} and {Qx.shape[0]}."
-                )
-
-        return Qx, Qy, Qz, False
-
+    # ------------------------------------------------------------------ #
+    # Column helpers
+    # ------------------------------------------------------------------ #
     @staticmethod
     def _norm_col(name: object) -> str:
         s = str(name).strip()
@@ -245,7 +182,13 @@ class NodalResultsInfo:
     def _normalized_columns(self, df: pd.DataFrame) -> dict[str, str]:
         return {self._norm_col(c): str(c) for c in df.columns}
 
-    def _resolve_column(self, df: pd.DataFrame, key: str, *, required: bool = True) -> Optional[str]:
+    def _resolve_column(
+        self,
+        df: pd.DataFrame,
+        key: str,
+        *,
+        required: bool = True,
+    ) -> Optional[str]:
         cols = self._normalized_columns(df)
         k = key.lower()
         if k in cols:
@@ -257,6 +200,9 @@ class NodalResultsInfo:
             )
         return None
 
+    # ------------------------------------------------------------------ #
+    # Small utilities
+    # ------------------------------------------------------------------ #
     def has_nodes_info(self) -> bool:
         return self.nodes_info is not None
 
