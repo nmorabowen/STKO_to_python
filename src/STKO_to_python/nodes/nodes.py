@@ -325,4 +325,5 @@ class Nodes:
             results_components=component_names,
             model_stages=stages,
             plot_settings=self.dataset.plot_settings,
+            selection_set=self.dataset.selection_set,
         )

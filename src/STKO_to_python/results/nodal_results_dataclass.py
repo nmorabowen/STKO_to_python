@@ -79,6 +79,7 @@ class NodalResults:
         results_components: Optional[Tuple[str, ...]] = None,
         model_stages: Optional[Tuple[str, ...]] = None,
         plot_settings: Optional["ModelPlotSettings"] = None,
+        selection_set: Optional[dict] = None,
     ) -> None:
         self.df = df
         self.time = time
@@ -89,6 +90,7 @@ class NodalResults:
             nodes_ids=nodes_ids,
             model_stages=model_stages,
             results_components=results_components,
+            selection_set=selection_set,
         )
 
         self.plot_settings = plot_settings
