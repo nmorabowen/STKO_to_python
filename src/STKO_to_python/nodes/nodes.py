@@ -326,4 +326,6 @@ class Nodes:
             model_stages=stages,
             plot_settings=self.dataset.plot_settings,
             selection_set=self.dataset.selection_set,
+            analysis_time=self.dataset.info.analysis_time,
+            size=self.dataset.info.size,
         )

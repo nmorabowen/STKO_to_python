@@ -72,14 +72,16 @@ class NodalResults:
         self,
         df: pd.DataFrame,
         time: Any,
-        name: str,
         *,
+        name: Optional[str],
         nodes_ids: Optional[Tuple[int, ...]] = None,
         nodes_info: Optional[pd.DataFrame] = None,
         results_components: Optional[Tuple[str, ...]] = None,
         model_stages: Optional[Tuple[str, ...]] = None,
         plot_settings: Optional["ModelPlotSettings"] = None,
         selection_set: Optional[dict] = None,
+        analysis_time: Optional[float] = None,
+        size: Optional[int] = None,
     ) -> None:
         self.df = df
         self.time = time
@@ -91,6 +93,9 @@ class NodalResults:
             model_stages=model_stages,
             results_components=results_components,
             selection_set=selection_set,
+            analysis_time=analysis_time,
+            size=size,
+            name=name,
         )
 
         self.plot_settings = plot_settings

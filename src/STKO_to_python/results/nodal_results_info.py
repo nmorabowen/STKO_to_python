@@ -18,7 +18,7 @@ class NodalResultsInfo:
       and returns a list of nearest node ids (and optionally distances).
     """
 
-    __slots__ = ("nodes_ids", "nodes_info", "model_stages", "results_components", "selection_set")
+    __slots__ = ("nodes_ids", "nodes_info", "model_stages", "results_components", "selection_set", "analysis_time", "size", "name")
 
     def __init__(
         self,
@@ -28,6 +28,9 @@ class NodalResultsInfo:
         model_stages: Optional[tuple[str, ...]] = None,
         results_components: Optional[tuple[str, ...]] = None,
         selection_set: Optional[dict] = None,
+        analysis_time: Optional[float] = None,
+        size: Optional[int] = None,
+        name: Optional[str] = None,
     ) -> None:
         # --------------------
         # Normalize
@@ -60,6 +63,9 @@ class NodalResultsInfo:
         self.model_stages = model_stages
         self.results_components = results_components
         self.selection_set = selection_set
+        self.analysis_time = analysis_time
+        self.size = size
+        self.name = name
 
     # ------------------------------------------------------------------ #
     # Geometry helpers
