@@ -353,7 +353,7 @@ class NodalResults:
         bottom: int | Sequence[float],
         component: object,
         result_name: str = "DISPLACEMENT",
-        stage: Optional[str] = None,
+            : Optional[str] = None,
         signed: bool = True,
         reduce: str = "series",   # "series" | "max"
     ) -> pd.Series | float:
@@ -486,6 +486,152 @@ class NodalResults:
         raise ValueError(
             f"Unknown reduce='{reduce}'. Use 'series' or 'max'."
         )
+
+    def interstory_drift_envelope(
+        self,
+        *,
+        component: object,
+        selection_set_id: int | Sequence[int] | None = None,
+        node_ids: Sequence[int] | None = None,
+        coordinates: Sequence[Sequence[float]] | None = None,
+        result_name: str = "DISPLACEMENT",
+        stage: Optional[str] = None,
+    ) -> pd.DataFrame:
+        """
+        Interstory drift envelope (MAX and MIN) from a vertical stack of nodes.
+
+        Provide exactly ONE of:
+        - selection_set_id
+        - node_ids
+        - coordinates  -> nearest nodes
+
+        Steps:
+        1) Resolve -> node ids
+        2) Read z from nodes_info
+        3) Sort by z
+        4) For each consecutive pair (lower, upper):
+                drift(t) = (u_upper(t)-u_lower(t)) / (z_upper-z_lower)
+            store:
+                max_drift = max(drift(t))
+                min_drift = min(drift(t))
+
+        Returns
+        -------
+        pd.DataFrame
+            MultiIndex (lower_node, upper_node) with columns:
+                dz, z_lower, z_upper, max_drift, min_drift
+
+            You can derive absolute max later as:
+                abs_max = max(|max_drift|, |min_drift|)
+        """
+        # ---------------------------
+        # Validate exclusive inputs
+        # ---------------------------
+        provided = sum(x is not None for x in (selection_set_id, node_ids, coordinates))
+        if provided != 1:
+            raise ValueError("Provide exactly ONE of: selection_set_id, node_ids, coordinates.")
+
+        # ---------------------------
+        # Resolve node ids
+        # ---------------------------
+        if selection_set_id is not None:
+            ids = self.info.selection_set_node_ids(selection_set_id)
+        elif node_ids is not None:
+            if len(node_ids) == 0:
+                raise ValueError("node_ids is empty.")
+            ids = [int(i) for i in node_ids]
+        else:
+            if coordinates is None or len(coordinates) == 0:
+                raise ValueError("coordinates is empty.")
+            ids = self.info.nearest_node_id(coordinates, return_distance=False)
+
+        ids = sorted(set(ids))
+        if len(ids) < 2:
+            raise ValueError("Need at least 2 nodes to compute interstory drift.")
+
+        # ---------------------------
+        # Get z for each node and sort by z
+        # ---------------------------
+        if self.info.nodes_info is None:
+            raise ValueError("nodes_info is None. Need nodes_info with z-coordinates.")
+        if not isinstance(self.info.nodes_info, pd.DataFrame):
+            raise TypeError("interstory_drift_envelope expects info.nodes_info as a DataFrame.")
+
+        ni = self.info.nodes_info
+        zcol = self.info._resolve_column(ni, "z", required=True)
+        nid_col = self.info._resolve_column(ni, "node_id", required=False)
+
+        def _z_of(nid: int) -> float:
+            if nid_col is not None:
+                row = ni.loc[ni[nid_col].to_numpy() == nid]
+                if row.empty:
+                    raise ValueError(f"node_id={nid} not found in nodes_info.")
+                return float(row.iloc[0][zcol])
+            if nid not in ni.index:
+                raise ValueError(f"node_id={nid} not found in nodes_info index.")
+            return float(ni.loc[nid, zcol])
+
+        z_vals = np.asarray([_z_of(i) for i in ids], dtype=float)
+
+        order = np.argsort(z_vals, kind="mergesort")
+        ids_sorted = [ids[i] for i in order]
+        z_sorted = z_vals[order]
+
+        # Drop duplicate z-levels (keep first occurrence)
+        keep = [0]
+        for i in range(1, len(z_sorted)):
+            if z_sorted[i] != z_sorted[keep[-1]]:
+                keep.append(i)
+        ids_sorted = [ids_sorted[i] for i in keep]
+        z_sorted = z_sorted[keep]
+
+        if len(ids_sorted) < 2:
+            raise ValueError("After sorting/dedup by z, fewer than 2 unique z-levels remain.")
+
+        # ---------------------------
+        # Compute per-story envelopes
+        # ---------------------------
+        rows: list[dict[str, float]] = []
+        idx_pairs: list[tuple[int, int]] = []
+
+        for lower_id, upper_id, z_lo, z_up in zip(
+            ids_sorted[:-1], ids_sorted[1:], z_sorted[:-1], z_sorted[1:]
+        ):
+            dz = float(z_up - z_lo)
+            if dz == 0.0:
+                continue
+
+            dr = self.drift(
+                top=upper_id,
+                bottom=lower_id,
+                component=component,
+                result_name=result_name,
+                stage=stage,
+                signed=True,
+                reduce="series",
+            )
+
+            arr = dr.to_numpy(dtype=float)
+            rows.append(
+                {
+                    "dz": dz,
+                    "z_lower": float(z_lo),
+                    "z_upper": float(z_up),
+                    "max_drift": float(np.nanmax(arr)),
+                    "min_drift": float(np.nanmin(arr)),
+                }
+            )
+            idx_pairs.append((int(lower_id), int(upper_id)))
+
+        if not rows:
+            raise ValueError("No valid story pairs were produced (check z-coordinates).")
+
+        out = pd.DataFrame(
+            rows,
+            index=pd.MultiIndex.from_tuples(idx_pairs, names=("lower_node", "upper_node")),
+        )
+
+        return out.sort_values("z_lower", kind="mergesort")
 
 
     # ------------------------------------------------------------------ #
