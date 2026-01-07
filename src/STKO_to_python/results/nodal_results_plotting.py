@@ -1,7 +1,7 @@
-# STKO_to_python/results/nodal_results_plotter.py
+# ── STKO_to_python/results/nodal_results_plotter.py ─────────────────────
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Sequence
+from typing import TYPE_CHECKING, Any, Sequence, Literal
 import warnings
 
 import numpy as np
@@ -15,32 +15,16 @@ if TYPE_CHECKING:
     from ..plotting.plot_dataclasses import ModelPlotSettings
 
 
+PlotOp = StrOp | Literal["All", "Raw"]
+
+
 class NodalResultsPlotter:
     """
     Plotting helper bound to a NodalResults instance.
 
-    Usage
-    -----
-    Basic X–Y aggregation plot:
-
-        results.plot.xy(
-            y_results_name="ACCELERATION",
-            y_direction=1,                  # component index / label
-            y_operation="Sum",              # one of:
-                                           #   'Sum', 'Mean', 'Max', 'Min', 'Std',
-                                           #   'Percentile', 'Envelope',
-                                           #   'Cumulative', 'SignedCumulative',
-                                           #   'RunningEnvelope'
-            x_results_name="TIME",          # 'TIME', 'STEP', or another result_name
-        )
-
-    Raw time history for specific nodes:
-
-        results.plot.plot_TH(
-            result_name="ACCELERATION",
-            component=1,
-            node_ids=[14, 25],
-        )
+    Adds to xy():
+        y_operation="All" / "Raw" -> plot one curve per node (no aggregation).
+        In this mode, x_results_name should be "TIME" or "STEP".
     """
 
     def __init__(self, results: "NodalResults"):
@@ -71,7 +55,6 @@ class NodalResultsPlotter:
         """
         settings = self._settings
 
-        # Collect only non-None explicit overrides for settings.to_mpl_kwargs
         overrides: dict[str, Any] = {}
         if linewidth is not None:
             overrides["linewidth"] = linewidth
@@ -84,7 +67,6 @@ class NodalResultsPlotter:
             base = {}
             base.update(overrides)
 
-        # Extra kwargs from caller always win
         base.update(extra)
         return base
 
@@ -114,12 +96,12 @@ class NodalResultsPlotter:
         # Y-axis ----------------------------------------------------------- #
         y_results_name: str,
         y_direction: str | int | None = None,
-        y_operation: StrOp | Sequence[StrOp] = "Sum",
+        y_operation: PlotOp | Sequence[PlotOp] = "Sum",
         y_scale: float = 1.0,
         # X-axis ----------------------------------------------------------- #
         x_results_name: str = "TIME",   # 'TIME', 'STEP', or result_name
         x_direction: str | int | None = None,
-        x_operation: StrOp | Sequence[StrOp] = "Sum",
+        x_operation: PlotOp | Sequence[PlotOp] = "Sum",
         x_scale: float = 1.0,
         # Aggregator extras ----------------------------------------------- #
         operation_kwargs: dict[str, Any] | None = None,
@@ -143,11 +125,29 @@ class NodalResultsPlotter:
         - Starts from NodalResults.plot_settings (ModelPlotSettings), if present.
         - Per-call `linewidth`, `marker`, and other **line_kwargs override those.
         """
-        from ..dataprocess.aggregator import Aggregator  # lazy to avoid cycles
+        from ..postproc.aggregator import Aggregator  # lazy to avoid cycles
 
+        # Aggregator supports only percentile=... kw
         operation_kwargs = operation_kwargs or {}
+        percentile = None
+        if operation_kwargs:
+            if "percentile" in operation_kwargs:
+                percentile = float(operation_kwargs["percentile"])
+            extra = set(operation_kwargs) - {"percentile"}
+            if extra:
+                raise ValueError(
+                    f"[NodalResultsPlotter.xy] Unsupported operation_kwargs keys: {sorted(extra)}"
+                )
+
         res = self._results
         df = res.df
+
+        def _nrows(v: object) -> int:
+            if isinstance(v, pd.DataFrame):
+                return int(v.shape[0])
+            if isinstance(v, pd.Series):
+                return int(v.shape[0])
+            return int(np.asarray(v).reshape(-1).shape[0])
 
         # ------------------------------------------------------------------ #
         # helpers: TIME / STEP / nodal result via NodalResults.fetch()
@@ -155,14 +155,13 @@ class NodalResultsPlotter:
         def _axis_value(
             what: str,
             direction: str | int | None,
-            op: StrOp | Sequence[StrOp],
+            op: PlotOp | Sequence[PlotOp],
             scale: float,
         ) -> np.ndarray | pd.Series | pd.DataFrame:
             # ---- TIME ------------------------------------------------------ #
             if what.upper() == "TIME":
                 t = res.time
                 if isinstance(t, dict):
-                    # multi-stage case – ambiguous TIME
                     raise ValueError(
                         "[NodalResultsPlotter.xy] TIME axis for multi-stage "
                         "NodalResults is not supported yet.\n"
@@ -177,40 +176,90 @@ class NodalResultsPlotter:
             # ---- STEP ------------------------------------------------------ #
             if what.upper() == "STEP":
                 idx = df.index
-                if getattr(idx, "nlevels", 1) >= 1:
+                if isinstance(idx, pd.MultiIndex) and "step" in idx.names:
+                    steps = idx.get_level_values("step")
+                elif getattr(idx, "nlevels", 1) >= 1:
                     steps = idx.get_level_values(-1)
                 else:
                     steps = np.arange(len(idx))
                 arr = steps.to_numpy() if hasattr(steps, "to_numpy") else np.asarray(steps)
+                arr = np.asarray(arr, dtype=float).reshape(-1)
                 return arr * float(scale)
 
-            # ---- treat as result_name + component (use NodalResults.fetch) --- #
+            # ---- normalize operations ------------------------------------- #
+            ops = (op,) if isinstance(op, str) else tuple(op)
+            ops_lower = tuple(str(o).lower() for o in ops)
+
+            # ---- RAW/ALL MODE: bypass Aggregator -------------------------- #
+            if any(o in ("all", "raw") for o in ops_lower):
+                if len(ops) != 1:
+                    raise ValueError("[NodalResultsPlotter.xy] 'All/Raw' cannot be combined with other operations.")
+
+                if direction is None:
+                    sub = res.fetch(result_name=what, component=None)
+                else:
+                    sub = res.fetch(result_name=what, component=direction)
+
+                # normalize to Series (single component)
+                if isinstance(sub, pd.DataFrame):
+                    if isinstance(sub.columns, pd.MultiIndex):
+                        sub = sub.copy()
+                        sub.columns = [c1 for (_, c1) in sub.columns]
+                    if sub.shape[1] != 1:
+                        raise ValueError(
+                            f"[xy] '{what}' component={direction!r} returned {sub.shape[1]} columns; "
+                            "All/Raw requires a single component."
+                        )
+                    s = sub.iloc[:, 0]
+                else:
+                    s = sub
+
+                idx = s.index
+                if not isinstance(idx, pd.MultiIndex) or getattr(idx, "nlevels", 1) != 2:
+                    raise ValueError(
+                        "[xy] All/Raw requires index (node_id, step). "
+                        f"Got nlevels={getattr(idx, 'nlevels', 1)}."
+                    )
+
+                if x_results_name.upper() not in ("TIME", "STEP"):
+                    raise ValueError(
+                        "[xy] All/Raw mode requires x_results_name in {'TIME','STEP'} "
+                        "to avoid multi-X vs multi-Y ambiguity."
+                    )
+
+                node_level = 0
+                ydf = s.unstack(level=node_level).sort_index()
+                return ydf * float(scale)
+
+            # ---- Aggregator MODE ------------------------------------------ #
             if direction is None:
-                sub = res.fetch(result_name=what, component=None)   # all components
+                sub = res.fetch(result_name=what, component=None)
             else:
                 sub = res.fetch(result_name=what, component=direction)
 
-            # normalise to DataFrame
             if isinstance(sub, pd.Series):
                 sub = sub.to_frame()
 
-            # flatten potential MultiIndex columns
             if isinstance(sub.columns, pd.MultiIndex):
                 sub = sub.copy()
                 sub.columns = [c1 for (_, c1) in sub.columns]
 
-            # decide what to pass as "direction" to Aggregator
+            # decide what to pass as direction to Aggregator
             if sub.shape[1] == 1:
-                # <<<<<< key fix here
-                eff_dir = sub.columns[0]
+                eff_dir: object = sub.columns[0]
             else:
                 eff_dir = direction
+                if eff_dir is None:
+                    raise ValueError(
+                        f"[xy] direction is required for '{what}' when multiple components exist."
+                    )
+                # common case: direction is int, columns are strings "1","2","3"
+                if eff_dir not in sub.columns and str(eff_dir) in sub.columns:
+                    eff_dir = str(eff_dir)
 
-            from ..dataprocess.aggregator import Aggregator  # keep lazy import
             agg = Aggregator(sub, eff_dir)
-            out = agg.compute(operation=op, **operation_kwargs)
+            out = agg.compute(operation=op, percentile=percentile)
             return out * float(scale)
-
 
         # build X and Y
         try:
@@ -223,7 +272,7 @@ class NodalResultsPlotter:
         multi_x = isinstance(x_vals, pd.DataFrame)
         multi_y = isinstance(y_vals, pd.DataFrame)
 
-        if len(np.asarray(x_vals)) != len(np.asarray(y_vals)):
+        if _nrows(x_vals) != _nrows(y_vals):
             warnings.warn("[NodalResultsPlotter.xy] X–Y length mismatch.", RuntimeWarning)
             return None, {}
 
@@ -242,7 +291,6 @@ class NodalResultsPlotter:
 
         base_label = label
 
-        # pre-build common line kwargs (style) using global defaults
         common_line_kwargs = self._build_line_kwargs(
             linewidth=linewidth,
             marker=marker,
@@ -253,8 +301,8 @@ class NodalResultsPlotter:
             # single curve
             final_label = self._make_label(suffix=None, explicit=base_label)
             ax.plot(
-                x_vals,
-                y_vals,
+                np.asarray(x_vals).reshape(-1),
+                np.asarray(y_vals).reshape(-1),
                 label=final_label,
                 rasterized=True,
                 **common_line_kwargs,
@@ -262,21 +310,18 @@ class NodalResultsPlotter:
 
         elif not multi_x and multi_y:
             # multiple Y columns, one X
+            x_arr = np.asarray(x_vals).reshape(-1)
             for j, col in enumerate(sorted(y_vals.columns)):
                 if base_label is None:
-                    # default behaviour: use component name as suffix
-                    suffix = str(col)
-                    final_label = self._make_label(
-                        suffix=suffix,
-                        explicit=None,
-                    )
+                    # If this came from All/Raw, col is likely node_id
+                    suffix = f"Node {col}"
+                    final_label = self._make_label(suffix=suffix, explicit=None)
                 else:
-                    # explicit label provided -> only first curve gets it
                     final_label = base_label if j == 0 else None
 
                 ax.plot(
-                    x_vals,
-                    y_vals[col],
+                    x_arr,
+                    y_vals[col].to_numpy(dtype=float),
                     label=final_label,
                     rasterized=True,
                     **common_line_kwargs,
@@ -284,25 +329,21 @@ class NodalResultsPlotter:
 
         else:  # multi_x and not multi_y
             # multiple X columns, one Y
+            y_arr = np.asarray(y_vals).reshape(-1)
             for j, col in enumerate(sorted(x_vals.columns)):
                 if base_label is None:
                     suffix = str(col)
-                    final_label = self._make_label(
-                        suffix=suffix,
-                        explicit=None,
-                    )
+                    final_label = self._make_label(suffix=suffix, explicit=None)
                 else:
-                    # explicit label provided -> only first curve gets it
                     final_label = base_label if j == 0 else None
 
                 ax.plot(
-                    x_vals[col],
-                    y_vals,
+                    x_vals[col].to_numpy(dtype=float),
+                    y_arr,
                     label=final_label,
                     rasterized=True,
                     **common_line_kwargs,
                 )
-
 
         if ax.get_legend_handles_labels()[0]:
             ax.legend()
@@ -311,15 +352,14 @@ class NodalResultsPlotter:
         ax.set_ylabel(y_results_name)
         ax.grid(True)
 
-        meta = {
-            "x_array": np.asarray(x_vals),
-            "y_array": np.asarray(y_vals),
+        meta: dict[str, Any] = {
+            "x": x_vals,
+            "y": y_vals,
         }
         if multi_x or multi_y:
             meta["dataframe"] = x_vals if multi_x else y_vals
 
         return ax, meta
-
 
     # ------------------------------------------------------------------ #
     # Simple time-history plot: plot_TH
@@ -344,18 +384,6 @@ class NodalResultsPlotter:
         Assumes the NodalResults corresponds to a **single stage**, with
         index (node_id, step). If multiple stages are present in the index,
         this currently raises.
-
-        Parameters
-        ----------
-        result_name
-            e.g. 'DISPLACEMENT', 'ACCELERATION'.
-        component
-            Component label passed to NodalResults.fetch(), e.g. 1, '1', 'x'.
-        node_ids
-            If None → plot all node_ids present.
-            If sequence → filter to these node_ids.
-        split_subplots
-            If True → one subplot per node; otherwise all curves on one Axes.
         """
         res = self._results
         df = res.df
@@ -409,6 +437,18 @@ class NodalResultsPlotter:
                     f"Available node_ids: {all_nodes.tolist()}"
                 )
 
+        # ---- robust step -> time position mapping -------------------------- #
+        all_steps = np.unique(idx.get_level_values(step_level).to_numpy(dtype=int))
+        all_steps_sorted = np.sort(all_steps)
+
+        if len(all_steps_sorted) != len(time_arr):
+            warnings.warn(
+                "[plot_TH] Unique step count != time length; attempting best-effort "
+                "alignment by sorted step order.",
+                RuntimeWarning,
+            )
+        step_to_pos = {int(s): int(i) for i, s in enumerate(all_steps_sorted)}
+
         # ---- figure & axes -------------------------------------------------- #
         if split_subplots:
             fig, axes = plt.subplots(
@@ -445,18 +485,25 @@ class NodalResultsPlotter:
             steps = s_node.index.to_numpy(dtype=int)
             y = s_node.to_numpy(dtype=float)
 
-            # align with time array via step index
-            valid = (steps >= 0) & (steps < len(time_arr))
+            if y.size == 0:
+                continue
+
+            # map step values to positions in time_arr
+            pos = np.array([step_to_pos.get(int(s), -1) for s in steps], dtype=int)
+            valid = (pos >= 0) & (pos < len(time_arr)) & np.isfinite(y)
+
             if not np.all(valid):
                 warnings.warn(
-                    f"[plot_TH] Node {nid} has {np.count_nonzero(~valid)} "
-                    "step(s) outside time range; trimming.",
+                    f"[plot_TH] Node {nid} has {int(np.count_nonzero(~valid))} invalid/unknown step(s) or NaN; trimming.",
                     RuntimeWarning,
                 )
-                steps = steps[valid]
+                pos = pos[valid]
                 y = y[valid]
 
-            x = time_arr[steps]
+            if y.size == 0:
+                continue
+
+            x = time_arr[pos]
 
             suffix = f"{label_prefix} {nid}" if label_prefix else f"{nid}"
             final_label = self._make_label(suffix=suffix, explicit=None)
