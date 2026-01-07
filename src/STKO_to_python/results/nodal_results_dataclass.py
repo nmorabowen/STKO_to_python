@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Dict, Tuple, Optional, Any
+from typing import TYPE_CHECKING, Dict, Tuple, Optional, Any, Sequence
 from pathlib import Path
 import gzip
 import pickle
@@ -20,18 +20,40 @@ class _ResultView:
     Lightweight proxy for a single result type.
 
     Allows:
-        results.ACCELERATION[1]  -> component 1
-        results.ACCELERATION[:]  -> all components
+        results.ACCELERATION[1]             -> component 1 (all nodes)
+        results.ACCELERATION[:]             -> all components (all nodes)
+        results.ACCELERATION[1, [14, 25]]   -> component 1, nodes 14 & 25
+        results.ACCELERATION[:, [14, 25]]   -> all components, nodes 14 & 25
     """
 
     def __init__(self, parent: "NodalResults", result_name: str):
         self._parent = parent
         self._result_name = result_name
 
-    def __getitem__(self, component) -> pd.Series | pd.DataFrame:
+    def __getitem__(self, key) -> pd.Series | pd.DataFrame:
+        # Support tuple indexing: view[component, node_ids]
+        if isinstance(key, tuple):
+            if len(key) == 0:
+                component = None
+                node_ids = None
+            elif len(key) == 1:
+                component = key[0]
+                node_ids = None
+            elif len(key) == 2:
+                component, node_ids = key
+            else:
+                raise TypeError(
+                    f"Too many indices for ResultView: got {len(key)}. "
+                    "Use view[component] or view[component, node_ids]."
+                )
+        else:
+            component = key
+            node_ids = None
+
         if component is None or component == slice(None) or component == ":":
-            return self._parent.fetch(self._result_name, component=None)
-        return self._parent.fetch(self._result_name, component=component)
+            return self._parent.fetch(self._result_name, component=None, node_ids=node_ids)
+
+        return self._parent.fetch(self._result_name, component=component, node_ids=node_ids)
 
     def __repr__(self) -> str:
         try:
@@ -186,10 +208,67 @@ class NodalResults:
         self,
         result_name: Optional[str] = None,
         component: Optional[object] = None,
+        *,
+        node_ids: int | Sequence[int] | None = None,
     ) -> pd.Series | pd.DataFrame:
-        cols = self.df.columns
+        """
+        Fetch results with optional node filtering.
 
+        Assumes index includes node_id either:
+        - named level 'node_id', or
+        - (node_id, step), or
+        - (stage, node_id, step).
+        """
+        df = self.df
+
+        # ------------------------------------------------------------------ #
+        # Optional node filtering
+        # ------------------------------------------------------------------ #
+        if node_ids is not None:
+            if isinstance(node_ids, (int, np.integer)):
+                node_ids_arr = np.asarray([int(node_ids)], dtype=np.int64)
+            else:
+                node_ids_arr = np.asarray(list(node_ids), dtype=np.int64)
+                if node_ids_arr.size == 0:
+                    raise ValueError("node_ids is empty.")
+
+            idx = df.index
+            if not isinstance(idx, pd.MultiIndex):
+                raise ValueError(
+                    "[fetch] Expected a MultiIndex containing node_id. "
+                    f"Got index type={type(idx).__name__}."
+                )
+
+            nlevels = idx.nlevels
+            names = list(idx.names) if idx.names is not None else [None] * nlevels
+
+            if "node_id" in names:
+                node_level = names.index("node_id")
+            else:
+                if nlevels == 2:
+                    node_level = 0  # (node_id, step)
+                elif nlevels == 3:
+                    node_level = 1  # (stage, node_id, step)
+                else:
+                    raise ValueError(
+                        "[fetch] Cannot infer node_id level. "
+                        f"Index nlevels={nlevels}, names={names}."
+                    )
+
+            lvl = idx.get_level_values(node_level)
+            # pandas-native filter (clear + efficient)
+            df = df.loc[lvl.isin(node_ids_arr)]
+            if df.empty:
+                raise ValueError(
+                    f"[fetch] None of the requested node_ids are present. "
+                    f"Requested (sample): {node_ids_arr[:10].tolist()}"
+                )
+
+        cols = df.columns
+
+        # ------------------------------------------------------------------ #
         # MultiIndex columns: (result_name, component)
+        # ------------------------------------------------------------------ #
         if isinstance(cols, pd.MultiIndex):
             if result_name is None:
                 raise ValueError(
@@ -201,35 +280,53 @@ class NodalResults:
                 sub_cols = [c for c in cols if str(c[0]) == str(result_name)]
                 if not sub_cols:
                     raise ValueError(f"No components found for result '{result_name}'.")
-                return self.df.loc[:, sub_cols]
+                return df.loc[:, sub_cols]
 
             for c0, c1 in cols:
                 if str(c0) == str(result_name) and str(c1) == str(component):
-                    return self.df.loc[:, (c0, c1)]
+                    return df.loc[:, (c0, c1)]
 
             raise ValueError(
                 f"Component '{component}' not found for result '{result_name}'.\n"
                 f"Available components: {self.list_components(result_name)}"
             )
 
+        # ------------------------------------------------------------------ #
         # Single-level columns
+        # ------------------------------------------------------------------ #
         if result_name is not None:
             raise ValueError("Single-level columns: use fetch(component=...) only.")
 
         if component is None:
-            return self.df
+            return df
 
         if component in cols:
-            return self.df[component]
+            return df[component]
 
         comp_str = str(component)
         if comp_str in cols:
-            return self.df[comp_str]
+            return df[comp_str]
 
         raise ValueError(
             f"Component '{component}' not found.\n"
             f"Available components: {tuple(map(str, cols))}"
         )
+
+    def fetch_nearest(
+        self,
+        *,
+        points: Sequence[Sequence[float]],
+        result_name: Optional[str] = None,
+        component: Optional[object] = None,
+        file_id: Optional[int] = None,
+        return_nodes: bool = False,
+    ) -> pd.Series | pd.DataFrame | tuple[pd.Series | pd.DataFrame, list[int]]:
+        """
+        Convenience: resolve coordinates -> nearest node_ids, then fetch().
+        """
+        node_ids = self.info.nearest_node_id(points, file_id=file_id, return_distance=False)
+        out = self.fetch(result_name=result_name, component=component, node_ids=node_ids)
+        return (out, node_ids) if return_nodes else out
 
     # ------------------------------------------------------------------ #
     # Dynamic attribute access
