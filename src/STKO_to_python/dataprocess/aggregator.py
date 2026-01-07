@@ -1,7 +1,7 @@
 # ── STKO_to_python/postproc/aggregator.py ───────────────────────────────
 from __future__ import annotations
 
-from typing import Callable, Mapping, Sequence, Union, Literal, overload
+from typing import Mapping, Sequence, Union, Literal, overload
 
 import pandas as pd
 
@@ -12,6 +12,7 @@ StrOp = Literal[
     "Cumulative", "SignedCumulative", "RunningEnvelope",
 ]
 
+
 class Aggregator:
     """
     Fast 1-D aggregation helper for MPCO results DataFrames.
@@ -19,31 +20,67 @@ class Aggregator:
     Parameters
     ----------
     df : pd.DataFrame
-        Must have a ``"step"`` level/index and the given *direction* column.
-    direction : str | int
+        Must have some notion of "step", either:
+        - a column named 'step', or
+        - an index level named 'step', or
+        - a MultiIndex whose last level is 'step', or
+        - a simple index that *represents* step.
+    direction : str | int | None
         Column name or integer index to aggregate (``'x'``, ``'y'``, …).
-
-    Notes
-    -----
-    The class caches heavy statistics so repeated calls on the *same* dataframe
-    are almost free:
-
-    >>> agg = Aggregator(df, "x")
-    >>> env = agg.envelope()         # computes min/max once
-    >>> std = agg.std()              # reuses cached std
+        If None and df has exactly one column, that column is used.
     """
 
     __slots__ = ("group", "_cache")
     _CORE = ("sum", "mean", "std", "min", "max")   # allowed cached stats
 
     # ------------------------------------------------------------------ #
-    def __init__(self, df: pd.DataFrame, direction: str | int) -> None:
+    def __init__(self, df: pd.DataFrame, direction: str | int | None) -> None:
+        cols = list(df.columns)
+
+        # ---- resolve direction ---------------------------------------- #
+        if direction is None:
+            if len(cols) == 1:
+                direction = cols[0]
+            else:
+                raise ValueError(
+                    "Aggregator: 'direction' is None but DataFrame has multiple "
+                    f"columns {cols}. Specify a column name or index."
+                )
+        elif isinstance(direction, int) and direction not in df.columns:
+            # treat as positional index
+            try:
+                direction = cols[direction]
+            except IndexError as e:
+                raise KeyError(
+                    f"Integer direction index {direction} is out of range "
+                    f"for columns {cols}"
+                ) from e
+
         if direction not in df.columns:
             raise KeyError(
-                f"'{direction}' not found. Available columns: {list(df.columns)}"
+                f"'{direction}' not found. Available columns: {cols}"
             )
-        # one shared group-by object across all operations
-        self.group = df.groupby("step")[direction]
+
+        # ---- build a groupby on "step" -------------------------------- #
+        # Prefer a 'step' column if present
+        if "step" in df.columns:
+            self.group = df.groupby("step")[direction]
+        else:
+            idx = df.index
+            nlevels = getattr(idx, "nlevels", 1)
+
+            if nlevels > 1:
+                # MultiIndex: try level named 'step', else last level
+                names = list(idx.names) if idx.names is not None else []
+                if "step" in names:
+                    self.group = df.groupby(level="step")[direction]
+                else:
+                    # assume last level is step
+                    self.group = df.groupby(level=-1)[direction]
+            else:
+                # Simple Index: treat index values as steps
+                self.group = df.groupby(idx)[direction]
+
         self._cache: dict[str, pd.Series] = {}
 
     # =======================  private helpers  ======================== #
@@ -51,28 +88,38 @@ class Aggregator:
         """Compute *name* lazily and memoise."""
         if name not in self._cache:
             match name:
-                case "sum":  s = self.group.sum()
-                case "mean": s = self.group.mean()
-                case "std":  s = self.group.std(ddof=0)
-                case "min":  s = self.group.min()
-                case "max":  s = self.group.max()
+                case "sum":
+                    s = self.group.sum()
+                case "mean":
+                    s = self.group.mean()
+                case "std":
+                    s = self.group.std(ddof=0)
+                case "min":
+                    s = self.group.min()
+                case "max":
+                    s = self.group.max()
                 case _:
                     raise AttributeError(f"Unknown stat '{name}'")
             self._cache[name] = s
         return self._cache[name]
 
     # =======================  public operations  ====================== #
-    # simple scalars --------------------------------------------------- #
-    def sum(self)  -> pd.Series: return self._stat("sum").rename("Sum")
-    def mean(self) -> pd.Series: return self._stat("mean").rename("Mean")
-    def max(self)  -> pd.Series: return self._stat("max").rename("Max")
-    def min(self)  -> pd.Series: return self._stat("min").rename("Min")
+    def sum(self) -> pd.Series:
+        return self._stat("sum").rename("Sum")
 
-    # derived ---------------------------------------------------------- #
+    def mean(self) -> pd.Series:
+        return self._stat("mean").rename("Mean")
+
+    def max(self) -> pd.Series:
+        return self._stat("max").rename("Max")
+
+    def min(self) -> pd.Series:
+        return self._stat("min").rename("Min")
+
     def std(self) -> pd.DataFrame:
         s = self._stat("std")
         return pd.concat(
-            {"Std+1":  s, "Std-1": -s, "Std+2": 2*s, "Std-2": -2*s},
+            {"Std+1": s, "Std-1": -s, "Std+2": 2 * s, "Std-2": -2 * s},
             axis=1,
         )
 
@@ -90,30 +137,31 @@ class Aggregator:
     def signed_cumulative(self) -> pd.DataFrame:
         s = self._stat("sum")
         return pd.concat(
-            {"CumPos": s.where(s > 0, 0).cumsum(),
-             "CumNeg": s.where(s < 0, 0).cumsum()},
+            {
+                "CumPos": s.where(s > 0, 0).cumsum(),
+                "CumNeg": s.where(s < 0, 0).cumsum(),
+            },
             axis=1,
         )
 
     def running_envelope(self) -> pd.DataFrame:
         return pd.concat(
-            {"RunMin": self.min().cummin(),
-             "RunMax": self.max().cummax()},
+            {"RunMin": self.min().cummin(), "RunMax": self.max().cummax()},
             axis=1,
         )
 
     # =======================  dispatcher API  ======================== #
     _DISPATCH: Mapping[str, str] = {
-        "sum":   "sum",
-        "mean":  "mean",
-        "max":   "max",
-        "min":   "min",
-        "std":   "std",
-        "percentile":       "percentile",
-        "envelope":         "envelope",
-        "cumulative":       "cumulative",
+        "sum": "sum",
+        "mean": "mean",
+        "max": "max",
+        "min": "min",
+        "std": "std",
+        "percentile": "percentile",
+        "envelope": "envelope",
+        "cumulative": "cumulative",
         "signedcumulative": "signed_cumulative",
-        "runningenvelope":  "running_envelope",
+        "runningenvelope": "running_envelope",
     }
 
     @overload
@@ -145,7 +193,7 @@ class Aggregator:
         >>> agg.compute(operation="Envelope")
         >>> agg.compute(operation=("Max", "Min", "Std"))
         """
-        if callable(operation):                      # user-supplied function
+        if callable(operation):  # user-supplied function
             return self.group.apply(operation)
 
         ops = (operation,) if isinstance(operation, str) else operation
@@ -171,7 +219,6 @@ class Aggregator:
         """Alias to :meth:`compute` for one-liners."""
         return self.compute(*a, **kw)
 
-    def __repr__(self) -> str:                      # pragma: no cover
-        return f"<Aggregator columns={list(self.group.obj.name)!r}>"
-
-__all__ = ["Aggregator"]
+    def __repr__(self) -> str:  # pragma: no cover
+        col = getattr(self.group.obj, "name", None)
+        return f"<Aggregator column={col!r}>"
