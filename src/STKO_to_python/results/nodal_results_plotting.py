@@ -135,7 +135,7 @@ class NodalResultsPlotter:
         Generic X–Y plot for a NodalResults instance.
 
         For nodal results, this delegates all "what is a component" logic
-        to `NodalResults.get()` and uses Aggregator only for the
+        to `NodalResults.fetch()` and uses Aggregator only for the
         aggregation across nodes / time.
 
         Plot styling:
@@ -150,7 +150,7 @@ class NodalResultsPlotter:
         df = res.df
 
         # ------------------------------------------------------------------ #
-        # helpers: TIME / STEP / nodal result via NodalResults.get()
+        # helpers: TIME / STEP / nodal result via NodalResults.fetch()
         # ------------------------------------------------------------------ #
         def _axis_value(
             what: str,
@@ -184,11 +184,11 @@ class NodalResultsPlotter:
                 arr = steps.to_numpy() if hasattr(steps, "to_numpy") else np.asarray(steps)
                 return arr * float(scale)
 
-            # ---- treat as result_name + component (use NodalResults.get) --- #
+            # ---- treat as result_name + component (use NodalResults.fetch) --- #
             if direction is None:
-                sub = res.get(result_name=what, component=None)   # all components
+                sub = res.fetch(result_name=what, component=None)   # all components
             else:
-                sub = res.get(result_name=what, component=direction)
+                sub = res.fetch(result_name=what, component=direction)
 
             # normalise to DataFrame
             if isinstance(sub, pd.Series):
@@ -350,7 +350,7 @@ class NodalResultsPlotter:
         result_name
             e.g. 'DISPLACEMENT', 'ACCELERATION'.
         component
-            Component label passed to NodalResults.get(), e.g. 1, '1', 'x'.
+            Component label passed to NodalResults.fetch(), e.g. 1, '1', 'x'.
         node_ids
             If None → plot all node_ids present.
             If sequence → filter to these node_ids.
@@ -370,8 +370,8 @@ class NodalResultsPlotter:
             )
         time_arr = np.asarray(t, dtype=float).reshape(-1)
 
-        # ---- extract the single component via NodalResults.get ------------- #
-        series_or_df = res.get(result_name=result_name, component=component)
+        # ---- extract the single component via NodalResults.fetch ------------- #
+        series_or_df = res.fetch(result_name=result_name, component=component)
 
         if isinstance(series_or_df, pd.DataFrame):
             if series_or_df.shape[1] != 1:
