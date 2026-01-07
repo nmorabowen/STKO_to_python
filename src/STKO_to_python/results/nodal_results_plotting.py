@@ -125,7 +125,7 @@ class NodalResultsPlotter:
         - Starts from NodalResults.plot_settings (ModelPlotSettings), if present.
         - Per-call `linewidth`, `marker`, and other **line_kwargs override those.
         """
-        from ..postproc.aggregator import Aggregator  # lazy to avoid cycles
+        from ..dataprocess.aggregator import Aggregator  # lazy to avoid cycles
 
         # Aggregator supports only percentile=... kw
         operation_kwargs = operation_kwargs or {}
