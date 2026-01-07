@@ -1,7 +1,7 @@
 # ── STKO_to_python/postproc/aggregator.py ───────────────────────────────
 from __future__ import annotations
 
-from typing import Callable, Mapping, Sequence, Union, Literal, overload
+from typing import Mapping, Sequence, Union, Literal, overload
 
 import pandas as pd
 
@@ -28,15 +28,6 @@ class Aggregator:
     direction : str | int | None
         Column name or integer index to aggregate (``'x'``, ``'y'``, …).
         If None and df has exactly one column, that column is used.
-
-    Notes
-    -----
-    The class caches heavy statistics so repeated calls on the *same* dataframe
-    are almost free:
-
-    >>> agg = Aggregator(df, "x")
-    >>> env = agg.envelope()         # computes min/max once
-    >>> std = agg.std()              # reuses cached std
     """
 
     __slots__ = ("group", "_cache")
@@ -97,28 +88,38 @@ class Aggregator:
         """Compute *name* lazily and memoise."""
         if name not in self._cache:
             match name:
-                case "sum":  s = self.group.sum()
-                case "mean": s = self.group.mean()
-                case "std":  s = self.group.std(ddof=0)
-                case "min":  s = self.group.min()
-                case "max":  s = self.group.max()
+                case "sum":
+                    s = self.group.sum()
+                case "mean":
+                    s = self.group.mean()
+                case "std":
+                    s = self.group.std(ddof=0)
+                case "min":
+                    s = self.group.min()
+                case "max":
+                    s = self.group.max()
                 case _:
                     raise AttributeError(f"Unknown stat '{name}'")
             self._cache[name] = s
         return self._cache[name]
 
     # =======================  public operations  ====================== #
-    # simple scalars --------------------------------------------------- #
-    def sum(self)  -> pd.Series: return self._stat("sum").rename("Sum")
-    def mean(self) -> pd.Series: return self._stat("mean").rename("Mean")
-    def max(self)  -> pd.Series: return self._stat("max").rename("Max")
-    def min(self)  -> pd.Series: return self._stat("min").rename("Min")
+    def sum(self) -> pd.Series:
+        return self._stat("sum").rename("Sum")
 
-    # derived ---------------------------------------------------------- #
+    def mean(self) -> pd.Series:
+        return self._stat("mean").rename("Mean")
+
+    def max(self) -> pd.Series:
+        return self._stat("max").rename("Max")
+
+    def min(self) -> pd.Series:
+        return self._stat("min").rename("Min")
+
     def std(self) -> pd.DataFrame:
         s = self._stat("std")
         return pd.concat(
-            {"Std+1":  s, "Std-1": -s, "Std+2": 2*s, "Std-2": -2*s},
+            {"Std+1": s, "Std-1": -s, "Std+2": 2 * s, "Std-2": -2 * s},
             axis=1,
         )
 
@@ -136,30 +137,31 @@ class Aggregator:
     def signed_cumulative(self) -> pd.DataFrame:
         s = self._stat("sum")
         return pd.concat(
-            {"CumPos": s.where(s > 0, 0).cumsum(),
-             "CumNeg": s.where(s < 0, 0).cumsum()},
+            {
+                "CumPos": s.where(s > 0, 0).cumsum(),
+                "CumNeg": s.where(s < 0, 0).cumsum(),
+            },
             axis=1,
         )
 
     def running_envelope(self) -> pd.DataFrame:
         return pd.concat(
-            {"RunMin": self.min().cummin(),
-             "RunMax": self.max().cummax()},
+            {"RunMin": self.min().cummin(), "RunMax": self.max().cummax()},
             axis=1,
         )
 
     # =======================  dispatcher API  ======================== #
     _DISPATCH: Mapping[str, str] = {
-        "sum":   "sum",
-        "mean":  "mean",
-        "max":   "max",
-        "min":   "min",
-        "std":   "std",
-        "percentile":       "percentile",
-        "envelope":         "envelope",
-        "cumulative":       "cumulative",
+        "sum": "sum",
+        "mean": "mean",
+        "max": "max",
+        "min": "min",
+        "std": "std",
+        "percentile": "percentile",
+        "envelope": "envelope",
+        "cumulative": "cumulative",
         "signedcumulative": "signed_cumulative",
-        "runningenvelope":  "running_envelope",
+        "runningenvelope": "running_envelope",
     }
 
     @overload
@@ -191,7 +193,7 @@ class Aggregator:
         >>> agg.compute(operation="Envelope")
         >>> agg.compute(operation=("Max", "Min", "Std"))
         """
-        if callable(operation):                      # user-supplied function
+        if callable(operation):  # user-supplied function
             return self.group.apply(operation)
 
         ops = (operation,) if isinstance(operation, str) else operation
@@ -217,9 +219,6 @@ class Aggregator:
         """Alias to :meth:`compute` for one-liners."""
         return self.compute(*a, **kw)
 
-    def __repr__(self) -> str:                      # pragma: no cover
-        # group.obj is the underlying Series; its `.name` is the column
+    def __repr__(self) -> str:  # pragma: no cover
         col = getattr(self.group.obj, "name", None)
         return f"<Aggregator column={col!r}>"
-
-
