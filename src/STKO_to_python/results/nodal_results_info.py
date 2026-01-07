@@ -202,6 +202,72 @@ class NodalResultsInfo:
             )
         return None
 
+    def selection_set_node_ids(
+        self,
+        selection_set_id: int | Sequence[int],
+        *,
+        only_available: bool = True,
+    ) -> list[int]:
+        """
+        Return node ids for one or more selection set ids.
+
+        Parameters
+        ----------
+        selection_set_id
+            An int or a sequence of ints (multiple sets will be unioned).
+        only_available
+            If True, intersect with `self.nodes_ids` when available, so the returned
+            ids are guaranteed to exist in this NodalResults object.
+
+        Returns
+        -------
+        list[int]
+            Sorted unique node ids.
+        """
+        if self.selection_set is None:
+            raise ValueError("selection_set is None. No selection sets available.")
+
+        ids = [selection_set_id] if isinstance(selection_set_id, int) else list(selection_set_id)
+        if len(ids) == 0:
+            raise ValueError("selection_set_id is empty.")
+
+        gathered: list[np.ndarray] = []
+        missing: list[int] = []
+
+        for sid in ids:
+            if sid not in self.selection_set:
+                missing.append(int(sid))
+                continue
+
+            entry = self.selection_set.get(sid) or {}
+            nodes = entry.get("NODES")
+
+            if nodes is None or len(nodes) == 0:
+                # empty selection set is an error (keeps debugging honest)
+                raise ValueError(f"Selection set {sid} has no nodes.")
+
+            gathered.append(np.asarray(nodes, dtype=np.int64))
+
+        if missing:
+            raise ValueError(
+                f"Selection set id(s) not found: {missing}. "
+                f"Available ids: {sorted(map(int, self.selection_set.keys()))[:50]}"
+            )
+
+        out = np.unique(np.concatenate(gathered)).astype(np.int64, copy=False)
+
+        if only_available and self.nodes_ids is not None:
+            avail = np.asarray(self.nodes_ids, dtype=np.int64)
+            out = out[np.isin(out, avail)]
+
+        if out.size == 0:
+            raise ValueError(
+                "Resolved selection set node ids are empty "
+                "(possibly due to only_available=True filtering)."
+            )
+
+        return [int(v) for v in out.tolist()]
+
     # ------------------------------------------------------------------ #
     # Small utilities
     # ------------------------------------------------------------------ #

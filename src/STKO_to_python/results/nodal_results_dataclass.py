@@ -212,19 +212,35 @@ class NodalResults:
         component: Optional[object] = None,
         *,
         node_ids: int | Sequence[int] | None = None,
+        selection_set_id: int | Sequence[int] | None = None,
     ) -> pd.Series | pd.DataFrame:
         """
         Fetch results with optional node filtering.
 
-        Assumes index includes node_id either:
+        You can filter by:
+        - node_ids=...
+        - selection_set_id=...   (resolved via self.info.selection_set_node_ids)
+
+        Notes
+        -----
+        Assumes the DataFrame index includes node_id either:
         - named level 'node_id', or
         - (node_id, step), or
         - (stage, node_id, step).
         """
+        # ------------------------------------------------------------------ #
+        # Resolve node filter
+        # ------------------------------------------------------------------ #
+        if node_ids is not None and selection_set_id is not None:
+            raise ValueError("Use either node_ids or selection_set_id, not both.")
+
+        if selection_set_id is not None:
+            node_ids = self.info.selection_set_node_ids(selection_set_id)
+
         df = self.df
 
         # ------------------------------------------------------------------ #
-        # Optional node filtering
+        # Optional node filtering (node_ids)
         # ------------------------------------------------------------------ #
         if node_ids is not None:
             if isinstance(node_ids, (int, np.integer)):
@@ -258,7 +274,6 @@ class NodalResults:
                     )
 
             lvl = idx.get_level_values(node_level)
-            # pandas-native filter (clear + efficient)
             df = df.loc[lvl.isin(node_ids_arr)]
             if df.empty:
                 raise ValueError(
@@ -313,6 +328,7 @@ class NodalResults:
             f"Component '{component}' not found.\n"
             f"Available components: {tuple(map(str, cols))}"
         )
+
 
     def fetch_nearest(
         self,
