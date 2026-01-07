@@ -346,6 +346,148 @@ class NodalResults:
         out = self.fetch(result_name=result_name, component=component, node_ids=node_ids)
         return (out, node_ids) if return_nodes else out
 
+    def drift(
+        self,
+        *,
+        top: int | Sequence[float],
+        bottom: int | Sequence[float],
+        component: object,
+        result_name: str = "DISPLACEMENT",
+        stage: Optional[str] = None,
+        signed: bool = True,
+        reduce: str = "series",   # "series" | "max"
+    ) -> pd.Series | float:
+        """
+        Drift between two nodes:
+
+            drift(t) = (u_top(t) - u_bottom(t)) / (z_top - z_bottom)
+
+        Parameters
+        ----------
+        top, bottom
+            Node id (int) or coordinates (x,y) or (x,y,z).
+            Coordinates are resolved to nearest node.
+        component
+            REQUIRED displacement component (e.g. 1, 'X', 'Ux').
+        result_name
+            Typically 'DISPLACEMENT'.
+        stage
+            Required if results are multi-stage (stage, node_id, step).
+        signed
+            If False, uses |u_top - u_bottom|.
+        reduce
+            - "series" → return full drift time-history (default)
+            - "max"    → return max(|drift(t)|)
+
+        Returns
+        -------
+        pd.Series or float
+            Drift time-history or absolute maximum drift.
+        """
+
+        # ---------------------------
+        # Resolve node ids
+        # ---------------------------
+        def _as_node_id(v: int | Sequence[float], *, name: str) -> int:
+            if isinstance(v, (int, np.integer)):
+                return int(v)
+
+            if not isinstance(v, (list, tuple, np.ndarray)):
+                raise TypeError(
+                    f"{name} must be a node id or coordinates (x,y) or (x,y,z)."
+                )
+
+            coords = tuple(float(x) for x in v)
+            if len(coords) not in (2, 3):
+                raise TypeError(
+                    f"{name} coordinates must have length 2 or 3. Got {len(coords)}."
+                )
+
+            return int(self.info.nearest_node_id([coords])[0])
+
+        top_id = _as_node_id(top, name="top")
+        bot_id = _as_node_id(bottom, name="bottom")
+
+        # ---------------------------
+        # dz from nodes_info
+        # ---------------------------
+        if self.info.nodes_info is None:
+            raise ValueError("nodes_info is None. z-coordinates are required for drift().")
+        if not isinstance(self.info.nodes_info, pd.DataFrame):
+            raise TypeError("drift() expects nodes_info as a pandas DataFrame.")
+
+        ni = self.info.nodes_info
+        zcol = self.info._resolve_column(ni, "z", required=True)
+        nid_col = self.info._resolve_column(ni, "node_id", required=False)
+
+        def _z_of(nid: int) -> float:
+            if nid_col is not None:
+                row = ni.loc[ni[nid_col].to_numpy() == nid]
+                if row.empty:
+                    raise ValueError(f"node_id={nid} not found in nodes_info.")
+                return float(row.iloc[0][zcol])
+            if nid not in ni.index:
+                raise ValueError(f"node_id={nid} not found in nodes_info index.")
+            return float(ni.loc[nid, zcol])
+
+        z_top = _z_of(top_id)
+        z_bot = _z_of(bot_id)
+        dz = float(z_top - z_bot)
+        if dz == 0.0:
+            raise ValueError("z_top == z_bottom → dz = 0. Cannot compute drift.")
+
+        # ---------------------------
+        # Fetch displacement
+        # ---------------------------
+        s = self.fetch(
+            result_name=result_name,
+            component=component,
+            node_ids=[top_id, bot_id],
+        )
+
+        # Multi-stage handling
+        idx = s.index
+        if isinstance(idx, pd.MultiIndex) and idx.nlevels == 3:
+            if stage is None:
+                stages = tuple(sorted({str(x) for x in idx.get_level_values(0)}))
+                raise ValueError(
+                    "Multi-stage results detected. Provide stage=...\n"
+                    f"Available stages: {stages}"
+                )
+            s = s.xs(str(stage), level=0)
+
+        # Expect (node_id, step)
+        idx = s.index
+        if not (isinstance(idx, pd.MultiIndex) and idx.nlevels == 2):
+            raise ValueError(
+                "drift() expects index (node_id, step) after stage selection."
+            )
+
+        u_top = s.xs(top_id, level=0).sort_index()
+        u_bot = s.xs(bot_id, level=0).sort_index()
+        u_top, u_bot = u_top.align(u_bot, join="inner")
+
+        du = u_top - u_bot
+        if not signed:
+            du = du.abs()
+
+        drift_series = du / dz
+        drift_series.name = f"drift({result_name}:{component})"
+
+        # ---------------------------
+        # Reduction
+        # ---------------------------
+        if reduce == "series":
+            return drift_series
+
+        if reduce == "max":
+            return float(np.nanmax(np.abs(drift_series.to_numpy())))
+
+        raise ValueError(
+            f"Unknown reduce='{reduce}'. Use 'series' or 'max'."
+        )
+
+
     # ------------------------------------------------------------------ #
     # Dynamic attribute access
     # ------------------------------------------------------------------ #
