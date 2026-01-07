@@ -158,7 +158,7 @@ class Nodes:
         d = self.dataset.selection_set.get(int(sid), {})
         if not isinstance(d, dict):
             return ""
-        name = d.get("NAME", d.get("name", d.get("Name", "")))
+        name = d.get("SET_NAME", d.get("name", d.get("Name", "")))
         return "" if name is None else str(name)
 
     def _selection_set_ids_from_names(self, names: Sequence[str]) -> Tuple[int, ...]:
