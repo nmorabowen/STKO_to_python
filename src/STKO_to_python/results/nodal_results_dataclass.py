@@ -1,6 +1,8 @@
+# results/nodal_results_dataclass.py
+
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Dict, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Optional, Sequence, Tuple, Union
 from pathlib import Path
 import gzip
 import pickle
@@ -66,6 +68,10 @@ class _ResultView:
 class NodalResults:
     """
     Container for generic nodal results.
+
+    Expected df shape:
+      - index: (node_id, step) OR (stage, node_id, step)
+      - columns: MultiIndex (result, component) OR single-level
     """
 
     def __init__(
@@ -218,35 +224,50 @@ class NodalResults:
         *,
         node_ids: int | Sequence[int] | None = None,
         selection_set_id: int | Sequence[int] | None = None,
+        selection_set_name: str | Sequence[str] | None = None,
+        only_available: bool = True,
     ) -> pd.Series | pd.DataFrame:
         """
         Fetch results with optional node filtering.
 
-        You can filter by:
-        - node_ids=...
-        - selection_set_id=... (resolved via self.info.selection_set_node_ids)
+        You can filter by any combination of:
+          - node_ids
+          - selection_set_id
+          - selection_set_name
 
-        Assumes index includes node_id either:
-        - named level 'node_id', or
-        - (node_id, step), or
-        - (stage, node_id, step).
+        Semantics: UNION of all node sources.
+
+        only_available:
+          Passed to selection_set resolver(s) to optionally intersect with self.info.nodes_ids.
         """
-        if node_ids is not None and selection_set_id is not None:
-            raise ValueError("Use either node_ids or selection_set_id, not both.")
-
-        if selection_set_id is not None:
-            node_ids = self.info.selection_set_node_ids(selection_set_id)
-
         df = self.df
+        gathered: list[np.ndarray] = []
 
-        # ---- node filtering ----
+        # ---- selection by id ----
+        if selection_set_id is not None:
+            ids = self.info.selection_set_node_ids(selection_set_id, only_available=only_available)
+            gathered.append(np.asarray(ids, dtype=np.int64))
+
+        # ---- selection by name ----
+        if selection_set_name is not None:
+            ids = self.info.selection_set_node_ids_by_name(selection_set_name, only_available=only_available)
+            gathered.append(np.asarray(ids, dtype=np.int64))
+
+        # ---- explicit node_ids ----
         if node_ids is not None:
             if isinstance(node_ids, (int, np.integer)):
-                node_ids_arr = np.asarray([int(node_ids)], dtype=np.int64)
+                gathered.append(np.asarray([int(node_ids)], dtype=np.int64))
             else:
-                node_ids_arr = np.asarray(list(node_ids), dtype=np.int64)
-                if node_ids_arr.size == 0:
+                arr = np.asarray(list(node_ids), dtype=np.int64)
+                if arr.size == 0:
                     raise ValueError("node_ids is empty.")
+                gathered.append(arr)
+
+        # ---- apply node filter ----
+        if gathered:
+            node_ids_arr = np.unique(np.concatenate(gathered))
+            if node_ids_arr.size == 0:
+                raise ValueError("Resolved node set is empty.")
 
             idx = df.index
             if not isinstance(idx, pd.MultiIndex):
@@ -351,7 +372,7 @@ class NodalResults:
         result_name: str = "DISPLACEMENT",
         stage: Optional[str] = None,
         signed: bool = True,
-        reduce: str = "series",   # "series" | "abs_max"
+        reduce: str = "series",  # "series" | "abs_max"
     ) -> pd.Series | float:
         """
         Drift between two nodes:
@@ -361,9 +382,6 @@ class NodalResults:
         top, bottom:
             - node id (int), or
             - coordinates (x,y) or (x,y,z) resolved to nearest node.
-
-        component:
-            REQUIRED (no default).
         """
 
         def _as_node_id(v: int | Sequence[float], *, name: str) -> int:
@@ -440,6 +458,7 @@ class NodalResults:
         *,
         component: object,
         selection_set_id: int | Sequence[int] | None = None,
+        selection_set_name: str | Sequence[str] | None = None,
         node_ids: Sequence[int] | None = None,
         coordinates: Sequence[Sequence[float]] | None = None,
         result_name: str = "DISPLACEMENT",
@@ -450,19 +469,23 @@ class NodalResults:
 
         Provide exactly ONE of:
             - selection_set_id
+            - selection_set_name
             - node_ids
             - coordinates -> nearest nodes
-
-        Returns a DataFrame indexed by (lower_node, upper_node) with:
-            dz, z_lower, z_upper, max_drift, min_drift
         """
-        provided = sum(x is not None for x in (selection_set_id, node_ids, coordinates))
+        provided = sum(
+            x is not None for x in (selection_set_id, selection_set_name, node_ids, coordinates)
+        )
         if provided != 1:
-            raise ValueError("Provide exactly ONE of: selection_set_id, node_ids, coordinates.")
+            raise ValueError(
+                "Provide exactly ONE of: selection_set_id, selection_set_name, node_ids, coordinates."
+            )
 
         # ---- resolve ids ----
         if selection_set_id is not None:
             ids = self.info.selection_set_node_ids(selection_set_id)
+        elif selection_set_name is not None:
+            ids = self.info.selection_set_node_ids_by_name(selection_set_name)
         elif node_ids is not None:
             if len(node_ids) == 0:
                 raise ValueError("node_ids is empty.")

@@ -12,13 +12,25 @@ class NodalResultsInfo:
 
     Notes
     -----
-    - This simplified version assumes `nodes_info` is a pandas DataFrame.
-    - `nearest_node_id` ONLY accepts query points as a list of points:
+    - Assumes `nodes_info` is a pandas DataFrame.
+    - `nearest_node_id` accepts query points as a list of points:
         [(x,y), ...] or [(x,y,z), ...]
       and returns a list of nearest node ids (and optionally distances).
+    - Selection sets are expected as:
+        { id:int : { 'SET_NAME': str, 'NODES': [...], 'ELEMENTS': [...] }, ... }
+      but name keys are handled robustly (SET_NAME / NAME / name / Name).
     """
 
-    __slots__ = ("nodes_ids", "nodes_info", "model_stages", "results_components", "selection_set", "analysis_time", "size", "name")
+    __slots__ = (
+        "nodes_ids",
+        "nodes_info",
+        "model_stages",
+        "results_components",
+        "selection_set",
+        "analysis_time",
+        "size",
+        "name",
+    )
 
     def __init__(
         self,
@@ -55,7 +67,6 @@ class NodalResultsInfo:
 
         # Optional nicety: name the index if it's node_id-like
         if isinstance(nodes_info, pd.DataFrame) and nodes_info.index.name is None:
-            # Don't force it, but it helps downstream debugging/printing
             nodes_info = nodes_info.rename_axis("node_id")
 
         self.nodes_ids = nodes_ids
@@ -103,8 +114,6 @@ class NodalResultsInfo:
         if self.nodes_info is None:
             raise ValueError("nodes_info is None. Cannot search nearest node.")
         if not isinstance(self.nodes_info, pd.DataFrame):
-            # should be impossible with current __init__ validation,
-            # but keep it defensive if someone bypasses __init__.
             raise TypeError("nearest_node_id expects nodes_info as a pandas DataFrame.")
 
         df = self.nodes_info
@@ -150,8 +159,7 @@ class NodalResultsInfo:
         out_ids: list[int] = []
         out_dist: list[float] = []
 
-        # ---- compute nearest ------------------------------------------ #
-        # Loop over queries (usually small) to avoid building huge (n_nodes x n_queries) matrices.
+        # Loop over queries (usually small)
         for p in pts:
             dx = X - p[0]
             dy = Y - p[1]
@@ -208,6 +216,114 @@ class NodalResultsInfo:
             )
         return None
 
+    # ------------------------------------------------------------------ #
+    # Selection set helpers (by id and by name)
+    # ------------------------------------------------------------------ #
+    @staticmethod
+    def _normalize_selection_names(
+        selection_set_name: str | Sequence[str] | None,
+    ) -> Tuple[str, ...]:
+        if selection_set_name is None:
+            return ()
+        if isinstance(selection_set_name, str):
+            s = selection_set_name.strip()
+            # convenience: "A, B" -> ("A","B")
+            if "," in s:
+                parts = [p.strip() for p in s.split(",") if p.strip()]
+                return tuple(parts)
+            return (s,)
+        out: list[str] = []
+        for x in selection_set_name:
+            if x is None:
+                continue
+            sx = str(x).strip()
+            if sx:
+                out.append(sx)
+        return tuple(out)
+
+    def _selection_set_name_for(self, sid: int) -> str:
+        """
+        Extract selection set name for a given selection_set_id.
+
+        Your schema uses:
+            selection_set[id]["SET_NAME"] = "ControlPoint"
+        """
+        if self.selection_set is None:
+            return ""
+        d = self.selection_set.get(int(sid), {})
+        if not isinstance(d, dict):
+            return ""
+
+        for k in ("SET_NAME", "set_name", "NAME", "name", "Name"):
+            v = d.get(k)
+            if v is None:
+                continue
+            s = str(v).strip()
+            if s:
+                return s
+        return ""
+
+    def selection_set_ids_from_names(
+        self,
+        selection_set_name: str | Sequence[str],
+    ) -> Tuple[int, ...]:
+        """
+        Resolve selection set name(s) -> selection set id(s) using
+        case-insensitive exact match.
+
+        Raises if a name is missing or ambiguous.
+        """
+        if self.selection_set is None:
+            raise ValueError("selection_set is None. No selection sets available.")
+
+        names = self._normalize_selection_names(selection_set_name)
+        if not names:
+            raise ValueError("selection_set_name is empty.")
+
+        buckets: dict[str, list[int]] = {}
+        for sid in self.selection_set.keys():
+            try:
+                sid_i = int(sid)
+            except Exception:
+                continue
+            nm = self._selection_set_name_for(sid_i)
+            key = nm.strip().lower()
+            if not key:
+                continue
+            buckets.setdefault(key, []).append(sid_i)
+
+        resolved: list[int] = []
+        for raw in names:
+            q = str(raw).strip().lower()
+            hits = buckets.get(q, [])
+            if len(hits) == 0:
+                available = sorted(buckets.keys())
+                preview = ", ".join(available[:50]) + (" ..." if len(available) > 50 else "")
+                raise ValueError(
+                    f"Selection set name not found: {raw!r}. "
+                    f"Available (normalized) names include: {preview}"
+                )
+            if len(hits) > 1:
+                raise ValueError(
+                    f"Ambiguous selection set name {raw!r}: matches IDs {sorted(hits)}. "
+                    f"Use selection_set_id instead."
+                )
+            resolved.append(hits[0])
+
+        return tuple(resolved)
+
+    def selection_set_node_ids_by_name(
+        self,
+        selection_set_name: str | Sequence[str],
+        *,
+        only_available: bool = True,
+    ) -> list[int]:
+        """
+        Resolve selection set name(s) -> node ids (union across multiple names).
+        """
+        sids = self.selection_set_ids_from_names(selection_set_name)
+        return self.selection_set_node_ids(sids, only_available=only_available)
+
     def selection_set_node_ids(
         self,
         selection_set_id: int | Sequence[int],
@@ -222,8 +338,7 @@ class NodalResultsInfo:
         selection_set_id
             An int or a sequence of ints (multiple sets will be unioned).
         only_available
-            If True, intersect with `self.nodes_ids` when available, so the returned
-            ids are guaranteed to exist in this NodalResults object.
+            If True, intersect with `self.nodes_ids` when available.
 
         Returns
         -------
@@ -241,16 +356,16 @@ class NodalResultsInfo:
         missing: list[int] = []
 
         for sid in ids:
-            if sid not in self.selection_set:
-                missing.append(int(sid))
+            sid_i = int(sid)
+            if sid_i not in self.selection_set:
+                missing.append(sid_i)
                 continue
 
-            entry = self.selection_set.get(sid) or {}
+            entry = self.selection_set.get(sid_i) or {}
             nodes = entry.get("NODES")
 
             if nodes is None or len(nodes) == 0:
-                # empty selection set is an error (keeps debugging honest)
-                raise ValueError(f"Selection set {sid} has no nodes.")
+                raise ValueError(f"Selection set {sid_i} has no nodes.")
 
             gathered.append(np.asarray(nodes, dtype=np.int64))
 
