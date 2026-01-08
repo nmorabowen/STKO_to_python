@@ -891,6 +891,214 @@ class NodalResults:
 
         raise ValueError("reduce must be one of: 'series', 'abs_max', 'max', 'min'.")
 
+    def residual_drift(
+        self,
+        *,
+        top: int | Sequence[float],
+        bottom: int | Sequence[float],
+        component: object,
+        result_name: str = "DISPLACEMENT",
+        stage: Optional[str] = None,
+        signed: bool = True,
+        tail: int = 1,
+        agg: str = "mean",  # "mean" | "median"
+    ) -> float:
+        """
+        Residual drift ratio between two nodes.
+
+        Definition
+        ----------
+        Residual drift is evaluated at the end of the record.
+        To reduce end-of-record noise, you can average over the last `tail` steps.
+
+        Parameters
+        ----------
+        tail
+            Number of last steps to aggregate.
+            - tail=1 -> last step only
+            - tail>1 -> aggregate last `tail` drift samples
+        agg
+            Aggregation over the tail window: "mean" or "median"
+
+        Returns
+        -------
+        float
+            Residual drift ratio (dimensionless). Signed unless signed=False.
+        """
+        dr = self.drift(
+            top=top,
+            bottom=bottom,
+            component=component,
+            result_name=result_name,
+            stage=stage,
+            signed=signed,
+            reduce="series",
+        )
+
+        a = dr.to_numpy(dtype=float)
+        if a.size == 0:
+            raise ValueError("residual_drift(): empty drift series.")
+
+        tail_i = int(tail)
+        if tail_i < 1:
+            raise ValueError("tail must be >= 1.")
+        tail_i = min(tail_i, a.size)
+
+        w = a[-tail_i:]
+        if agg == "mean":
+            return float(np.nanmean(w))
+        if agg == "median":
+            return float(np.nanmedian(w))
+        raise ValueError("agg must be 'mean' or 'median'.")
+
+    def residual_interstory_drift_profile(
+        self,
+        *,
+        component: object,
+        selection_set_id: int | Sequence[int] | None = None,
+        selection_set_name: str | Sequence[str] | None = None,
+        node_ids: Sequence[int] | None = None,
+        coordinates: Sequence[Sequence[float]] | None = None,
+        result_name: str = "DISPLACEMENT",
+        stage: Optional[str] = None,
+        dz_tol: float = 1e-3,
+        representative: str = "min_id",  # "min_id" | "max_abs_peak"
+        signed: bool = True,
+        tail: int = 1,
+        agg: str = "mean",
+    ) -> pd.DataFrame:
+        """
+        Residual interstory drift ratio per story (profile).
+
+        Returns
+        -------
+        DataFrame indexed by (z_lower, z_upper) and exposing:
+            z_lower, z_upper,
+            lower_node, upper_node, dz,
+            residual_drift
+        """
+        stories = self._resolve_story_nodes_by_z_tol(
+            selection_set_id=selection_set_id,
+            selection_set_name=selection_set_name,
+            node_ids=node_ids,
+            coordinates=coordinates,
+            dz_tol=dz_tol,
+        )
+        if len(stories) < 2:
+            raise ValueError("Need at least 2 story levels after z clustering.")
+
+        def _pick_node(nodes: list[int]) -> int:
+            if representative == "min_id":
+                return int(min(nodes))
+
+            if representative == "max_abs_peak":
+                s = self.fetch(
+                    result_name=result_name,
+                    component=component,
+                    node_ids=nodes,
+                )
+                if isinstance(s.index, pd.MultiIndex) and s.index.nlevels == 3:
+                    if stage is None:
+                        stages = tuple(sorted({str(x) for x in s.index.get_level_values(0)}))
+                        raise ValueError(
+                            f"Multi-stage results detected. Provide stage=... Available: {stages}"
+                        )
+                    s = s.xs(str(stage), level=0)
+
+                wide = s.unstack(level=-1)  # rows=node, cols=step
+                A = wide.to_numpy(dtype=float)
+                peaks = np.nanmax(np.abs(A), axis=1)
+                return int(wide.index.to_numpy(dtype=int)[int(np.nanargmax(peaks))])
+
+            raise ValueError(f"Unknown representative='{representative}'")
+
+        rows: list[dict[str, float]] = []
+        idx: list[tuple[float, float]] = []
+
+        for (z_lo, nodes_lo), (z_up, nodes_up) in zip(stories[:-1], stories[1:]):
+            dz = float(z_up - z_lo)
+            if dz == 0.0:
+                continue
+
+            n_lo = _pick_node(nodes_lo)
+            n_up = _pick_node(nodes_up)
+
+            r = self.residual_drift(
+                top=n_up,
+                bottom=n_lo,
+                component=component,
+                result_name=result_name,
+                stage=stage,
+                signed=signed,
+                tail=tail,
+                agg=agg,
+            )
+
+            rows.append(
+                {
+                    "lower_node": int(n_lo),
+                    "upper_node": int(n_up),
+                    "dz": float(dz),
+                    "residual_drift": float(r),
+                }
+            )
+            idx.append((float(z_lo), float(z_up)))
+
+        if not rows:
+            raise ValueError("No valid story pairs were produced (check z-coordinates).")
+
+        out = pd.DataFrame(
+            rows,
+            index=pd.MultiIndex.from_tuples(idx, names=("z_lower", "z_upper")),
+        )
+
+        # expose bounds as columns
+        out = out.reset_index().set_index(["z_lower", "z_upper"], drop=False)
+        return out
+
+    def residual_drift_envelope(
+        self,
+        *,
+        component: object,
+        selection_set_id: int | Sequence[int] | None = None,
+        selection_set_name: str | Sequence[str] | None = None,
+        node_ids: Sequence[int] | None = None,
+        coordinates: Sequence[Sequence[float]] | None = None,
+        result_name: str = "DISPLACEMENT",
+        stage: Optional[str] = None,
+        dz_tol: float = 1e-3,
+        representative: str = "min_id",
+        tail: int = 1,
+        agg: str = "mean",
+    ) -> dict[str, float]:
+        """
+        Convenience summary metrics:
+          - max_abs_residual_story_drift
+          - max_pos_residual_story_drift
+          - max_neg_residual_story_drift
+        """
+        prof = self.residual_interstory_drift_profile(
+            component=component,
+            selection_set_id=selection_set_id,
+            selection_set_name=selection_set_name,
+            node_ids=node_ids,
+            coordinates=coordinates,
+            result_name=result_name,
+            stage=stage,
+            dz_tol=dz_tol,
+            representative=representative,
+            signed=True,
+            tail=tail,
+            agg=agg,
+        )
+
+        r = prof["residual_drift"].to_numpy(dtype=float)
+        return {
+            "max_abs_residual_story_drift": float(np.nanmax(np.abs(r))),
+            "max_pos_residual_story_drift": float(np.nanmax(r)),
+            "max_neg_residual_story_drift": float(np.nanmin(r)),
+        }
+
     # ------------------------------------------------------------------ #
     # Dynamic attribute access
     # ------------------------------------------------------------------ #
