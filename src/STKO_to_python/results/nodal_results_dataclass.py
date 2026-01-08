@@ -548,13 +548,16 @@ class NodalResults:
         representative:
         - "min_id": uses min node_id in each story (fast, deterministic)
         - "max_abs_peak": chooses node in each story with largest abs peak response
-                            (more robust if multiple nodes per floor)
+                        (robust if multiple nodes per floor)
 
         Returns
         -------
-        DataFrame indexed by (z_lower, z_upper) with:
-            lower_node, upper_node, dz, max_drift, min_drift, max_abs_drift
+        DataFrame indexed by (z_lower, z_upper) AND exposing them as columns with:
+            z_lower, z_upper,
+            lower_node, upper_node, dz,
+            max_drift, min_drift, max_abs_drift
         """
+
         stories = self._resolve_story_nodes_by_z_tol(
             selection_set_id=selection_set_id,
             selection_set_name=selection_set_name,
@@ -565,24 +568,38 @@ class NodalResults:
         if len(stories) < 2:
             raise ValueError("Need at least 2 story levels after z clustering.")
 
-        # Helper: pick a representative node per story
+        # --------------------------------------------------
+        # Representative node selection
+        # --------------------------------------------------
         def _pick_node(nodes: list[int]) -> int:
             if representative == "min_id":
                 return int(min(nodes))
+
             if representative == "max_abs_peak":
-                # choose node with max abs peak displacement component in that story
-                s = self.fetch(result_name=result_name, component=component, node_ids=nodes)
+                s = self.fetch(
+                    result_name=result_name,
+                    component=component,
+                    node_ids=nodes,
+                )
                 if isinstance(s.index, pd.MultiIndex) and s.index.nlevels == 3:
                     if stage is None:
                         stages = tuple(sorted({str(x) for x in s.index.get_level_values(0)}))
-                        raise ValueError(f"Multi-stage results detected. Provide stage=... Available: {stages}")
+                        raise ValueError(
+                            f"Multi-stage results detected. Provide stage=... "
+                            f"Available: {stages}"
+                        )
                     s = s.xs(str(stage), level=0)
+
                 wide = s.unstack(level=-1)  # rows=node, cols=step
                 A = wide.to_numpy(dtype=float)
                 peaks = np.nanmax(np.abs(A), axis=1)
                 return int(wide.index.to_numpy(dtype=int)[int(np.nanargmax(peaks))])
+
             raise ValueError(f"Unknown representative='{representative}'")
 
+        # --------------------------------------------------
+        # Build rows
+        # --------------------------------------------------
         rows: list[dict[str, float]] = []
         idx: list[tuple[float, float]] = []
 
@@ -607,8 +624,8 @@ class NodalResults:
 
             rows.append(
                 {
-                    "lower_node": float(n_lo),
-                    "upper_node": float(n_up),
+                    "lower_node": int(n_lo),
+                    "upper_node": int(n_up),
                     "dz": dz,
                     "max_drift": float(np.nanmax(arr)),
                     "min_drift": float(np.nanmin(arr)),
@@ -620,13 +637,17 @@ class NodalResults:
         if not rows:
             raise ValueError("No valid story pairs were produced (check z-coordinates).")
 
+        # --------------------------------------------------
+        # Assemble DataFrame
+        # --------------------------------------------------
         out = pd.DataFrame(
             rows,
             index=pd.MultiIndex.from_tuples(idx, names=("z_lower", "z_upper")),
         )
-        # store node ids as ints (came through float in dict)
-        out["lower_node"] = out["lower_node"].astype(int)
-        out["upper_node"] = out["upper_node"].astype(int)
+
+        # expose bounds as regular columns too
+        out = out.reset_index().set_index(["z_lower", "z_upper"], drop=False)
+
         return out
 
 
