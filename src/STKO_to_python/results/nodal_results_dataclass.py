@@ -453,29 +453,20 @@ class NodalResults:
             return float(np.nanmax(np.abs(drift_series.to_numpy(dtype=float))))
         raise ValueError(f"Unknown reduce='{reduce}'. Use 'series' or 'abs_max'.")
 
-    def interstory_drift_envelope(
+    def _resolve_story_nodes_by_z_tol(
         self,
         *,
-        component: object,
-        selection_set_id: int | Sequence[int] | None = None,
-        selection_set_name: str | Sequence[str] | None = None,
-        node_ids: Sequence[int] | None = None,
-        coordinates: Sequence[Sequence[float]] | None = None,
-        result_name: str = "DISPLACEMENT",
-        stage: Optional[str] = None,
-    ) -> pd.DataFrame:
+        selection_set_id: int | Sequence[int] | None,
+        selection_set_name: str | Sequence[str] | None,
+        node_ids: Sequence[int] | None,
+        coordinates: Sequence[Sequence[float]] | None,
+        dz_tol: float,
+    ) -> list[tuple[float, list[int]]]:
         """
-        Interstory drift envelope (MAX and MIN) from a vertical stack of nodes.
-
-        Provide exactly ONE of:
-            - selection_set_id
-            - selection_set_name
-            - node_ids
-            - coordinates -> nearest nodes
+        Returns: [(z_ref, [node_ids_at_story]), ...] sorted by z_ref.
+        z_ref is the first z encountered in the cluster (deterministic after sorting).
         """
-        provided = sum(
-            x is not None for x in (selection_set_id, selection_set_name, node_ids, coordinates)
-        )
+        provided = sum(x is not None for x in (selection_set_id, selection_set_name, node_ids, coordinates))
         if provided != 1:
             raise ValueError(
                 "Provide exactly ONE of: selection_set_id, selection_set_name, node_ids, coordinates."
@@ -496,9 +487,9 @@ class NodalResults:
                 raise ValueError("coordinates is empty.")
             ids = self.info.nearest_node_id(coordinates, return_distance=False)
 
-        ids = sorted(set(ids))
-        if len(ids) < 2:
-            raise ValueError("Need at least 2 nodes to compute interstory drift.")
+        ids = sorted(set(int(i) for i in ids))
+        if len(ids) == 0:
+            raise ValueError("Resolved node list is empty.")
 
         if self.info.nodes_info is None:
             raise ValueError("nodes_info is None. Need nodes_info with z-coordinates.")
@@ -506,74 +497,240 @@ class NodalResults:
         zcol = self.info._resolve_column(ni, "z", required=True)
         nid_col = self.info._resolve_column(ni, "node_id", required=False)
 
-        # ---- build z lookup once ----
+        # ---- build (node_id, z) pairs ----
+        pairs: list[tuple[int, float]] = []
         if nid_col is not None:
             sub = ni.loc[ni[nid_col].isin(ids), [nid_col, zcol]]
             if sub.empty:
                 raise ValueError("None of the node ids were found in nodes_info.")
-            z_map = dict(zip(sub[nid_col].to_numpy(dtype=int), sub[zcol].to_numpy(dtype=float)))
+            for nid, z in zip(sub[nid_col], sub[zcol]):
+                pairs.append((int(nid), float(z)))
         else:
             missing = [i for i in ids if i not in ni.index]
             if missing:
                 raise ValueError(f"node_id(s) not found in nodes_info index: {missing[:10]}")
-            z_map = {int(i): float(ni.loc[int(i), zcol]) for i in ids}
+            for nid in ids:
+                pairs.append((int(nid), float(ni.loc[int(nid), zcol])))
 
-        z_vals = np.asarray([z_map[i] for i in ids], dtype=float)
-        order = np.argsort(z_vals, kind="mergesort")
-        ids_sorted = [ids[i] for i in order]
-        z_sorted = z_vals[order]
+        # ---- sort and cluster by tolerance ----
+        pairs.sort(key=lambda x: x[1])
 
-        # ---- drop duplicate z levels ----
-        keep = [0]
-        for i in range(1, len(z_sorted)):
-            if z_sorted[i] != z_sorted[keep[-1]]:
-                keep.append(i)
-        ids_sorted = [ids_sorted[i] for i in keep]
-        z_sorted = z_sorted[keep]
+        stories: list[tuple[float, list[int]]] = []
+        for nid, z in pairs:
+            if not stories:
+                stories.append((z, [nid]))
+                continue
+            z_ref, members = stories[-1]
+            if abs(z - z_ref) <= float(dz_tol):
+                members.append(nid)
+            else:
+                stories.append((z, [nid]))
 
-        if len(ids_sorted) < 2:
-            raise ValueError("After sorting/dedup by z, fewer than 2 unique z-levels remain.")
+        return stories
+
+
+    def interstory_drift_envelope(
+        self,
+        *,
+        component: object,
+        selection_set_id: int | Sequence[int] | None = None,
+        selection_set_name: str | Sequence[str] | None = None,
+        node_ids: Sequence[int] | None = None,
+        coordinates: Sequence[Sequence[float]] | None = None,
+        result_name: str = "DISPLACEMENT",
+        stage: Optional[str] = None,
+        dz_tol: float = 1e-3,
+        representative: str = "min_id",  # "min_id" | "max_abs_peak"
+    ) -> pd.DataFrame:
+        """
+        Interstory drift envelope (MAX and MIN signed) using z-tolerance clustering.
+
+        representative:
+        - "min_id": uses min node_id in each story (fast, deterministic)
+        - "max_abs_peak": chooses node in each story with largest abs peak response
+                            (more robust if multiple nodes per floor)
+
+        Returns
+        -------
+        DataFrame indexed by (z_lower, z_upper) with:
+            lower_node, upper_node, dz, max_drift, min_drift, max_abs_drift
+        """
+        stories = self._resolve_story_nodes_by_z_tol(
+            selection_set_id=selection_set_id,
+            selection_set_name=selection_set_name,
+            node_ids=node_ids,
+            coordinates=coordinates,
+            dz_tol=dz_tol,
+        )
+        if len(stories) < 2:
+            raise ValueError("Need at least 2 story levels after z clustering.")
+
+        # Helper: pick a representative node per story
+        def _pick_node(nodes: list[int]) -> int:
+            if representative == "min_id":
+                return int(min(nodes))
+            if representative == "max_abs_peak":
+                # choose node with max abs peak displacement component in that story
+                s = self.fetch(result_name=result_name, component=component, node_ids=nodes)
+                if isinstance(s.index, pd.MultiIndex) and s.index.nlevels == 3:
+                    if stage is None:
+                        stages = tuple(sorted({str(x) for x in s.index.get_level_values(0)}))
+                        raise ValueError(f"Multi-stage results detected. Provide stage=... Available: {stages}")
+                    s = s.xs(str(stage), level=0)
+                wide = s.unstack(level=-1)  # rows=node, cols=step
+                A = wide.to_numpy(dtype=float)
+                peaks = np.nanmax(np.abs(A), axis=1)
+                return int(wide.index.to_numpy(dtype=int)[int(np.nanargmax(peaks))])
+            raise ValueError(f"Unknown representative='{representative}'")
 
         rows: list[dict[str, float]] = []
-        idx_pairs: list[tuple[int, int]] = []
+        idx: list[tuple[float, float]] = []
 
-        for lower_id, upper_id, z_lo, z_up in zip(
-            ids_sorted[:-1], ids_sorted[1:], z_sorted[:-1], z_sorted[1:]
-        ):
+        for (z_lo, nodes_lo), (z_up, nodes_up) in zip(stories[:-1], stories[1:]):
             dz = float(z_up - z_lo)
             if dz == 0.0:
                 continue
 
+            n_lo = _pick_node(nodes_lo)
+            n_up = _pick_node(nodes_up)
+
             dr = self.drift(
-                top=upper_id,
-                bottom=lower_id,
+                top=n_up,
+                bottom=n_lo,
                 component=component,
                 result_name=result_name,
                 stage=stage,
                 signed=True,
                 reduce="series",
             )
-
             arr = dr.to_numpy(dtype=float)
+
             rows.append(
                 {
+                    "lower_node": float(n_lo),
+                    "upper_node": float(n_up),
                     "dz": dz,
-                    "z_lower": float(z_lo),
-                    "z_upper": float(z_up),
                     "max_drift": float(np.nanmax(arr)),
                     "min_drift": float(np.nanmin(arr)),
+                    "max_abs_drift": float(np.nanmax(np.abs(arr))),
                 }
             )
-            idx_pairs.append((int(lower_id), int(upper_id)))
+            idx.append((float(z_lo), float(z_up)))
 
         if not rows:
             raise ValueError("No valid story pairs were produced (check z-coordinates).")
 
         out = pd.DataFrame(
             rows,
-            index=pd.MultiIndex.from_tuples(idx_pairs, names=("lower_node", "upper_node")),
+            index=pd.MultiIndex.from_tuples(idx, names=("z_lower", "z_upper")),
         )
-        return out.sort_values("z_lower", kind="mergesort")
+        # store node ids as ints (came through float in dict)
+        out["lower_node"] = out["lower_node"].astype(int)
+        out["upper_node"] = out["upper_node"].astype(int)
+        return out
+
+
+    def story_pga_envelope(
+        self,
+        *,
+        component: object,
+        selection_set_id: int | Sequence[int] | None = None,
+        selection_set_name: str | Sequence[str] | None = None,
+        node_ids: Sequence[int] | None = None,
+        coordinates: Sequence[Sequence[float]] | None = None,
+        result_name: str = "ACCELERATION",
+        stage: Optional[str] = None,
+        dz_tol: float = 1e-3,
+        to_g: bool = False,
+        g_value: float = 9.80665,
+        reduce_nodes: str = "max_abs",  # "max_abs" | "max" | "min"
+    ) -> pd.DataFrame:
+        """
+        Story acceleration envelope (max, min, pga) using z-tolerance clustering.
+
+        reduce_nodes:
+        - "max_abs": pga is max abs over nodes at story (typical)
+        - "max":     story peak = max over nodes then over time (positive)
+        - "min":     story peak = min over nodes then over time (negative)
+
+        Returns
+        -------
+        DataFrame indexed by story_z with:
+            n_nodes, max_acc, min_acc, pga, ctrl_node_max, ctrl_node_min, ctrl_node_pga
+        """
+        stories = self._resolve_story_nodes_by_z_tol(
+            selection_set_id=selection_set_id,
+            selection_set_name=selection_set_name,
+            node_ids=node_ids,
+            coordinates=coordinates,
+            dz_tol=dz_tol,
+        )
+
+        # all ids (union)
+        all_ids: list[int] = sorted({nid for _, nodes in stories for nid in nodes})
+        if not all_ids:
+            raise ValueError("No nodes resolved.")
+
+        s = self.fetch(result_name=result_name, component=component, node_ids=all_ids)
+
+        # multi-stage -> require stage
+        if isinstance(s.index, pd.MultiIndex) and s.index.nlevels == 3:
+            if stage is None:
+                stages = tuple(sorted({str(x) for x in s.index.get_level_values(0)}))
+                raise ValueError(f"Multi-stage results detected. Provide stage=... Available: {stages}")
+            s = s.xs(str(stage), level=0)
+
+        if not (isinstance(s.index, pd.MultiIndex) and s.index.nlevels == 2):
+            raise ValueError("story_pga_envelope() expects index (node_id, step) after stage selection.")
+
+        wide = s.unstack(level=-1)  # rows=node, cols=step
+        A = wide.to_numpy(dtype=float)
+        node_index = wide.index.to_numpy(dtype=int)
+
+        if to_g:
+            A = A / float(g_value)
+
+        # per-node peaks
+        max_node = np.nanmax(A, axis=1)
+        min_node = np.nanmin(A, axis=1)
+        pga_node = np.nanmax(np.abs(A), axis=1)
+
+        # map node -> row
+        row_of = {int(n): i for i, n in enumerate(node_index)}
+
+        rows = []
+        for z, nodes in stories:
+            ridx = np.asarray([row_of[int(n)] for n in nodes if int(n) in row_of], dtype=int)
+            if ridx.size == 0:
+                continue
+
+            arr_max = max_node[ridx]
+            arr_min = min_node[ridx]
+            arr_pga = pga_node[ridx]
+
+            i_max = int(np.nanargmax(arr_max))
+            i_min = int(np.nanargmin(arr_min))
+            i_pga = int(np.nanargmax(arr_pga))
+
+            rows.append(
+                {
+                    "story_z": float(z),
+                    "n_nodes": int(len(nodes)),
+                    "max_acc": float(arr_max[i_max]),
+                    "min_acc": float(arr_min[i_min]),
+                    "pga": float(arr_pga[i_pga]),
+                    "ctrl_node_max": int(nodes[i_max]),
+                    "ctrl_node_min": int(nodes[i_min]),
+                    "ctrl_node_pga": int(nodes[i_pga]),
+                }
+            )
+
+        if not rows:
+            raise ValueError("No story rows produced. Check dz_tol and node selection.")
+
+        return pd.DataFrame(rows).set_index("story_z").sort_index()
+
+
 
     # ------------------------------------------------------------------ #
     # Dynamic attribute access
