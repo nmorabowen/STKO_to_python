@@ -279,14 +279,14 @@ class MPCODataSet:
 
         print(text)
     
-    def __str__(self):
-        print(f"Model Name: {self.name}")
+    def __str__(self) -> str:
+        return f"{self.name or Path(self.hdf5_directory).name} ({self.recorder_name})"
 
-    def __repr__(self):
-        return (f"MPCODataSet(hdf5_directory='{self.hdf5_directory}', "
-                f"recorder_name='{self.recorder_name}', "
-                f"name='{self.name}', "
-                f"file_extension='{self.file_extension}', "
+    def __repr__(self) -> str:
+        return (f"MPCODataSet(hdf5_directory={str(self.hdf5_directory)!r}, "
+                f"recorder_name={self.recorder_name!r}, "
+                f"name={self.name!r}, "
+                f"file_extension={self.file_extension!r}, "
                 f"verbose={self.verbose})")
         
         
