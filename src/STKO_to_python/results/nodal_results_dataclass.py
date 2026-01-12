@@ -1099,6 +1099,119 @@ class NodalResults:
             "max_neg_residual_story_drift": float(np.nanmin(r)),
         }
 
+    def base_rocking(
+        self,
+        *,
+        node_coords_xy: Sequence[Sequence[float]],  # [(x,y), (x,y), (x,y)]
+        z_coord: float,
+        result_name: str = "DISPLACEMENT",
+        uz_component: object = 3,   # Uz
+        stage: Optional[str] = None,
+        reduce: str = "series",     # "series" | "abs_max"
+    ) -> pd.DataFrame | dict[str, float]:
+        """
+        Estimate base rocking angles from Uz at 3 base nodes.
+
+        Model:
+            w(x,y) = w0 + theta_x*y - theta_y*x
+
+        Returns
+        -------
+        If reduce="series":
+            DataFrame with columns ["theta_x_rad", "theta_y_rad", "w0"] indexed by time/step.
+        If reduce="abs_max":
+            dict with max abs of theta_x/theta_y.
+        """
+        if len(node_coords_xy) != 3:
+            raise ValueError("node_coords_xy must contain exactly 3 (x,y) points.")
+
+        # resolve node ids (nearest at given z)
+        pts = [(float(x), float(y), float(z_coord)) for x, y in node_coords_xy]
+        node_ids = self.info.nearest_node_id(pts, return_distance=False)
+        n1, n2, n3 = map(int, node_ids)
+
+        # get their plan coords (from nodes_info)
+        if self.info.nodes_info is None:
+            raise ValueError("nodes_info is required (must contain x,y) for base_rocking().")
+
+        ni = self.info.nodes_info
+        xcol = self.info._resolve_column(ni, "x", required=True)
+        ycol = self.info._resolve_column(ni, "y", required=True)
+        nid_col = self.info._resolve_column(ni, "node_id", required=False)
+
+        def _xy_of(nid: int) -> tuple[float, float]:
+            if nid_col is not None:
+                row = ni.loc[ni[nid_col].to_numpy() == nid]
+                if row.empty:
+                    raise ValueError(f"node_id={nid} not found in nodes_info.")
+                return float(row.iloc[0][xcol]), float(row.iloc[0][ycol])
+            if nid not in ni.index:
+                raise ValueError(f"node_id={nid} not found in nodes_info index.")
+            return float(ni.loc[nid, xcol]), float(ni.loc[nid, ycol])
+
+        x1, y1 = _xy_of(n1)
+        x2, y2 = _xy_of(n2)
+        x3, y3 = _xy_of(n3)
+
+        # build A matrix (3x3)
+        # w = w0 + theta_x*y - theta_y*x  => [1, y, -x] [w0, theta_x, theta_y]^T
+        A = np.array([
+            [1.0, y1, -x1],
+            [1.0, y2, -x2],
+            [1.0, y3, -x3],
+        ], dtype=float)
+
+        det = np.linalg.det(A)
+        if abs(det) < 1e-12:
+            raise ValueError("Base points are collinear (singular geometry). Choose 3 non-collinear nodes.")
+
+        Ainv = np.linalg.inv(A)
+
+        # fetch Uz for those 3 nodes
+        uz = self.fetch(result_name=result_name, component=uz_component, node_ids=[n1, n2, n3])
+
+        # stage selection
+        if isinstance(uz.index, pd.MultiIndex) and uz.index.nlevels == 3:
+            if stage is None:
+                stages = tuple(sorted({str(x) for x in uz.index.get_level_values(0)}))
+                raise ValueError(f"Multi-stage results detected. Provide stage=... Available: {stages}")
+            uz = uz.xs(str(stage), level=0)
+
+        if not (isinstance(uz.index, pd.MultiIndex) and uz.index.nlevels == 2):
+            raise ValueError("base_rocking(): expected index (node_id, step) after stage selection.")
+
+        # wide: rows=node, cols=step
+        W = uz.unstack(level=-1)
+        # reorder rows to match (n1,n2,n3)
+        W = W.loc[[n1, n2, n3]]
+
+        # solve for each step: p = Ainv @ w
+        # p = [w0, theta_x, theta_y]
+        w_steps = W.to_numpy(dtype=float)           # (3, nsteps)
+        p_steps = Ainv @ w_steps                    # (3, nsteps)
+
+        out = pd.DataFrame(
+            {
+                "w0": p_steps[0, :],
+                "theta_x_rad": p_steps[1, :],
+                "theta_y_rad": p_steps[2, :],
+            },
+            index=W.columns,  # step index
+        )
+
+        if reduce == "series":
+            return out
+
+        if reduce == "abs_max":
+            return {
+                "theta_x_abs_max": float(np.nanmax(np.abs(out["theta_x_rad"].to_numpy()))),
+                "theta_y_abs_max": float(np.nanmax(np.abs(out["theta_y_rad"].to_numpy()))),
+            }
+
+        raise ValueError("reduce must be 'series' or 'abs_max'.")
+
+
+
     # ------------------------------------------------------------------ #
     # Dynamic attribute access
     # ------------------------------------------------------------------ #
