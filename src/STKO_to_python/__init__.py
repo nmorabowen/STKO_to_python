@@ -20,6 +20,8 @@ from .utilities.attribute_dictionary_class import AttrDict
 from .results.nodal_results_dataclass import NodalResults
 from .results.nodal_results_plotting import NodalResultsPlotter
 
+from .MPCOList import MPCOResults
+
 __all__ = [
     "MPCODataSet",
     "HDF5Utils",
@@ -34,4 +36,5 @@ __all__ = [
     "AttrDict",
     "NodalResults",
     "NodalResultsPlotter",
+    "MPCOResults",
 ]
