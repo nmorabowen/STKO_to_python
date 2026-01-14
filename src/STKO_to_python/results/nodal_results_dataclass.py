@@ -764,22 +764,26 @@ class NodalResults:
         stage: Optional[str] = None,
         signed: bool = True,
         reduce: str = "series",  # "series" | "abs_max" | "max" | "min"
-    ) -> pd.Series | float:
+        return_residual: bool = False,
+        return_quality: bool = False,
+    ) -> (
+        pd.Series
+        | float
+        | tuple[pd.Series | float, pd.DataFrame]
+    ):
         """
         Roof torsion (rotation about z) estimated from 2 roof nodes A, B.
 
         Uses small-rotation relation:
             theta(t) = ([du, dv] · [-dy, dx]) / (dx^2 + dy^2)
 
-        Inputs
-        ------
-        Provide either:
-          - node_a_id and node_b_id, or
-          - node_a_coord and node_b_coord (each as (x,y) or (x,y,z))
+        If return_residual/return_quality is True, returns a debug DataFrame
+        indexed by the same time/step index as theta, including residual terms.
 
         Returns
         -------
-        Series of theta(t) [rad] if reduce="series", otherwise a float peak/reduced value.
+        - theta series [rad] if reduce="series", else a float
+        - optionally (theta_out, debug_df)
         """
 
         # ----------------------------
@@ -838,13 +842,16 @@ class NodalResults:
         if L2 == 0.0:
             raise ValueError("Reference nodes have identical (x,y) → baseline length is zero.")
 
+        # p = (-dy, dx)
+        px = -dy
+        py = dx
+
         # ----------------------------
         # Fetch Ux, Uy for both nodes
         # ----------------------------
         ux = self.fetch(result_name=result_name, component=ux_component, node_ids=[a_id, b_id])
         uy = self.fetch(result_name=result_name, component=uy_component, node_ids=[a_id, b_id])
 
-        # stage selection if needed
         def _select_stage(s: pd.Series | pd.DataFrame):
             if isinstance(s.index, pd.MultiIndex) and s.index.nlevels == 3:
                 if stage is None:
@@ -870,26 +877,71 @@ class NodalResults:
         du = (ux_b - ux_a).to_numpy(dtype=float)
         dv = (uy_b - uy_a).to_numpy(dtype=float)
 
-        # theta(t) = ([du, dv] · [-dy, dx]) / (dx^2 + dy^2)
-        theta = (du * (-dy) + dv * (dx)) / L2
+        # ----------------------------
+        # Projection (theta)
+        # ----------------------------
+        theta = (du * px + dv * py) / L2
         if not signed:
             theta = np.abs(theta)
 
-        out = pd.Series(theta, index=ux_a.index, name="roof_torsion_theta_rad")
+        theta_s = pd.Series(theta, index=ux_a.index, name="roof_torsion_theta_rad")
+
+        # ----------------------------
+        # Optional residual + quality
+        # ----------------------------
+        debug: pd.DataFrame | None = None
+        if return_residual or return_quality:
+            du_rot = theta * px
+            dv_rot = theta * py
+            ru = du - du_rot
+            rv = dv - dv_rot
+
+            debug_dict: dict[str, np.ndarray] = {
+                "du": du,
+                "dv": dv,
+                "du_rot": du_rot,
+                "dv_rot": dv_rot,
+                "ru": ru,
+                "rv": rv,
+            }
+
+            if return_quality:
+                rel_norm = np.sqrt(du * du + dv * dv)
+                res_norm = np.sqrt(ru * ru + rv * rv)
+                rigidity_ratio = np.divide(
+                    res_norm,
+                    rel_norm,
+                    out=np.full_like(res_norm, np.nan, dtype=float),
+                    where=rel_norm > 0.0,
+                )
+                debug_dict.update(
+                    {
+                        "rel_norm": rel_norm,
+                        "res_norm": res_norm,
+                        "rigidity_ratio": rigidity_ratio,  # ρ(t)=||r||/||Δu||
+                    }
+                )
+
+            debug = pd.DataFrame(debug_dict, index=ux_a.index)
 
         # ----------------------------
         # Reduction
         # ----------------------------
         if reduce == "series":
-            return out
-        if reduce == "abs_max":
-            return float(np.nanmax(np.abs(out.to_numpy(dtype=float))))
-        if reduce == "max":
-            return float(np.nanmax(out.to_numpy(dtype=float)))
-        if reduce == "min":
-            return float(np.nanmin(out.to_numpy(dtype=float)))
+            theta_out: pd.Series | float = theta_s
+        elif reduce == "abs_max":
+            theta_out = float(np.nanmax(np.abs(theta_s.to_numpy(dtype=float))))
+        elif reduce == "max":
+            theta_out = float(np.nanmax(theta_s.to_numpy(dtype=float)))
+        elif reduce == "min":
+            theta_out = float(np.nanmin(theta_s.to_numpy(dtype=float)))
+        else:
+            raise ValueError("reduce must be one of: 'series', 'abs_max', 'max', 'min'.")
 
-        raise ValueError("reduce must be one of: 'series', 'abs_max', 'max', 'min'.")
+        if debug is not None:
+            return theta_out, debug
+
+        return theta_out
 
     def residual_drift(
         self,
@@ -1108,29 +1160,67 @@ class NodalResults:
         uz_component: object = 3,   # Uz
         stage: Optional[str] = None,
         reduce: str = "series",     # "series" | "abs_max"
+        det_tol: float = 1e-12,
     ) -> pd.DataFrame | dict[str, float]:
         """
         Estimate base rocking angles from Uz at 3 base nodes.
 
-        Model:
+        Model (small rotations):
             w(x,y) = w0 + theta_x*y - theta_y*x
 
-        Returns
-        -------
-        If reduce="series":
-            DataFrame with columns ["theta_x_rad", "theta_y_rad", "w0"] indexed by time/step.
-        If reduce="abs_max":
-            dict with max abs of theta_x/theta_y.
+        Outputs (reduce="series"):
+            w0
+            theta_x_rad
+            theta_y_rad
+            theta_mag_rad = sqrt(theta_x_rad^2 + theta_y_rad^2)
+            is_singular   = True if geometry was singular/collinear after snapping (fallback used)
+
+        Fallback behavior
+        -----------------
+        If the 3 resolved points are collinear (or duplicate) such that the geometry matrix is singular,
+        we assume no rocking:
+            theta_x_rad(t) = 0
+            theta_y_rad(t) = 0
+            theta_mag_rad(t) = 0
+        and we still compute w0(t) as the mean Uz of the 3 nodes. The method will NOT raise.
+
+        Outputs (reduce="abs_max"):
+            theta_x_abs_max
+            theta_y_abs_max
+            theta_mag_abs_max
         """
         if len(node_coords_xy) != 3:
             raise ValueError("node_coords_xy must contain exactly 3 (x,y) points.")
 
-        # resolve node ids (nearest at given z)
+        # --------------------------------------------------
+        # Resolve node ids (nearest at given z)
+        # --------------------------------------------------
         pts = [(float(x), float(y), float(z_coord)) for x, y in node_coords_xy]
         node_ids = self.info.nearest_node_id(pts, return_distance=False)
         n1, n2, n3 = map(int, node_ids)
 
-        # get their plan coords (from nodes_info)
+        # --------------------------------------------------
+        # Fetch Uz for those 3 nodes (we need this also for fallback)
+        # --------------------------------------------------
+        uz = self.fetch(result_name=result_name, component=uz_component, node_ids=[n1, n2, n3])
+
+        # stage selection
+        if isinstance(uz.index, pd.MultiIndex) and uz.index.nlevels == 3:
+            if stage is None:
+                stages = tuple(sorted({str(x) for x in uz.index.get_level_values(0)}))
+                raise ValueError(f"Multi-stage results detected. Provide stage=... Available: {stages}")
+            uz = uz.xs(str(stage), level=0)
+
+        if not (isinstance(uz.index, pd.MultiIndex) and uz.index.nlevels == 2):
+            raise ValueError("base_rocking(): expected index (node_id, step) after stage selection.")
+
+        # wide: rows=node, cols=step
+        W = uz.unstack(level=-1).loc[[n1, n2, n3]]
+        w_steps = W.to_numpy(dtype=float)  # (3, nsteps)
+
+        # --------------------------------------------------
+        # Get plan coords for resolved nodes
+        # --------------------------------------------------
         if self.info.nodes_info is None:
             raise ValueError("nodes_info is required (must contain x,y) for base_rocking().")
 
@@ -1153,42 +1243,60 @@ class NodalResults:
         x2, y2 = _xy_of(n2)
         x3, y3 = _xy_of(n3)
 
-        # build A matrix (3x3)
+        # --------------------------------------------------
+        # Build geometry matrix A and detect singularity
         # w = w0 + theta_x*y - theta_y*x  => [1, y, -x] [w0, theta_x, theta_y]^T
-        A = np.array([
-            [1.0, y1, -x1],
-            [1.0, y2, -x2],
-            [1.0, y3, -x3],
-        ], dtype=float)
+        # --------------------------------------------------
+        A = np.array(
+            [
+                [1.0, y1, -x1],
+                [1.0, y2, -x2],
+                [1.0, y3, -x3],
+            ],
+            dtype=float,
+        )
 
-        det = np.linalg.det(A)
-        if abs(det) < 1e-12:
-            raise ValueError("Base points are collinear (singular geometry). Choose 3 non-collinear nodes.")
+        # duplicate-node guard (after snapping)
+        duplicate = (len({n1, n2, n3}) < 3)
 
-        Ainv = np.linalg.inv(A)
+        det = float(np.linalg.det(A))
+        singular = duplicate or (abs(det) < float(det_tol))
 
-        # fetch Uz for those 3 nodes
-        uz = self.fetch(result_name=result_name, component=uz_component, node_ids=[n1, n2, n3])
+        # --------------------------------------------------
+        # Fallback: singular geometry -> assume no rocking
+        # --------------------------------------------------
+        if singular:
+            w0 = np.nanmean(w_steps, axis=0)  # (nsteps,)
 
-        # stage selection
-        if isinstance(uz.index, pd.MultiIndex) and uz.index.nlevels == 3:
-            if stage is None:
-                stages = tuple(sorted({str(x) for x in uz.index.get_level_values(0)}))
-                raise ValueError(f"Multi-stage results detected. Provide stage=... Available: {stages}")
-            uz = uz.xs(str(stage), level=0)
+            out = pd.DataFrame(
+                {
+                    "w0": w0,
+                    "theta_x_rad": np.zeros_like(w0),
+                    "theta_y_rad": np.zeros_like(w0),
+                    "theta_mag_rad": np.zeros_like(w0),
+                    "is_singular": np.ones_like(w0, dtype=bool),
+                },
+                index=W.columns,  # step index
+            )
 
-        if not (isinstance(uz.index, pd.MultiIndex) and uz.index.nlevels == 2):
-            raise ValueError("base_rocking(): expected index (node_id, step) after stage selection.")
+            if reduce == "series":
+                return out
 
-        # wide: rows=node, cols=step
-        W = uz.unstack(level=-1)
-        # reorder rows to match (n1,n2,n3)
-        W = W.loc[[n1, n2, n3]]
+            if reduce == "abs_max":
+                return {
+                    "theta_x_abs_max": 0.0,
+                    "theta_y_abs_max": 0.0,
+                    "theta_mag_abs_max": 0.0,
+                }
 
-        # solve for each step: p = Ainv @ w
+            raise ValueError("reduce must be 'series' or 'abs_max'.")
+
+        # --------------------------------------------------
+        # Solve for each step: p = Ainv @ w
         # p = [w0, theta_x, theta_y]
-        w_steps = W.to_numpy(dtype=float)           # (3, nsteps)
-        p_steps = Ainv @ w_steps                    # (3, nsteps)
+        # --------------------------------------------------
+        Ainv = np.linalg.inv(A)
+        p_steps = Ainv @ w_steps  # (3, nsteps)
 
         out = pd.DataFrame(
             {
@@ -1196,20 +1304,212 @@ class NodalResults:
                 "theta_x_rad": p_steps[1, :],
                 "theta_y_rad": p_steps[2, :],
             },
-            index=W.columns,  # step index
+            index=W.columns,
         )
+
+        out["theta_mag_rad"] = np.sqrt(
+            out["theta_x_rad"].to_numpy(dtype=float) ** 2
+            + out["theta_y_rad"].to_numpy(dtype=float) ** 2
+        )
+        out["is_singular"] = False
 
         if reduce == "series":
             return out
 
         if reduce == "abs_max":
+            tx = out["theta_x_rad"].to_numpy(dtype=float)
+            ty = out["theta_y_rad"].to_numpy(dtype=float)
+            tm = out["theta_mag_rad"].to_numpy(dtype=float)
             return {
-                "theta_x_abs_max": float(np.nanmax(np.abs(out["theta_x_rad"].to_numpy()))),
-                "theta_y_abs_max": float(np.nanmax(np.abs(out["theta_y_rad"].to_numpy()))),
+                "theta_x_abs_max": float(np.nanmax(np.abs(tx))),
+                "theta_y_abs_max": float(np.nanmax(np.abs(ty))),
+                "theta_mag_abs_max": float(np.nanmax(np.abs(tm))),
             }
 
         raise ValueError("reduce must be 'series' or 'abs_max'.")
 
+
+    def asce_torsional_irregularity(
+        self,
+        *,
+        component: object,
+        side_a_top: tuple[float, float, float],
+        side_a_bottom: tuple[float, float, float],
+        side_b_top: tuple[float, float, float],
+        side_b_bottom: tuple[float, float, float],
+        result_name: str = "DISPLACEMENT",
+        stage: Optional[str] = None,
+        reduce_time: str = "abs_max",          # "abs_max" | "max" | "min"
+        definition: str = "max_over_avg",      # "max_over_avg" | "max_over_min"
+        eps: float = 1e-16,
+        signed: bool = True,
+        tail: int | None = None,
+    ) -> dict[str, Any]:
+        """
+        Compute ASCE-style torsional irregularity ratio from *edge drifts* at a story.
+
+        Inputs are *coordinates only* (x,y,z) tuples, resolved to nearest node IDs.
+
+        Drift time series per side:
+            drA(t) = (u_A_top(t) - u_A_bottom(t)) / (z_top - z_bottom)
+            drB(t) = (u_B_top(t) - u_B_bottom(t)) / (z_top - z_bottom)
+
+        Time reduction:
+            - "abs_max": max(|dr(t)|)
+            - "max":     max(dr(t))
+            - "min":     min(dr(t))
+
+        Ratio definitions:
+            - "max_over_avg":  max(DA, DB) / avg(DA, DB)
+            - "max_over_min":  max(DA, DB) / min(DA, DB)
+
+        Notes
+        -----
+        - This is a single-story check (user provides bottom & top points for that story).
+        - No center points are used.
+        - If tail is provided, the last `tail` samples are ignored for the reduction
+        (useful if your record ends with solver noise / weird tail). Set tail=None to keep all.
+
+        Returns
+        -------
+        dict with:
+            drift_A, drift_B, drift_avg, drift_max, ratio, ctrl_side,
+            node_ids (resolved), metadata
+        """
+        # ----------------------------
+        # validate coords
+        # ----------------------------
+        def _as_xyz(pt: tuple[float, float, float], name: str) -> tuple[float, float, float]:
+            if not isinstance(pt, tuple):
+                raise TypeError(f"{name} must be a tuple (x,y,z). Got {type(pt).__name__}.")
+            if len(pt) != 3:
+                raise TypeError(f"{name} must be a tuple of length 3 (x,y,z). Got len={len(pt)}.")
+            x, y, z = pt
+            return float(x), float(y), float(z)
+
+        A_top = _as_xyz(side_a_top, "side_a_top")
+        A_bot = _as_xyz(side_a_bottom, "side_a_bottom")
+        B_top = _as_xyz(side_b_top, "side_b_top")
+        B_bot = _as_xyz(side_b_bottom, "side_b_bottom")
+
+        # ----------------------------
+        # resolve node ids (nearest)
+        # ----------------------------
+        pts = [A_top, A_bot, B_top, B_bot]
+        node_ids = self.info.nearest_node_id(pts, return_distance=False)
+        a_top_id, a_bot_id, b_top_id, b_bot_id = map(int, node_ids)
+
+        # sanity
+        if a_top_id == a_bot_id:
+            raise ValueError("Side A top and bottom resolved to the same node id (cannot compute drift).")
+        if b_top_id == b_bot_id:
+            raise ValueError("Side B top and bottom resolved to the same node id (cannot compute drift).")
+
+        # ----------------------------
+        # compute drift time histories
+        # ----------------------------
+        drA = self.drift(
+            top=a_top_id,
+            bottom=a_bot_id,
+            component=component,
+            result_name=result_name,
+            stage=stage,
+            signed=signed,
+            reduce="series",
+        )
+        drB = self.drift(
+            top=b_top_id,
+            bottom=b_bot_id,
+            component=component,
+            result_name=result_name,
+            stage=stage,
+            signed=signed,
+            reduce="series",
+        )
+
+        # align in case step indices differ
+        drA, drB = drA.align(drB, join="inner")
+        if drA.size == 0:
+            raise ValueError("No overlapping steps between Side A and Side B drift series.")
+
+        # optional tail trimming (drop last samples)
+        if tail is not None:
+            t = int(tail)
+            if t < 0:
+                raise ValueError("tail must be >= 0 or None.")
+            if t > 0:
+                if t >= drA.size:
+                    raise ValueError("tail is >= series length; nothing would remain.")
+                drA = drA.iloc[:-t]
+                drB = drB.iloc[:-t]
+
+        # ----------------------------
+        # reduce over time
+        # ----------------------------
+        a = drA.to_numpy(dtype=float)
+        b = drB.to_numpy(dtype=float)
+
+        def _reduce(x: np.ndarray, how: str) -> float:
+            if x.size == 0:
+                return float("nan")
+            if how == "abs_max":
+                return float(np.nanmax(np.abs(x)))
+            if how == "max":
+                return float(np.nanmax(x))
+            if how == "min":
+                return float(np.nanmin(x))
+            raise ValueError("reduce_time must be one of: 'abs_max', 'max', 'min'.")
+
+        DA = _reduce(a, reduce_time)
+        DB = _reduce(b, reduce_time)
+
+        # ensure positive magnitudes for ratio when using abs-based definitions
+        # (even if reduce_time="max"/"min", ratio should typically use magnitudes)
+        mA = float(abs(DA))
+        mB = float(abs(DB))
+
+        drift_max = max(mA, mB)
+        drift_min = min(mA, mB)
+        drift_avg = 0.5 * (mA + mB)
+
+        # ----------------------------
+        # ratio definition
+        # ----------------------------
+        if definition == "max_over_avg":
+            denom = max(drift_avg, float(eps))
+            ratio = drift_max / denom
+        elif definition == "max_over_min":
+            denom = max(drift_min, float(eps))
+            ratio = drift_max / denom
+        else:
+            raise ValueError("definition must be 'max_over_avg' or 'max_over_min'.")
+
+        ctrl_side = "A" if mA >= mB else "B"
+
+        return {
+            "drift_A": mA,
+            "drift_B": mB,
+            "drift_avg": drift_avg,
+            "drift_max": drift_max,
+            "ratio": float(ratio),
+            "ctrl_side": ctrl_side,
+            "node_ids": {
+                "A_top": a_top_id,
+                "A_bottom": a_bot_id,
+                "B_top": b_top_id,
+                "B_bottom": b_bot_id,
+            },
+            "metadata": {
+                "component": component,
+                "result_name": result_name,
+                "stage": stage,
+                "reduce_time": reduce_time,
+                "definition": definition,
+                "signed_drift_series": bool(signed),
+                "tail_dropped": int(tail or 0),
+                "eps": float(eps),
+            },
+        }
 
 
     # ------------------------------------------------------------------ #

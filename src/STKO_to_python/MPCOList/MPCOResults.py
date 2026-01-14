@@ -12,6 +12,7 @@ from typing import (
     Sequence,
     Tuple,
     TypeAlias,
+    Literal
 )
 
 import fnmatch
@@ -1353,45 +1354,157 @@ class MPCOResults:
         order: Callable[[Key, Any], Any] | None = None,
         xlim: tuple[float, float] | None = None,
         ylim: tuple[float, float] | None = None,
+        plot_residual: Literal[None, "norm", "rigidity"] = None,
+        # --- updates (match plot_drift "labels & so on") ---
+        group_by_color: str | None = None,   # None | "sta" | "rup" | "letter" | "number"
+        linewidth: float = 1.0,
+        legend_fontsize: float = 7,
+        legend_ncol: int | None = None,
+        legend_frameon: bool = False,
     ):
+        """
+        Plot roof torsion θ(t) computed from two reference roof points A,B.
+
+        If plot_residual is provided:
+        - "norm"     plots ||r(t)|| (displacement units)
+        - "rigidity" plots ||r||/||Δu|| (dimensionless)
+
+        Requires NodalResults.roof_torsion(..., return_residual=True, return_quality=True).
+        """
+        valid_groups = {None, "sta", "rup", "letter", "number"}
+        if group_by_color not in valid_groups:
+            raise ValueError(f"group_by_color must be one of {valid_groups}")
+
         pairs = self.select(model=model, station=station, rupture=rupture, order=order)
         if not pairs:
             raise ValueError("No matching results for the given selection.")
 
-        def plot_one(ax: plt.Axes, k: Key, nr: Any) -> tuple[float, float, float, float] | None:
-            tors = nr.roof_torsion(
-                node_a_coord=(*node_a_xy, float(z_coord)),
-                node_b_coord=(*node_b_xy, float(z_coord)),
-            )
+        pairs = sorted(pairs, key=lambda kv: kv[0])
+        palette = list(plt.rcParams["axes.prop_cycle"].by_key().get("color", ["C0", "C1", "C2", "C3"]))
+
+        def _group_value(k: Key) -> str:
+            m, s, r = k
+            if group_by_color is None:
+                return ""
+            if group_by_color == "sta":
+                return str(s)
+            if group_by_color == "rup":
+                return str(r)
+            if group_by_color == "letter":
+                mm = str(m)
+                m2 = re.search(r"([A-Da-d])\s*$", mm)
+                return m2.group(1).upper() if m2 else ""
+            if group_by_color == "number":
+                mm = str(m)
+                m2 = re.search(r"([1-4])", mm)
+                return m2.group(1) if m2 else ""
+            raise RuntimeError("unreachable")
+
+        # color map
+        color_map: dict[Any, str] = {}
+        if group_by_color is None:
+            for i, (k, _) in enumerate(pairs):
+                color_map[k] = palette[i % len(palette)]
+        else:
+            groups_seen: list[str] = []
+            for k, _ in pairs:
+                g = _group_value(k)
+                if g not in groups_seen:
+                    groups_seen.append(g)
+            for i, g in enumerate(sorted(groups_seen)):
+                color_map[g] = palette[i % len(palette)]
+
+        def plot_one(ax: plt.Axes, k: Key, nr: Any):
+            # --- compute y series ---
+            if plot_residual is None:
+                tors = nr.roof_torsion(
+                    node_a_coord=(*node_a_xy, float(z_coord)),
+                    node_b_coord=(*node_b_xy, float(z_coord)),
+                    reduce="series",
+                )
+                y = np.asarray(tors.values, dtype=float)
+            else:
+                tors, dbg = nr.roof_torsion(
+                    node_a_coord=(*node_a_xy, float(z_coord)),
+                    node_b_coord=(*node_b_xy, float(z_coord)),
+                    reduce="series",
+                    return_residual=True,
+                    return_quality=True,
+                )
+
+                if plot_residual == "norm":
+                    y = dbg["res_norm"].to_numpy(dtype=float)
+                elif plot_residual == "rigidity":
+                    y = dbg["rigidity_ratio"].to_numpy(dtype=float)
+                else:
+                    raise ValueError(f"Unknown plot_residual={plot_residual!r}")
+
+            # --- align x/y ---
             t = np.asarray(nr.time, dtype=float)
-            y = np.asarray(tors.values, dtype=float)
             t2, y2, *_ = self._align_xy(t, y)
             if t2.size == 0:
                 return None
 
             label = self._label_for(k, nr)
             kw = self._style_for_key(k)
+            kw["linewidth"] = linewidth
+
+            if group_by_color is None:
+                kw["color"] = color_map[k]
+            else:
+                kw["color"] = color_map[_group_value(k)]
+
             ax.plot(t2, y2, label=label, **kw)
 
             xmin, xmax = float(np.nanmin(t2)), float(np.nanmax(t2))
             ymin, ymax = float(np.nanmin(y2)), float(np.nanmax(y2))
             return (xmin, xmax, ymin, ymax)
 
-        return self._plot_overlay_or_facets(
+        ylabel = {
+            None: "Roof torsion (rad)",
+            "norm": "Residual magnitude ‖r(t)‖ (disp. units)",
+            "rigidity": "Rigidity ratio ‖r‖ / ‖Δu‖",
+        }[plot_residual]
+
+        out = self._plot_overlay_or_facets(
             pairs=pairs,
             plot_one=plot_one,
             overlay=overlay,
             figsize_overlay=figsize,
             figsize_single=figsize,
-            title=title or "Roof torsion",
+            title=title
+            or ("Roof torsion" if plot_residual is None else f"Roof torsion residual ({plot_residual})"),
             xlabel="Time (s)",
-            ylabel="Roof torsion (rad)",
+            ylabel=ylabel,
             xlim=xlim,
             ylim=ylim,
             sym_x=False,
-            sym_y=True,
+            sym_y=(plot_residual is None),  # torsion symmetric; residuals are nonnegative
             vline0=False,
+            legend=False,  # <- we place legend below, like drift
+            grid=True,
         )
+
+        def _legend(fig: plt.Figure, ax: plt.Axes) -> None:
+            self._legend_below(
+                fig,
+                ax,
+                fontsize=legend_fontsize,
+                ncol=legend_ncol,
+                frameon=legend_frameon,
+            )
+
+        if overlay:
+            fig, ax = out
+            _legend(fig, ax)
+            plt.tight_layout()
+            return fig, ax
+
+        figs = out
+        for fig, ax in figs:
+            _legend(fig, ax)
+            plt.tight_layout()
+        return figs
 
     def plot_base_rocking(
         self,
@@ -1402,7 +1515,7 @@ class MPCOResults:
             (38250, 5750),
             (5750, 25250),
         ),
-        component: str = "theta_x_rad",
+        component: str = "theta_mag_rad",   # <- NEW DEFAULT (norm)
         model: str | Iterable[str] | None = None,
         station: str | Iterable[str] | None = None,
         rupture: str | Iterable[str] | None = None,
@@ -1412,10 +1525,64 @@ class MPCOResults:
         order: Callable[[Key, Any], Any] | None = None,
         xlim: tuple[float, float] | None = None,
         ylim: tuple[float, float] | None = None,
+        # styling like your other plots
+        group_by_color: str | None = None,   # None | "sta" | "rup" | "letter" | "number"
+        linewidth: float = 1.0,
+        legend_fontsize: float = 7,
+        legend_ncol: int | None = None,
+        legend_frameon: bool = False,
     ):
+        """
+        Plot base rocking time history.
+
+        component:
+        - "theta_mag_rad" (default)  -> sqrt(theta_x^2 + theta_y^2)
+        - "theta_x_rad"
+        - "theta_y_rad"
+        - "w0"
+        """
+        valid_groups = {None, "sta", "rup", "letter", "number"}
+        if group_by_color not in valid_groups:
+            raise ValueError(f"group_by_color must be one of {valid_groups}")
+
         pairs = self.select(model=model, station=station, rupture=rupture, order=order)
         if not pairs:
             raise ValueError("No matching results for the given selection.")
+        pairs = sorted(pairs, key=lambda kv: kv[0])
+
+        palette = list(plt.rcParams["axes.prop_cycle"].by_key().get("color", ["C0", "C1", "C2", "C3"]))
+
+        def _group_value(k: Key) -> str:
+            m, s, r = k
+            if group_by_color is None:
+                return ""
+            if group_by_color == "sta":
+                return str(s)
+            if group_by_color == "rup":
+                return str(r)
+            if group_by_color == "letter":
+                mm = str(m)
+                m2 = re.search(r"([A-Da-d])\s*$", mm)
+                return m2.group(1).upper() if m2 else ""
+            if group_by_color == "number":
+                mm = str(m)
+                m2 = re.search(r"([1-4])", mm)
+                return m2.group(1) if m2 else ""
+            raise RuntimeError("unreachable")
+
+        # color map
+        color_map: dict[Any, str] = {}
+        if group_by_color is None:
+            for i, (k, _) in enumerate(pairs):
+                color_map[k] = palette[i % len(palette)]
+        else:
+            groups_seen: list[str] = []
+            for k, _ in pairs:
+                g = _group_value(k)
+                if g not in groups_seen:
+                    groups_seen.append(g)
+            for i, g in enumerate(sorted(groups_seen)):
+                color_map[g] = palette[i % len(palette)]
 
         def plot_one(ax: plt.Axes, k: Key, nr: Any) -> tuple[float, float, float, float] | None:
             df = nr.base_rocking(
@@ -1425,6 +1592,13 @@ class MPCOResults:
                 uz_component=3,
                 reduce="series",
             )
+
+            if component not in df.columns:
+                raise ValueError(
+                    f"component={component!r} not in base_rocking output columns {tuple(df.columns)}. "
+                    "Use 'theta_mag_rad', 'theta_x_rad', 'theta_y_rad', or 'w0'."
+                )
+
             y = np.asarray(df[component].to_numpy(), dtype=float)
 
             t = getattr(nr, "time", None)
@@ -1439,13 +1613,27 @@ class MPCOResults:
 
             label = self._label_for(k, nr)
             kw = self._style_for_key(k)
+            kw["linewidth"] = linewidth
+
+            if group_by_color is None:
+                kw["color"] = color_map[k]
+            else:
+                kw["color"] = color_map[_group_value(k)]
+
             ax.plot(x2, y2, label=label, **kw)
 
             xmin, xmax = float(np.nanmin(x2)), float(np.nanmax(x2))
             ymin, ymax = float(np.nanmin(y2)), float(np.nanmax(y2))
             return (xmin, xmax, ymin, ymax)
 
-        return self._plot_overlay_or_facets(
+        ylabel = {
+            "theta_mag_rad": "Base rocking |θ| (rad)",
+            "theta_x_rad": "Base rocking θx (rad)",
+            "theta_y_rad": "Base rocking θy (rad)",
+            "w0": "Base vertical translation w0 (disp. units)",
+        }.get(component, f"Base rocking ({component})")
+
+        out = self._plot_overlay_or_facets(
             pairs=pairs,
             plot_one=plot_one,
             overlay=overlay,
@@ -1453,13 +1641,36 @@ class MPCOResults:
             figsize_single=figsize,
             title=title or f"Base rocking — {component}",
             xlabel="Time (s)",
-            ylabel=f"Base rocking ({component}) [rad]",
+            ylabel=ylabel,
             xlim=xlim,
             ylim=ylim,
             sym_x=False,
-            sym_y=True,
+            sym_y=(component != "theta_mag_rad"),  # |θ| is nonnegative; others symmetric-ish
             vline0=False,
+            legend=False,
+            grid=True,
         )
+
+        def _legend(fig: plt.Figure, ax: plt.Axes) -> None:
+            self._legend_below(
+                fig,
+                ax,
+                fontsize=legend_fontsize,
+                ncol=legend_ncol,
+                frameon=legend_frameon,
+            )
+
+        if overlay:
+            fig, ax = out
+            _legend(fig, ax)
+            plt.tight_layout()
+            return fig, ax
+
+        figs = out
+        for fig, ax in figs:
+            _legend(fig, ax)
+            plt.tight_layout()
+        return figs
 
     # ------------------------------------------------------------------
     # Compute table
@@ -2028,3 +2239,240 @@ class MPCOResults:
         ax.set_title(title or f"{metric} per Tier–Case ({agg})", pad=14)
         plt.tight_layout()
         plt.show()
+
+    def plot_asce_torsional_irregularity_heatmap(
+        self,
+        *,
+        component: int = 1,
+        side_a_top: tuple[float, float, float],
+        side_a_bottom: tuple[float, float, float],
+        side_b_top: tuple[float, float, float],
+        side_b_bottom: tuple[float, float, float],
+        result_name: str = "DISPLACEMENT",
+        stage: str | None = None,
+        reduce_time: str = "abs_max",          # "abs_max" | "max" | "min"
+        definition: str = "max_over_avg",      # "max_over_avg" | "max_over_min"
+        eps: float = 1e-16,
+        # selection
+        model: str | Iterable[str] | None = None,
+        station: str | Iterable[str] | None = None,
+        rupture: str | Iterable[str] | None = None,
+        # plot options (mirrors plot_metric_heatmap)
+        title: str | None = None,
+        cmap: str = "viridis",
+        figsize: tuple[float, float] = (7, 4.5),
+        use_seaborn: bool = True,
+        show_std: bool = True,
+        std_k: float = 1.0,
+        fmt_mean: str = ".2f",
+        fmt_std: str = ".2f",
+        annot: bool = True,
+        center: float | None = None,
+        vmin: float | None = None,
+        vmax: float | None = None,
+    ):
+        metric_name = "asce_torsion_ratio"
+
+        metrics = {
+            metric_name: lambda _k, nr: nr.asce_torsional_irregularity(
+                component=component,
+                side_a_top=side_a_top,
+                side_a_bottom=side_a_bottom,
+                side_b_top=side_b_top,
+                side_b_bottom=side_b_bottom,
+                result_name=result_name,
+                stage=stage,
+                reduce_time=reduce_time,
+                definition=definition,
+                eps=eps,
+            )["ratio"]
+        }
+
+        T = self.compute_table(
+            metrics=metrics,
+            model=model,
+            station=station,
+            rupture=rupture,
+            include_label=False,
+        ).dropna(subset=[metric_name])
+
+        if T.empty:
+            raise ValueError("No values found for ASCE torsional irregularity ratio for the given selection.")
+
+        tiers, cases = [], []
+        for m in T["model"].astype(str).tolist():
+            t, c = self.parse_tier_letter(m)
+            tiers.append(t)
+            cases.append(c)
+
+        T = T.copy()
+        T["Tier"] = tiers
+        T["Case"] = cases
+
+        gb = T.groupby(["Case", "Tier"])[metric_name]
+
+        if show_std:
+            mat_mean = gb.mean().unstack("Tier").reindex(index=list("ABCD"), columns=[1, 2, 3, 4])
+            mat_std = gb.std(ddof=1).unstack("Tier").reindex(index=list("ABCD"), columns=[1, 2, 3, 4])
+        else:
+            mat_mean = gb.mean().unstack("Tier").reindex(index=list("ABCD"), columns=[1, 2, 3, 4])
+            mat_std = None
+
+        Z = mat_mean.to_numpy(dtype=float)
+
+        annot_data = None
+        if annot:
+            annot_data = np.full(Z.shape, "", dtype=object)
+            for i, case in enumerate(mat_mean.index):
+                for j, tier in enumerate(mat_mean.columns):
+                    v = mat_mean.loc[case, tier]
+                    if pd.isna(v):
+                        continue
+                    if show_std and mat_std is not None:
+                        s = mat_std.loc[case, tier]
+                        if pd.isna(s):
+                            annot_data[i, j] = format(float(v), fmt_mean)
+                        else:
+                            annot_data[i, j] = f"{format(float(v), fmt_mean)}\n±{format(float(std_k*s), fmt_std)}"
+                    else:
+                        annot_data[i, j] = format(float(v), fmt_mean)
+
+        fig, ax = plt.subplots(figsize=figsize)
+
+        if use_seaborn:
+            try:
+                import seaborn as sns
+                sns.set_theme(style="white")
+                sns.heatmap(
+                    mat_mean,
+                    ax=ax,
+                    cmap=cmap,
+                    annot=annot_data if annot else False,
+                    fmt="",
+                    linewidths=0.5,
+                    linecolor="white",
+                    cbar_kws={"label": metric_name},
+                    center=center,
+                    vmin=vmin,
+                    vmax=vmax,
+                )
+                ax.set_xlabel("Tier")
+                ax.set_ylabel("Case")
+                ax.set_xticklabels([f"Tier {c}" for c in mat_mean.columns.tolist()])
+                ax.set_yticklabels(mat_mean.index.tolist(), rotation=0)
+            except Exception:
+                use_seaborn = False
+
+        if not use_seaborn:
+            im = ax.imshow(Z, aspect="auto", interpolation="nearest", cmap=cmap, vmin=vmin, vmax=vmax)
+            ax.set_xticks(np.arange(Z.shape[1]))
+            ax.set_xticklabels([f"Tier {c}" for c in mat_mean.columns.tolist()])
+            ax.set_yticks(np.arange(Z.shape[0]))
+            ax.set_yticklabels(mat_mean.index.tolist())
+
+            if annot and annot_data is not None:
+                for i in range(Z.shape[0]):
+                    for j in range(Z.shape[1]):
+                        s = annot_data[i, j]
+                        if s:
+                            ax.text(j, i, s, ha="center", va="center", fontsize=9)
+
+            cbar = fig.colorbar(im, ax=ax, pad=0.02)
+            cbar.set_label(metric_name)
+
+            ax.set_xlabel("Tier")
+            ax.set_ylabel("Case")
+
+        if title is None:
+            title = f"ASCE torsional irregularity ratio ({definition}, {reduce_time})"
+            if show_std:
+                title += f" — mean ± {std_k:g}σ"
+        ax.set_title(title)
+
+        plt.tight_layout()
+        return fig, ax
+
+    def plot_asce_torsional_irregularity_barh(
+        self,
+        *,
+        component: int = 1,
+        side_a_top: tuple[float, float, float],
+        side_a_bottom: tuple[float, float, float],
+        side_b_top: tuple[float, float, float],
+        side_b_bottom: tuple[float, float, float],
+        result_name: str = "DISPLACEMENT",
+        stage: str | None = None,
+        reduce_time: str = "abs_max",
+        definition: str = "max_over_avg",
+        eps: float = 1e-16,
+        # selection
+        model: str | Iterable[str] | None = None,
+        station: str | Iterable[str] | None = None,
+        rupture: str | Iterable[str] | None = None,
+        # plot
+        sort: bool = True,
+        figsize: tuple[float, float] = (8, 7),
+        title: str | None = None,
+    ):
+        metric_name = "asce_torsion_ratio"
+
+        metrics = {
+            metric_name: lambda _k, nr: nr.asce_torsional_irregularity(
+                component=component,
+                side_a_top=side_a_top,
+                side_a_bottom=side_a_bottom,
+                side_b_top=side_b_top,
+                side_b_bottom=side_b_bottom,
+                result_name=result_name,
+                stage=stage,
+                reduce_time=reduce_time,
+                definition=definition,
+                eps=eps,
+            )["ratio"]
+        }
+
+        T = self.compute_table(
+            metrics=metrics,
+            model=model,
+            station=station,
+            rupture=rupture,
+            include_label=True,
+        ).dropna(subset=[metric_name])
+
+        if T.empty:
+            raise ValueError("No values found for ASCE torsional irregularity ratio for the given selection.")
+
+        # label as TierCase + station + rupture (handy)
+        tiers, cases = [], []
+        for m in T["model"].astype(str).tolist():
+            t, c = self.parse_tier_letter(m)
+            tiers.append(t)
+            cases.append(c)
+
+        T = T.copy()
+        T["Tier"] = tiers
+        T["Case"] = cases
+        T["TierCase"] = T["Tier"].astype(str) + T["Case"].astype(str)
+        T["RowLabel"] = T["TierCase"] + " | " + T["station"].astype(str) + " | " + T["rupture"].astype(str)
+
+        if sort:
+            T = T.sort_values(metric_name, ascending=True).reset_index(drop=True)
+        else:
+            T = T.reset_index(drop=True)
+
+        fig, ax = plt.subplots(figsize=figsize)
+        y = np.arange(len(T))
+        vals = T[metric_name].to_numpy(dtype=float)
+
+        ax.barh(y, vals, zorder=2)
+        ax.set_yticks(y)
+        ax.set_yticklabels(T["RowLabel"].tolist(), fontsize=8)
+
+        ax.set_xlabel(metric_name)
+        if title is None:
+            title = f"ASCE torsional irregularity ratio ({definition}, {reduce_time})"
+        ax.set_title(title)
+
+        ax.grid(axis="x", linestyle="--", alpha=0.35, zorder=1)
+        plt.tight_layout()
+        return fig, ax
