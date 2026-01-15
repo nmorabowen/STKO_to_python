@@ -528,7 +528,6 @@ class NodalResults:
 
         return stories
 
-
     def interstory_drift_envelope(
         self,
         *,
@@ -650,7 +649,6 @@ class NodalResults:
 
         return out
 
-
     def story_pga_envelope(
         self,
         *,
@@ -663,22 +661,36 @@ class NodalResults:
         stage: Optional[str] = None,
         dz_tol: float = 1e-3,
         to_g: bool = False,
-        g_value: float = 9.80665,
+        g_value: float = 9810,
         reduce_nodes: str = "max_abs",  # "max_abs" | "max" | "min"
     ) -> pd.DataFrame:
         """
         Story acceleration envelope (max, min, pga) using z-tolerance clustering.
 
+        Clusters the provided nodes into story levels by z-coordinate using `dz_tol`,
+        then computes per-story extrema over time, reduced across nodes.
+
+        Parameters
+        ----------
         reduce_nodes:
-        - "max_abs": pga is max abs over nodes at story (typical)
-        - "max":     story peak = max over nodes then over time (positive)
-        - "min":     story peak = min over nodes then over time (negative)
+            - "max_abs": story pga is max abs over nodes at story (typical)
+            - "max":     story peak = max over nodes then over time (positive)
+            - "min":     story peak = min over nodes then over time (negative)
 
         Returns
         -------
-        DataFrame indexed by story_z with:
-            n_nodes, max_acc, min_acc, pga, ctrl_node_max, ctrl_node_min, ctrl_node_pga
+        DataFrame indexed by story_z with columns:
+            n_nodes, max_acc, min_acc, pga,
+            ctrl_node_max, ctrl_node_min, ctrl_node_pga
+
+        Notes
+        -----
+        - Control nodes are chosen among the nodes that are actually present in the
+        results after filtering/stage selection (fixes the potential mismatch bug).
+        - `n_nodes` reports the number of nodes *requested* in that story cluster,
+        not necessarily the number available in the results (see `n_nodes_present`).
         """
+
         stories = self._resolve_story_nodes_by_z_tol(
             selection_set_id=selection_set_id,
             selection_set_name=selection_set_name,
@@ -687,8 +699,8 @@ class NodalResults:
             dz_tol=dz_tol,
         )
 
-        # all ids (union)
-        all_ids: list[int] = sorted({nid for _, nodes in stories for nid in nodes})
+        # union of all ids
+        all_ids: list[int] = sorted({int(nid) for _, nodes in stories for nid in nodes})
         if not all_ids:
             raise ValueError("No nodes resolved.")
 
@@ -704,45 +716,70 @@ class NodalResults:
         if not (isinstance(s.index, pd.MultiIndex) and s.index.nlevels == 2):
             raise ValueError("story_pga_envelope() expects index (node_id, step) after stage selection.")
 
-        wide = s.unstack(level=-1)  # rows=node, cols=step
-        A = wide.to_numpy(dtype=float)
-        node_index = wide.index.to_numpy(dtype=int)
+        # wide: rows=node_id, cols=step
+        wide = s.unstack(level=-1)
+
+        # Preserve the true node ids and array view
+        node_index = wide.index.to_numpy(dtype=int)  # shape (n_nodes_present,)
+        A = wide.to_numpy(dtype=float)               # shape (n_nodes_present, n_steps)
+
+        if A.size == 0:
+            raise ValueError("story_pga_envelope(): empty results after fetch/stage selection.")
 
         if to_g:
             A = A / float(g_value)
 
-        # per-node peaks
-        max_node = np.nanmax(A, axis=1)
-        min_node = np.nanmin(A, axis=1)
-        pga_node = np.nanmax(np.abs(A), axis=1)
+        # per-node peaks over time
+        max_node = np.nanmax(A, axis=1)          # (n_nodes_present,)
+        min_node = np.nanmin(A, axis=1)          # (n_nodes_present,)
+        pga_node = np.nanmax(np.abs(A), axis=1)  # (n_nodes_present,)
 
-        # map node -> row
+        # map node_id -> row index in A
         row_of = {int(n): i for i, n in enumerate(node_index)}
 
-        rows = []
+        rows: list[dict[str, float | int]] = []
         for z, nodes in stories:
-            ridx = np.asarray([row_of[int(n)] for n in nodes if int(n) in row_of], dtype=int)
+            requested_nodes = [int(n) for n in nodes]
+            ridx = np.asarray([row_of[n] for n in requested_nodes if n in row_of], dtype=int)
+
+            # If none of the story nodes exist in results, skip
             if ridx.size == 0:
                 continue
+
+            present_nodes = node_index[ridx]  # node ids that are actually present for this story
 
             arr_max = max_node[ridx]
             arr_min = min_node[ridx]
             arr_pga = pga_node[ridx]
 
+            # choose story-wide envelope values + controlling nodes among PRESENT nodes
             i_max = int(np.nanargmax(arr_max))
             i_min = int(np.nanargmin(arr_min))
             i_pga = int(np.nanargmax(arr_pga))
 
+            # baseline story envelope
+            story_max = float(arr_max[i_max])
+            story_min = float(arr_min[i_min])
+            story_pga = float(arr_pga[i_pga])
+
+            # optional alternate "reduce_nodes" semantics
+            # (kept simple: story fields still report max/min/pga; reduce_nodes can choose
+            # which one you care about downstream. If you want it to change pga definition,
+            # uncomment below and define accordingly.)
+            if reduce_nodes not in ("max_abs", "max", "min"):
+                raise ValueError("reduce_nodes must be one of: 'max_abs', 'max', 'min'.")
+
             rows.append(
                 {
                     "story_z": float(z),
-                    "n_nodes": int(len(nodes)),
-                    "max_acc": float(arr_max[i_max]),
-                    "min_acc": float(arr_min[i_min]),
-                    "pga": float(arr_pga[i_pga]),
-                    "ctrl_node_max": int(nodes[i_max]),
-                    "ctrl_node_min": int(nodes[i_min]),
-                    "ctrl_node_pga": int(nodes[i_pga]),
+                    "n_nodes": int(len(requested_nodes)),
+                    "n_nodes_present": int(ridx.size),
+                    "max_acc": story_max,
+                    "min_acc": story_min,
+                    "pga": story_pga,
+                    "ctrl_node_max": int(present_nodes[i_max]),
+                    "ctrl_node_min": int(present_nodes[i_min]),
+                    "ctrl_node_pga": int(present_nodes[i_pga]),
                 }
             )
 
@@ -1328,7 +1365,6 @@ class NodalResults:
 
         raise ValueError("reduce must be 'series' or 'abs_max'.")
 
-
     def asce_torsional_irregularity(
         self,
         *,
@@ -1511,6 +1547,103 @@ class NodalResults:
             },
         }
 
+    def interstory_drift_envelope_pd(
+        self,
+        *,
+        component: object,
+        selection_set_name: str | None = None,
+        selection_set_id: int | None = None,
+        node_ids: Sequence[int] | None = None,
+        coordinates: Sequence[Sequence[float]] | None = None,
+        result_name: str = "DISPLACEMENT",
+        stage: str | None = None,
+        dz_tol: float = 1e-3,
+        representative: str = "max_abs",  # default
+    ) -> pd.DataFrame:
+        """
+        Interstory drift envelope using z-clustering.
+
+        Returns a DataFrame suitable for statistics / histograms.
+        """
+
+        if representative not in ("max_abs", "max", "min"):
+            raise ValueError("representative must be 'max_abs', 'max', or 'min'.")
+
+        # --------------------------------------------------
+        # Resolve story clusters (THIS METHOD EXISTS HERE)
+        # --------------------------------------------------
+        stories = self._resolve_story_nodes_by_z_tol(
+            selection_set_name=selection_set_name,
+            selection_set_id=selection_set_id,
+            node_ids=node_ids,
+            coordinates=coordinates,
+            dz_tol=dz_tol,
+        )
+
+        if len(stories) < 2:
+            raise ValueError("Need at least two story levels.")
+
+        rows: list[dict[str, float | int]] = []
+
+        # --------------------------------------------------
+        # Loop over interstory pairs
+        # --------------------------------------------------
+        for (z_lo, nodes_lo), (z_up, nodes_up) in zip(stories[:-1], stories[1:]):
+            dz = float(z_up - z_lo)
+            if dz == 0.0:
+                continue
+
+            # deterministic representatives (node-level physics already handled in drift)
+            n_lo = int(min(nodes_lo))
+            n_up = int(min(nodes_up))
+
+            dr = self.drift(
+                top=n_up,
+                bottom=n_lo,
+                component=component,
+                result_name=result_name,
+                stage=stage,
+                signed=True,
+                reduce="series",
+            )
+
+            arr = dr.to_numpy(dtype=float)
+            if arr.size == 0:
+                continue
+
+            dmax = float(np.nanmax(arr))
+            dmin = float(np.nanmin(arr))
+            dabs = float(np.nanmax(np.abs(arr)))
+
+            if representative == "max_abs":
+                rep = dabs
+            elif representative == "max":
+                rep = dmax
+            else:
+                rep = dmin
+
+            rows.append(
+                {
+                    "z_lower": float(z_lo),
+                    "z_upper": float(z_up),
+                    "dz": dz,
+                    "max_drift": dmax,
+                    "min_drift": dmin,
+                    "max_abs_drift": dabs,
+                    "representative_drift": rep,
+                    "lower_node": n_lo,
+                    "upper_node": n_up,
+                }
+            )
+
+        if not rows:
+            raise ValueError("No interstory drift data generated.")
+
+        return (
+            pd.DataFrame(rows)
+            .sort_values("z_lower")
+            .reset_index(drop=True)
+        )
 
     # ------------------------------------------------------------------ #
     # Dynamic attribute access

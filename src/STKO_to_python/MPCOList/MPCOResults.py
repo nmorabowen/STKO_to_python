@@ -1013,7 +1013,7 @@ class MPCOResults:
                     msk2 = np.asarray(msk, dtype=bool)[: t2.size]
                     yw = y2[msk2]
 
-                v = _reduce_window(yw / float(dz_i))
+                v = _reduce_window(yw)
                 if not signed:
                     v = abs(v)
                 res_vals.append(v)
@@ -2476,3 +2476,269 @@ class MPCOResults:
         ax.grid(axis="x", linestyle="--", alpha=0.35, zorder=1)
         plt.tight_layout()
         return fig, ax
+
+    # ------------------------------------------------------------------
+    # Dataframe extraction
+    # ------------------------------------------------------------------
+    
+    def collect_interstory_drift_envelope_pd(
+        self,
+        *,
+        component: object,
+        selection_set_name: str | None = "CenterPoints",
+        selection_set_id: int | Sequence[int] | None = None,
+        node_ids: Sequence[int] | None = None,
+        coordinates: Sequence[Sequence[float]] | None = None,
+        result_name: str = "DISPLACEMENT",
+        stage: str | None = None,
+        dz_tol: float = 1e-3,
+        representative: str = "max_abs",
+        # selection of runs
+        model: str | Iterable[str] | None = None,
+        station: str | Iterable[str] | None = None,
+        rupture: str | Iterable[str] | None = None,
+        order: Callable[[Key, Any], Any] | None = None,
+        # grouping tags (added as columns)
+        group_by: tuple[str, ...] | None = ("number", "letter"),
+    ) -> pd.DataFrame:
+        """
+        Collect per-run interstory drift envelope tables into one tidy DataFrame.
+
+        This method ONLY orchestrates:
+        - selects runs
+        - calls nr.interstory_drift_envelope_pd(...)
+        - appends metadata columns (model/station/rupture + tags + group key)
+
+        Returns
+        -------
+        Tidy DataFrame with columns like:
+        model, station, rupture, run_label,
+        number, letter, sta, rup,
+        group,
+        z_lower, z_upper, dz,
+        max_drift, min_drift, max_abs_drift, representative_drift,
+        lower_node, upper_node
+        """
+        # validate representative
+        if representative not in ("max_abs", "max", "min"):
+            raise ValueError("representative must be 'max_abs', 'max', or 'min'.")
+
+        # group spec normalize (we only want group_by normalization here)
+        group_by, _cb, _st, _cbg = self._normalize_grouping_spec(group_by=group_by, color_by=None, stat=None)
+
+        # select runs
+        pairs = self.select(model=model, station=station, rupture=rupture, order=order)
+        if not pairs:
+            raise ValueError("No matching results for the given selection.")
+        pairs = sorted(pairs, key=lambda kv: kv[0])
+
+        # IMPORTANT: NodalResults requires exactly one of the node selectors
+        provided = sum(x is not None for x in (selection_set_id, selection_set_name, node_ids, coordinates))
+        if provided != 1:
+            raise ValueError(
+                "Provide exactly ONE of: selection_set_id, selection_set_name, node_ids, coordinates."
+            )
+
+        frames: list[pd.DataFrame] = []
+
+        for k, nr in pairs:
+            env = nr.interstory_drift_envelope_pd(
+                component=component,
+                selection_set_name=selection_set_name,
+                selection_set_id=selection_set_id,
+                node_ids=node_ids,
+                coordinates=coordinates,
+                result_name=result_name,
+                stage=stage,
+                dz_tol=dz_tol,
+                representative=representative,
+            ).copy()
+
+            # metadata
+            m, s, r = k
+            tags = self._tag_from_key(k)
+            gk = self._group_key(k, group_by)
+            group = "|".join(gk) if group_by is not None else "ALL"
+
+            env["model"] = m
+            env["station"] = s
+            env["rupture"] = r
+            env["run_label"] = self._label_for(k, nr)
+
+            for kk, vv in tags.items():
+                env[kk] = vv
+
+            env["group"] = group
+
+            # handy derived columns
+            env["story_z_mid"] = 0.5 * (env["z_lower"].astype(float) + env["z_upper"].astype(float))
+
+            frames.append(env)
+
+        if not frames:
+            raise ValueError("No drift envelope tables were produced.")
+
+        out = pd.concat(frames, ignore_index=True)
+        # nice ordering
+        cols_first = ["group", "model", "station", "rupture", "run_label", "number", "letter", "sta", "rup"]
+        cols_first = [c for c in cols_first if c in out.columns]
+        cols_rest = [c for c in out.columns if c not in cols_first]
+        out = out[cols_first + cols_rest]
+        return out
+
+    def plot_interstory_drift_histograms(
+        self,
+        *,
+        component: object,
+        selection_set_name: str | None = "CenterPoints",
+        selection_set_id: int | Sequence[int] | None = None,
+        node_ids: Sequence[int] | None = None,
+        coordinates: Sequence[Sequence[float]] | None = None,
+        result_name: str = "DISPLACEMENT",
+        stage: str | None = None,
+        dz_tol: float = 1e-3,
+        representative: str = "max_abs",
+        # story selection for histogram
+        story_index: int | None = None,      # 0-based within each run (sorted by z_mid)
+        story_z_mid: float | None = None,    # match by tolerance across all runs
+        z_tol: float = 1e-6,
+        # which metric to histogram
+        metric: str = "max_abs_drift",
+        # grouping
+        group_by: tuple[str, ...] | None = ("number", "letter"),
+        # run selection
+        model: str | Iterable[str] | None = None,
+        station: str | Iterable[str] | None = None,
+        rupture: str | Iterable[str] | None = None,
+        # histogram plot options
+        bins: int | Sequence[float] = 30,
+        density: bool = True,
+        overlay: bool = True,
+        figsize: tuple[float, float] = (8, 4.5),
+        alpha: float = 0.35,
+        linewidth: float = 1.5,
+        title: str | None = None,
+        legend_fontsize: float = 8,
+        legend_ncol: int | None = None,
+        legend_frameon: bool = False,
+    ):
+        """
+        Plot histograms of a drift envelope metric by group, at a selected story.
+        """
+        valid_metric = {"max_abs_drift", "max_drift", "min_drift", "representative_drift"}
+        if metric not in valid_metric:
+            raise ValueError(f"metric must be one of {sorted(valid_metric)}")
+
+        if (story_index is None) == (story_z_mid is None):
+            raise ValueError("Provide exactly one of: story_index or story_z_mid.")
+
+        T = self.collect_interstory_drift_envelope_pd(
+            component=component,
+            selection_set_name=selection_set_name,
+            selection_set_id=selection_set_id,
+            node_ids=node_ids,
+            coordinates=coordinates,
+            result_name=result_name,
+            stage=stage,
+            dz_tol=dz_tol,
+            representative=representative,
+            model=model,
+            station=station,
+            rupture=rupture,
+            group_by=group_by,
+        )
+
+        if metric not in T.columns:
+            raise ValueError(f"metric={metric!r} not found in collected table columns: {list(T.columns)}")
+
+        # --- choose story rows ---
+        if story_index is not None:
+            si = int(story_index)
+            if si < 0:
+                raise ValueError("story_index must be >= 0.")
+
+            # assign a per-run story index by z_mid order
+            T = T.sort_values(["model", "station", "rupture", "story_z_mid"]).copy()
+            T["_story_idx"] = T.groupby(["model", "station", "rupture"])["story_z_mid"].cumcount()
+
+            S = T.loc[T["_story_idx"] == si].copy()
+            if S.empty:
+                mx = int(T["_story_idx"].max())
+                raise ValueError(f"No rows for story_index={si}. Available 0..{mx}.")
+            story_label = f"story_index={si}"
+
+        else:
+            z0 = float(story_z_mid)
+            tol = float(z_tol)
+            S = T.loc[np.abs(T["story_z_mid"].to_numpy(dtype=float) - z0) <= tol].copy()
+            if S.empty:
+                zvals = np.sort(np.unique(T["story_z_mid"].to_numpy(dtype=float)))
+                near = zvals[np.argsort(np.abs(zvals - z0))[:5]]
+                raise ValueError(
+                    f"No rows for story_z_mid≈{z0} (tol={tol}). Nearest: {near.tolist()}"
+                )
+            story_label = f"story_z_mid≈{z0:g}"
+
+        groups = {g: df for g, df in S.groupby("group", sort=True)}
+
+        # --- plot ---
+        if overlay:
+            fig, ax = plt.subplots(figsize=figsize)
+
+            for g in sorted(groups.keys()):
+                x = groups[g][metric].to_numpy(dtype=float)
+                x = x[np.isfinite(x)]
+                if x.size == 0:
+                    continue
+
+                ax.hist(
+                    x,
+                    bins=bins,
+                    density=density,
+                    histtype="step",
+                    linewidth=linewidth,
+                    label=f"{g} (n={x.size})",
+                )
+                ax.hist(
+                    x,
+                    bins=bins,
+                    density=density,
+                    histtype="stepfilled",
+                    alpha=alpha,
+                    label="_nolegend_",
+                )
+
+            ax.set_xlabel(metric)
+            ax.set_ylabel("Density" if density else "Count")
+            ax.set_title(title or f"Histogram of {metric} — {story_label}")
+            ax.grid(True, alpha=0.35)
+
+            self._legend_below(fig, ax, fontsize=legend_fontsize, ncol=legend_ncol, frameon=legend_frameon)
+            plt.tight_layout()
+            return fig, ax
+
+        figs: list[tuple[plt.Figure, plt.Axes]] = []
+        for g in sorted(groups.keys()):
+            x = groups[g][metric].to_numpy(dtype=float)
+            x = x[np.isfinite(x)]
+            if x.size == 0:
+                continue
+
+            fig, ax = plt.subplots(figsize=figsize)
+            ax.hist(x, bins=bins, density=density, histtype="stepfilled", alpha=alpha, label=f"{g} (n={x.size})")
+            ax.hist(x, bins=bins, density=density, histtype="step", linewidth=linewidth, label="_nolegend_")
+
+            ax.set_xlabel(metric)
+            ax.set_ylabel("Density" if density else "Count")
+            ax.set_title(title or f"{metric} — {g} — {story_label}")
+            ax.grid(True, alpha=0.35)
+            ax.legend(frameon=legend_frameon, fontsize=legend_fontsize)
+
+            plt.tight_layout()
+            figs.append((fig, ax))
+
+        if not figs:
+            raise ValueError("No groups produced valid histogram data.")
+
+        return figs
+
