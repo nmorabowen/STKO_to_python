@@ -588,12 +588,13 @@ class MPCOResults:
         top: tuple[float, float, float],
         bottom: tuple[float, float, float],
         component: int = 1,
+        relative_drift: bool = True,  # True -> divide by height (drift ratio). False -> delta_u (no /dz)
         model: str | Iterable[str] | None = None,
         station: str | Iterable[str] | None = None,
         rupture: str | Iterable[str] | None = None,
         overlay: bool = True,
         figsize: tuple[float, float] = (10, 6),
-        group_by_color: str | None = None,   # None | "sta" | "rup" | "letter" | "number"
+        group_by_color: str | None = None,   # kept for compatibility; style is handled by _style_for_key
         linewidth: float = 1.00,
         warn_mismatch: bool = True,
         running_envelope: str | None = None,  # None | "abs" | "signed"
@@ -606,6 +607,17 @@ class MPCOResults:
         legend_ncol: int | None = None,
         legend_frameon: bool = False,
     ):
+        """
+        Plot drift histories over MPCO collection.
+
+        Parameters
+        ----------
+        relative_drift
+            - True:  drift(t) = (u_top - u_bottom) / (z_top - z_bottom)
+                    (uses nr.drift)
+            - False: delta_u(t) = (u_top - u_bottom) (no division by height)
+                    (computed via nr.fetch + subtraction)
+        """
         valid_groups = {None, "sta", "rup", "letter", "number"}
         if group_by_color not in valid_groups:
             raise ValueError(f"group_by_color must be one of {valid_groups}")
@@ -613,62 +625,58 @@ class MPCOResults:
         pairs = self.select(model=model, station=station, rupture=rupture)
         if not pairs:
             raise ValueError("No matching results for the given selection.")
-
         pairs = sorted(pairs, key=lambda kv: kv[0])
 
-        palette = list(plt.rcParams["axes.prop_cycle"].by_key().get("color", ["C0", "C1", "C2", "C3"]))
+        # ------------------------------------------------------------
+        # Helper: compute delta_u (no /dz) from top/bottom coordinates
+        # ------------------------------------------------------------
+        def _delta_u_series(nr: Any) -> "pd.Series":
+            top_id = int(nr.info.nearest_node_id([top], return_distance=False)[0])
+            bot_id = int(nr.info.nearest_node_id([bottom], return_distance=False)[0])
 
-        def _group_value(k: Key) -> str:
-            m, s, r = k
-            if group_by_color is None:
-                return ""
-            if group_by_color == "sta":
-                return str(s)
-            if group_by_color == "rup":
-                return str(r)
-            if group_by_color == "letter":
-                mm = str(m)
-                m2 = re.search(r"([A-Da-d])\s*$", mm)
-                return m2.group(1).upper() if m2 else ""
-            if group_by_color == "number":
-                mm = str(m)
-                m2 = re.search(r"([1-4])", mm)
-                return m2.group(1) if m2 else ""
-            raise RuntimeError("unreachable")
+            s = nr.fetch(result_name="DISPLACEMENT", component=component, node_ids=[top_id, bot_id])
 
-        color_map: dict[Any, str] = {}
-        if group_by_color is None:
-            for i, (k, _) in enumerate(pairs):
-                color_map[k] = palette[i % len(palette)]
-        else:
-            groups = []
-            for k, _ in pairs:
-                g = _group_value(k)
-                if g not in groups:
-                    groups.append(g)
-            for i, g in enumerate(sorted(groups)):
-                color_map[g] = palette[i % len(palette)]
+            # If multi-stage, pick last stage deterministically (MPCO.plot_drift has no stage arg)
+            if isinstance(s.index, pd.MultiIndex) and s.index.nlevels == 3:
+                stages = tuple(sorted({str(x) for x in s.index.get_level_values(0)}))
+                if not stages:
+                    raise ValueError("plot_drift(relative_drift=False): no stages found.")
+                s = s.xs(stages[-1], level=0)
 
+            if not (isinstance(s.index, pd.MultiIndex) and s.index.nlevels == 2):
+                raise ValueError("plot_drift(relative_drift=False): expected index (node_id, step).")
+
+            u_top = s.xs(top_id, level=0).sort_index()
+            u_bot = s.xs(bot_id, level=0).sort_index()
+            u_top, u_bot = u_top.align(u_bot, join="inner")
+
+            du = u_top - u_bot
+            du.name = f"delta_u(component={component})"
+            return du
+
+        # ------------------------------------------------------------
+        # Plot per run
+        # ------------------------------------------------------------
         def plot_one(ax: plt.Axes, k: Key, nr: Any):
-            drift = nr.drift(top=top, bottom=bottom, component=component)
-            y = np.asarray(drift.values, float)
+            if relative_drift:
+                series = nr.drift(top=top, bottom=bottom, component=component)
+            else:
+                series = _delta_u_series(nr)
+
+            y = np.asarray(series.values, float)
             t = np.asarray(nr.time, float)
 
             t2, y2, t_trim, y_trim = self._align_xy(t, y)
             if warn_mismatch and (t_trim or y_trim):
-                print(f"[plot_drift] mismatch {k}: time={len(t)} drift={len(y)} → {len(t2)}")
+                print(f"[plot_drift] mismatch {k}: time={len(t)} y={len(y)} → {len(t2)}")
 
             if t2.size == 0:
                 return None
 
             label = self._label_for(k, nr)
-            kw = self._style_for_key(k)
-            kw["linewidth"] = linewidth
 
-            if group_by_color is None:
-                kw["color"] = color_map[k]
-            else:
-                kw["color"] = color_map[_group_value(k)]
+            kw = self._style_for_key(k)  # <-- style owns colors; no palette logic here
+            kw["linewidth"] = linewidth
 
             if running_envelope is None:
                 ax.plot(t2, y2, label=label, **kw)
@@ -691,7 +699,7 @@ class MPCOResults:
             yy = np.r_[up, lo]
             return (float(t2.min()), float(t2.max()), float(yy.min()), float(yy.max()))
 
-        title = "Drift histories"
+        title = "Drift histories" if relative_drift else "Relative displacement histories (Δu)"
         if running_envelope:
             title += f" + running envelope ({running_envelope})"
 
@@ -703,7 +711,7 @@ class MPCOResults:
             figsize_single=(7, 4),
             title=title,
             xlabel="Time (s)",
-            ylabel="Drift",
+            ylabel="Drift" if relative_drift else "Δu (disp. units)",
             xlim=xlim,
             ylim=ylim,
             sym_x=False,
@@ -1672,6 +1680,230 @@ class MPCOResults:
             plt.tight_layout()
         return figs
 
+    def plot_orbit(
+        self,
+        *,
+        top: tuple[float, float, float],
+        bottom: tuple[float, float, float],
+        x_component: int = 1,
+        y_component: int = 2,
+        relative_drift: bool = False,          # True -> divide by height (drift ratio). False -> Δu (no /dz)
+        result_name: str = "DISPLACEMENT",
+
+        # run selection
+        model: str | Iterable[str] | None = None,
+        station: str | Iterable[str] | None = None,
+        rupture: str | Iterable[str] | None = None,
+
+        # plot layout
+        overlay: bool = True,
+        figsize: tuple[float, float] = (6, 6),
+        title: str | None = None,
+        equal_aspect: bool = True,
+        square_axes: bool = True,             # <-- NEW: force same numeric span on x and y (square window)
+        grid: bool = True,
+        legend_fontsize: float = 7,
+        legend_ncol: int | None = None,
+        legend_frameon: bool = False,
+
+        # kept for compatibility; styling is handled by _style_for_key
+        group_by_color: str | None = None,
+
+        # style
+        linewidth: float = 1.0,
+        alpha: float = 1.0,
+
+        # axis limits
+        xlim: tuple[float, float] | None = None,
+        ylim: tuple[float, float] | None = None,
+
+        # markers
+        show_start_end: bool = True,
+        start_end_size: float = 20.0,
+    ):
+        """
+        Orbit plot of relative motion between top and bottom, using the same aligned samples:
+
+        - relative_drift=True:
+                dx(t) = (u_top_x - u_bot_x) / dz
+                dy(t) = (u_top_y - u_bot_y) / dz
+
+        - relative_drift=False:
+                dx(t) = (u_top_x - u_bot_x)
+                dy(t) = (u_top_y - u_bot_y)
+
+        Plots dy vs dx (parametric).
+
+        square_axes=True forces the *numeric* axis ranges to match (square window),
+        in addition to equal aspect.
+        """
+        valid_groups = {None, "sta", "rup", "letter", "number"}
+        if group_by_color not in valid_groups:
+            raise ValueError(f"group_by_color must be one of {valid_groups}")
+
+        pairs = self.select(model=model, station=station, rupture=rupture)
+        if not pairs:
+            raise ValueError("No matching results for the given selection.")
+        pairs = sorted(pairs, key=lambda kv: kv[0])
+
+        # ------------------------------------------------------------
+        # Helper: delta_u (no /dz) for one component, matching drift() logic
+        # ------------------------------------------------------------
+        def _delta_u_series(nr: Any, *, comp: int) -> "pd.Series":
+            top_id = int(nr.info.nearest_node_id([top], return_distance=False)[0])
+            bot_id = int(nr.info.nearest_node_id([bottom], return_distance=False)[0])
+
+            s = nr.fetch(result_name=result_name, component=comp, node_ids=[top_id, bot_id])
+
+            # If multi-stage exists, pick last stage deterministically (MPCO plot has no stage arg)
+            if isinstance(s.index, pd.MultiIndex) and s.index.nlevels == 3:
+                stages = tuple(sorted({str(x) for x in s.index.get_level_values(0)}))
+                if not stages:
+                    raise ValueError("plot_orbit(relative_drift=False): no stages found.")
+                s = s.xs(stages[-1], level=0)
+
+            if not (isinstance(s.index, pd.MultiIndex) and s.index.nlevels == 2):
+                raise ValueError("plot_orbit(relative_drift=False): expected index (node_id, step).")
+
+            u_top = s.xs(top_id, level=0).sort_index()
+            u_bot = s.xs(bot_id, level=0).sort_index()
+            u_top, u_bot = u_top.align(u_bot, join="inner")
+
+            du = u_top - u_bot
+            du.name = f"delta_u({result_name}:{comp})"
+            return du
+
+        # ------------------------------------------------------------
+        # Helper: force square numeric limits
+        # ------------------------------------------------------------
+        def _square_axis_limits(ax: plt.Axes, *, symmetric: bool) -> None:
+            x0, x1 = ax.get_xlim()
+            y0, y1 = ax.get_ylim()
+
+            if symmetric:
+                a = max(abs(x0), abs(x1), abs(y0), abs(y1))
+                if not np.isfinite(a) or a == 0.0:
+                    a = 1.0
+                ax.set_xlim(-a, a)
+                ax.set_ylim(-a, a)
+                return
+
+            lo = min(x0, y0)
+            hi = max(x1, y1)
+            if not np.isfinite(lo) or not np.isfinite(hi) or hi == lo:
+                lo, hi = -1.0, 1.0
+            ax.set_xlim(lo, hi)
+            ax.set_ylim(lo, hi)
+
+        # ------------------------------------------------------------
+        # Plot per run
+        # ------------------------------------------------------------
+        def plot_one(ax: plt.Axes, k: Key, nr: Any):
+            if relative_drift:
+                dx = nr.drift(top=top, bottom=bottom, component=x_component, result_name=result_name, reduce="series")
+                dy = nr.drift(top=top, bottom=bottom, component=y_component, result_name=result_name, reduce="series")
+            else:
+                dx = _delta_u_series(nr, comp=x_component)
+                dy = _delta_u_series(nr, comp=y_component)
+
+            # enforce same samples
+            dx, dy = dx.align(dy, join="inner")
+            if dx.size == 0:
+                return None
+
+            x = np.asarray(dx.to_numpy(dtype=float), dtype=float)
+            y = np.asarray(dy.to_numpy(dtype=float), dtype=float)
+
+            n = min(x.size, y.size)
+            if n == 0:
+                return None
+            x = x[:n]
+            y = y[:n]
+
+            label = self._label_for(k, nr)
+
+            kw = self._style_for_key(k)      # <-- style owns color/ls/marker
+            kw["linewidth"] = linewidth
+            kw["alpha"] = alpha
+
+            ax.plot(x, y, label=label, **kw)
+
+            if show_start_end and n > 0:
+                ax.scatter([x[0]], [y[0]], s=start_end_size, alpha=alpha)
+                ax.scatter([x[-1]], [y[-1]], s=start_end_size, alpha=alpha)
+
+            if not np.isfinite(x).any() or not np.isfinite(y).any():
+                return None
+
+            return (
+                float(np.nanmin(x)),
+                float(np.nanmax(x)),
+                float(np.nanmin(y)),
+                float(np.nanmax(y)),
+            )
+
+        # labels / title
+        if relative_drift:
+            xlabel = f"Drift [{x_component}]"
+            ylabel = f"Drift [{y_component}]"
+            ttl = title or f"Drift orbit — {result_name}[{x_component}] vs [{y_component}]"
+            symx = True
+            symy = True
+        else:
+            xlabel = f"Δu [{x_component}]"
+            ylabel = f"Δu [{y_component}]"
+            ttl = title or f"Δu orbit — {result_name}[{x_component}] vs [{y_component}]"
+            symx = False
+            symy = False
+
+        out = self._plot_overlay_or_facets(
+            pairs=pairs,
+            plot_one=plot_one,
+            overlay=overlay,
+            figsize_overlay=figsize,
+            figsize_single=figsize,
+            title=ttl,
+            xlabel=xlabel,
+            ylabel=ylabel,
+            xlim=xlim,
+            ylim=ylim,
+            sym_x=symx,
+            sym_y=symy,
+            vline0=False,
+            legend=False,
+            grid=grid,
+        )
+
+        def _legend(fig: plt.Figure, ax: plt.Axes):
+            self._legend_below(fig, ax, fontsize=legend_fontsize, ncol=legend_ncol, frameon=legend_frameon)
+
+        if overlay:
+            fig, ax = out
+
+            if equal_aspect:
+                ax.set_aspect("equal", adjustable="box")
+
+            # Force square numeric window ONLY when user didn't force limits
+            if square_axes and (xlim is None) and (ylim is None):
+                _square_axis_limits(ax, symmetric=relative_drift)
+
+            _legend(fig, ax)
+            plt.tight_layout()
+            return fig, ax
+
+        figs = out
+        for fig, ax in figs:
+            if equal_aspect:
+                ax.set_aspect("equal", adjustable="box")
+
+            if square_axes and (xlim is None) and (ylim is None):
+                _square_axis_limits(ax, symmetric=relative_drift)
+
+            _legend(fig, ax)
+            plt.tight_layout()
+        return figs
+
+
     # ------------------------------------------------------------------
     # Compute table
     # ------------------------------------------------------------------
@@ -2585,6 +2817,192 @@ class MPCOResults:
         cols_rest = [c for c in out.columns if c not in cols_first]
         out = out[cols_first + cols_rest]
         return out
+
+    def collect_roof_drift_df(
+        self,
+        *,
+        top: tuple[float, float, float],
+        bottom: tuple[float, float, float],
+        components: tuple[int, int] = (1, 2),          # (X, Y)
+        result_name: str = "DISPLACEMENT",
+        relative_drift: bool = True,                  # True -> drift ratio ( /dz ) via nr.drift
+        reduce_time: str = "abs_max",                 # "abs_max" | "max" | "min" | "rms"
+        stage: str | None = None,                     # optional (if your nr.drift supports it)
+        # run selection
+        model: str | Iterable[str] | None = None,
+        station: str | Iterable[str] | None = None,
+        rupture: str | Iterable[str] | None = None,
+        order: Callable[[Key, Any], Any] | None = None,
+        # output options
+        add_log: bool = True,
+        eps_log: float = 1e-16,
+        include_label: bool = False,
+    ) -> pd.DataFrame:
+        """
+        Build a tidy DataFrame for statistical modeling of roof drift.
+
+        One row per (run, direction):
+            model, station, rupture, Tier, Case, direction, roof_drift
+
+        Notes
+        -----
+        - If relative_drift=True: uses nr.drift(...) (expected to return drift ratio if your NodalResults does that).
+        - If relative_drift=False: uses nr.fetch(...) and computes Δu_top - Δu_bottom (no /dz).
+        - reduce_time controls how the time series is collapsed to a scalar.
+        """
+
+        if reduce_time not in ("abs_max", "max", "min", "rms"):
+            raise ValueError("reduce_time must be one of: 'abs_max', 'max', 'min', 'rms'.")
+
+        cx, cy = int(components[0]), int(components[1])
+
+        # -------------------------
+        # Helpers
+        # -------------------------
+        def _reduce(y: np.ndarray) -> float:
+            y = np.asarray(y, dtype=float)
+            y = y[np.isfinite(y)]
+            if y.size == 0:
+                return float("nan")
+            if reduce_time == "abs_max":
+                return float(np.nanmax(np.abs(y)))
+            if reduce_time == "max":
+                return float(np.nanmax(y))
+            if reduce_time == "min":
+                return float(np.nanmin(y))
+            if reduce_time == "rms":
+                return float(np.sqrt(np.nanmean(y * y)))
+            raise RuntimeError("unreachable")
+
+        def _delta_u_series(nr: Any, *, comp: int) -> pd.Series:
+            top_id = int(nr.info.nearest_node_id([top], return_distance=False)[0])
+            bot_id = int(nr.info.nearest_node_id([bottom], return_distance=False)[0])
+
+            s = nr.fetch(result_name=result_name, component=comp, node_ids=[top_id, bot_id])
+
+            # multi-stage handling (match your plotting logic)
+            if isinstance(s.index, pd.MultiIndex) and s.index.nlevels == 3:
+                stages = tuple(sorted({str(x) for x in s.index.get_level_values(0)}))
+                if not stages:
+                    return pd.Series(dtype=float)
+                # if user provided stage and it's present, use it; else last stage
+                if stage is not None and stage in stages:
+                    s = s.xs(stage, level=0)
+                else:
+                    s = s.xs(stages[-1], level=0)
+
+            if not (isinstance(s.index, pd.MultiIndex) and s.index.nlevels == 2):
+                return pd.Series(dtype=float)
+
+            u_top = s.xs(top_id, level=0).sort_index()
+            u_bot = s.xs(bot_id, level=0).sort_index()
+            u_top, u_bot = u_top.align(u_bot, join="inner")
+            du = u_top - u_bot
+            du.name = f"delta_u({result_name}:{comp})"
+            return du
+
+        def _roof_scalar(nr: Any, *, comp: int) -> float:
+            if relative_drift:
+                # try to pass stage/result_name if your nr.drift supports it; otherwise fallback
+                try:
+                    s = nr.drift(
+                        top=top,
+                        bottom=bottom,
+                        component=comp,
+                        result_name=result_name,
+                        stage=stage,
+                        reduce="series",
+                    )
+                except TypeError:
+                    # older signature
+                    try:
+                        s = nr.drift(
+                            top=top,
+                            bottom=bottom,
+                            component=comp,
+                            result_name=result_name,
+                            reduce="series",
+                        )
+                    except TypeError:
+                        s = nr.drift(top=top, bottom=bottom, component=comp, reduce="series")
+                y = np.asarray(getattr(s, "to_numpy", lambda **_: np.asarray(s)) (dtype=float), dtype=float)
+                return _reduce(y)
+
+            # relative_drift=False: scalar from Δu series
+            du = _delta_u_series(nr, comp=comp)
+            if du.empty:
+                return float("nan")
+            return _reduce(du.to_numpy(dtype=float))
+
+        # -------------------------
+        # Build table via compute_table
+        # -------------------------
+        metrics = {
+            "roof_drift_X": (lambda _k, nr: _roof_scalar(nr, comp=cx)),
+            "roof_drift_Y": (lambda _k, nr: _roof_scalar(nr, comp=cy)),
+        }
+
+        T = self.compute_table(
+            metrics=metrics,
+            model=model,
+            station=station,
+            rupture=rupture,
+            order=order,
+            include_label=include_label,
+            drop_na_rows=False,
+        )
+
+        if T.empty:
+            return T
+
+        # Tier/Case
+        tiers, cases = [], []
+        for m in T["model"].astype(str).tolist():
+            t, c = self.parse_tier_letter(m)
+            tiers.append(t)
+            cases.append(c)
+
+        T = T.copy()
+        T["Tier"] = np.asarray(tiers, dtype=int)
+        T["Case"] = pd.Series(cases, dtype="category")
+        T["TierCase"] = T["Tier"].astype(str) + T["Case"].astype(str)
+
+        # Long format: direction factor
+        id_vars = ["model", "station", "rupture", "Tier", "Case", "TierCase"]
+        if include_label and "label" in T.columns:
+            id_vars.append("label")
+
+        L = T.melt(
+            id_vars=id_vars,
+            value_vars=["roof_drift_X", "roof_drift_Y"],
+            var_name="direction",
+            value_name="roof_drift",
+        )
+
+        L["direction"] = L["direction"].map({"roof_drift_X": "X", "roof_drift_Y": "Y"}).astype("category")
+        L["station"] = L["station"].astype("category")
+        L["rupture"] = L["rupture"].astype("category")
+
+        # Handy run id (ignores direction)
+        L["run_key"] = (
+            L["model"].astype(str) + "|" + L["station"].astype(str) + "|" + L["rupture"].astype(str)
+        )
+
+        # Optional log response (common for drift-like metrics)
+        if add_log:
+            y = L["roof_drift"].to_numpy(dtype=float)
+            L["log_roof_drift"] = np.log(np.maximum(np.abs(y), float(eps_log)))
+
+        # Nice column order
+        first = ["run_key", "model", "Tier", "Case", "TierCase", "station", "rupture", "direction", "roof_drift"]
+        if add_log:
+            first.append("log_roof_drift")
+        if include_label and "label" in L.columns:
+            first.insert(1, "label")
+
+        cols = first + [c for c in L.columns if c not in first]
+        return L[cols]
+
 
     def plot_interstory_drift_histograms(
         self,
