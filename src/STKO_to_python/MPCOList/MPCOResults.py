@@ -3003,6 +3003,153 @@ class MPCOResults:
         cols = first + [c for c in L.columns if c not in first]
         return L[cols]
 
+    def drift_df(
+        self,
+        *,
+        top: tuple[float, float, float],
+        bottom: tuple[float, float, float],
+        components: Sequence[int] = (1, 2),
+        result_name: str = "DISPLACEMENT",
+        relative_drift: bool = True,          # True -> drift (/dz), False -> Δu
+        reduce_time: str = "abs_max",         # "abs_max" | "max" | "min" | "rms"
+        stage: str | None = None,
+
+        # selection
+        model: str | Iterable[str] | None = None,
+        station: str | Iterable[str] | None = None,
+        rupture: str | Iterable[str] | None = None,
+        order: Callable[[tuple[str, str, str], Any], Any] | None = None,
+    ) -> pd.DataFrame:
+        """
+        Minimal wide DataFrame:
+
+            Tier | Case | sta | rup | {result_name}_c{comp} ...
+
+        One row per (model, station, rupture).
+        """
+
+        if reduce_time not in ("abs_max", "max", "min", "rms"):
+            raise ValueError("reduce_time must be one of: 'abs_max', 'max', 'min', 'rms'.")
+
+        comps = tuple(int(c) for c in components)
+        if not comps:
+            raise ValueError("components must be non-empty.")
+
+        # -------------------------------------------------
+        # helpers
+        # -------------------------------------------------
+        def _reduce(y: np.ndarray) -> float:
+            y = np.asarray(y, dtype=float)
+            y = y[np.isfinite(y)]
+            if y.size == 0:
+                return float("nan")
+            if reduce_time == "abs_max":
+                return float(np.nanmax(np.abs(y)))
+            if reduce_time == "max":
+                return float(np.nanmax(y))
+            if reduce_time == "min":
+                return float(np.nanmin(y))
+            if reduce_time == "rms":
+                return float(np.sqrt(np.nanmean(y * y)))
+            raise RuntimeError("unreachable")
+
+        def _select_stage(s: pd.Series | pd.DataFrame) -> pd.Series | pd.DataFrame:
+            if isinstance(s.index, pd.MultiIndex) and s.index.nlevels == 3:
+                stages = tuple(sorted({str(x) for x in s.index.get_level_values(0)}))
+                if not stages:
+                    return s.iloc[0:0]
+                if stage is not None and stage in stages:
+                    return s.xs(stage, level=0)
+                return s.xs(stages[-1], level=0)
+            return s
+
+        def _delta_u_series(nr: Any, *, comp: int, top_id: int, bot_id: int) -> pd.Series:
+            s = nr.fetch(result_name=result_name, component=comp, node_ids=[top_id, bot_id])
+            s = _select_stage(s)
+
+            if not (isinstance(s.index, pd.MultiIndex) and s.index.nlevels == 2):
+                return pd.Series(dtype=float)
+
+            u_top = s.xs(top_id, level=0).sort_index()
+            u_bot = s.xs(bot_id, level=0).sort_index()
+            u_top, u_bot = u_top.align(u_bot, join="inner")
+            return u_top - u_bot
+
+        def _pair_scalar(nr: Any, *, comp: int, top_id: int, bot_id: int) -> float:
+            if relative_drift:
+                try:
+                    s = nr.drift(
+                        top=top,
+                        bottom=bottom,
+                        component=comp,
+                        result_name=result_name,
+                        stage=stage,
+                        reduce="series",
+                    )
+                except TypeError:
+                    try:
+                        s = nr.drift(
+                            top=top,
+                            bottom=bottom,
+                            component=comp,
+                            result_name=result_name,
+                            reduce="series",
+                        )
+                    except TypeError:
+                        s = nr.drift(top=top, bottom=bottom, component=comp, reduce="series")
+
+                y = np.asarray(
+                    getattr(s, "to_numpy", lambda **_: np.asarray(s))(dtype=float),
+                    dtype=float,
+                )
+                return _reduce(y)
+
+            du = _delta_u_series(nr, comp=comp, top_id=top_id, bot_id=bot_id)
+            if du.empty:
+                return float("nan")
+            return _reduce(du.to_numpy(dtype=float))
+
+        # -------------------------------------------------
+        # collect
+        # -------------------------------------------------
+        pairs = self.select(model=model, station=station, rupture=rupture, order=order)
+
+        cols = ["Tier", "Case", "sta", "rup"] + [f"{result_name}_c{c}" for c in comps]
+        if not pairs:
+            return pd.DataFrame(columns=cols)
+
+        rows: list[dict[str, Any]] = []
+
+        for k, nr in pairs:
+            m, sta, rup = k
+            tier, case = self.parse_tier_letter(m)
+
+            row: dict[str, Any] = {
+                "Tier": int(tier),
+                "Case": str(case),
+                "sta": str(sta),
+                "rup": str(rup),
+            }
+
+            top_id = int(nr.info.nearest_node_id([top], return_distance=False)[0])
+            bot_id = int(nr.info.nearest_node_id([bottom], return_distance=False)[0])
+
+            for comp in comps:
+                row[f"{result_name}_c{comp}"] = _pair_scalar(
+                    nr, comp=comp, top_id=top_id, bot_id=bot_id
+                )
+
+            rows.append(row)
+
+        df = pd.DataFrame(rows)
+
+        df["Tier"] = df["Tier"].astype(int)
+        df["Case"] = df["Case"].astype("category")
+        df["sta"] = df["sta"].astype("category")
+        df["rup"] = df["rup"].astype("category")
+
+        return df[cols]
+
 
     def plot_interstory_drift_histograms(
         self,
