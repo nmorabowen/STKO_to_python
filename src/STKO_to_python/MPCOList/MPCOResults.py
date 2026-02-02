@@ -2034,7 +2034,15 @@ class MPCOResults:
         center: float | None = None,
         vmin: float | None = None,
         vmax: float | None = None,
+        ax: plt.Axes | None = None,
+        fontsize: float = 8,
     ):
+        
+        if ax is None:
+            fig, ax = plt.subplots(figsize=figsize)
+        else:
+            fig = ax.figure
+            
         reducers = {"mean", "median", "max", "min", "sum"}
         if agg not in reducers:
             raise ValueError(f"Unknown agg='{agg}'. Use one of {sorted(reducers)}.")
@@ -2103,8 +2111,6 @@ class MPCOResults:
                     else:
                         annot_data[i, j] = format(float(v), fmt_mean)
 
-        fig, ax = plt.subplots(figsize=figsize)
-
         if use_seaborn:
             try:
                 import seaborn as sns
@@ -2116,6 +2122,7 @@ class MPCOResults:
                     cmap=cmap,
                     annot=annot_data if annot else False,
                     fmt="",
+                    annot_kws={"fontsize": fontsize},
                     linewidths=0.5,
                     linecolor="white",
                     cbar_kws={"label": metric},
@@ -2123,33 +2130,33 @@ class MPCOResults:
                     vmin=vmin,
                     vmax=vmax,
                 )
-                ax.set_xlabel("Tier")
-                ax.set_ylabel("Case")
-                ax.set_xticklabels([f"Tier {c}" for c in mat_mean.columns.tolist()])
-                ax.set_yticklabels(mat_mean.index.tolist(), rotation=0)
+                ax.set_xlabel("Tier", fontsize=fontsize)
+                ax.set_ylabel("Case", fontsize=fontsize)
+                ax.set_xticklabels([f"Tier {c}" for c in mat_mean.columns.tolist()], fontsize=fontsize-1, rotation=45)
+                ax.set_yticklabels(mat_mean.index.tolist(), rotation=0, fontsize=fontsize-1)
 
             except Exception:
                 use_seaborn = False
 
         if not use_seaborn:
             im = ax.imshow(Z, aspect="auto", interpolation="nearest", cmap=cmap, vmin=vmin, vmax=vmax)
-            ax.set_xticks(np.arange(Z.shape[1]))
-            ax.set_xticklabels([f"Tier {c}" for c in mat_mean.columns.tolist()])
-            ax.set_yticks(np.arange(Z.shape[0]))
-            ax.set_yticklabels(mat_mean.index.tolist())
+            ax.set_xticks(np.arange(Z.shape[1]), fontsize=fontsize-1)
+            ax.set_xticklabels([f"Tier {c}" for c in mat_mean.columns.tolist()], fontsize=fontsize-1, rotation=45)
+            ax.set_yticks(np.arange(Z.shape[0]), fontsize=fontsize-1)
+            ax.set_yticklabels(mat_mean.index.tolist(), fontsize=fontsize)
 
             if annot and annot_data is not None:
                 for i in range(Z.shape[0]):
                     for j in range(Z.shape[1]):
                         s = annot_data[i, j]
                         if s:
-                            ax.text(j, i, s, ha="center", va="center", fontsize=9)
+                            ax.text(j, i, s, ha="center", va="center", fontsize=fontsize)
 
             cbar = fig.colorbar(im, ax=ax, pad=0.02)
             cbar.set_label(metric)
 
-            ax.set_xlabel("Tier")
-            ax.set_ylabel("Case")
+            ax.set_xlabel("Tier", fontsize=fontsize)
+            ax.set_ylabel("Case", fontsize=fontsize)
 
         if title is None:
             if agg == "mean" and show_std:
@@ -2182,7 +2189,15 @@ class MPCOResults:
         err_capsize: float = 3.0,
         right_margin_frac: float = 0.08,
         left_margin_frac: float = 0.02,
+        ax: plt.Axes | None = None,
+        fontsize: float = 8,
     ):
+        
+        if ax is None:
+            fig, ax = plt.subplots(figsize=figsize)
+        else:
+            fig = ax.figure
+        
         reducers = {"mean", "median", "max", "min", "sum"}
         if agg not in reducers:
             raise ValueError(f"Unknown agg='{agg}'. Use one of {sorted(reducers)}.")
@@ -2229,8 +2244,6 @@ class MPCOResults:
         else:
             A = A.reset_index(drop=True)
 
-        fig, ax = plt.subplots(figsize=figsize)
-
         y = np.arange(len(A))
         vals = A["value"].to_numpy(dtype=float)
         stds = A["std"].to_numpy(dtype=float)
@@ -2238,7 +2251,7 @@ class MPCOResults:
 
         ax.barh(y, vals, zorder=2)
         ax.set_yticks(y)
-        ax.set_yticklabels(A["Label"])
+        ax.set_yticklabels(A["Label"], fontsize=fontsize)
 
         if agg == "mean" and show_std_errorbar:
             ax.errorbar(
@@ -2271,17 +2284,18 @@ class MPCOResults:
             else:
                 x_text = v + pad
 
-            ax.text(x_text, i, txt, va="center", ha="left", fontsize=9, zorder=4)
+            ax.text(x_text, i, txt, va="center", ha="left", fontsize=fontsize, zorder=4)
 
-        ax.set_xlabel(metric)
-        ax.set_ylabel("Tier–Case")
+        ax.set_xlabel(metric, fontsize=fontsize)
+        ax.set_ylabel("Tier–Case", fontsize=fontsize)
+        ax.tick_params(axis="x", labelsize=fontsize)
 
         if title is None:
             if agg == "mean" and (show_std_errorbar or show_std_text):
                 title = f"{metric} per Tier–Case (mean ± {std_k:g}σ)"
             else:
                 title = f"{metric} per Tier–Case ({agg})"
-        ax.set_title(title)
+        ax.set_title(title, fontsize=fontsize)
 
         ax.grid(axis="x", linestyle="--", alpha=0.35, zorder=1)
 
