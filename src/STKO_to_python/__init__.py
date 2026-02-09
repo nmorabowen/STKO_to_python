@@ -21,6 +21,7 @@ from .results.nodal_results_dataclass import NodalResults
 from .results.nodal_results_plotting import NodalResultsPlotter
 
 from .MPCOList import MPCOResults
+from .MPCOList import MPCO_df
 
 __all__ = [
     "MPCODataSet",
@@ -37,4 +38,5 @@ __all__ = [
     "NodalResults",
     "NodalResultsPlotter",
     "MPCOResults",
+    "MPCO_df"
 ]
