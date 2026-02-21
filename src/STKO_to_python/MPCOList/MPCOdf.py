@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 import numpy as np
 import pandas as pd
 from typing import Any, Literal, TYPE_CHECKING
@@ -150,7 +151,6 @@ class MPCO_df:
             "edp",
         ]
         return df[out_cols]
-
 
     def drift_df(
         self,
@@ -598,6 +598,289 @@ class MPCO_df:
             relative_drift=None,
             op=op,
         )
+
+    def pga_df_mod(
+        self,
+        *,
+        node: int | tuple[float, float] | tuple[float, float, float],
+        components: tuple[int, ...] = (1, 2),
+        result_name: str = "ACCELERATION",
+        combine: str = "srss",                 # "srss" | "maxabs" | "none"
+        reduce_time: str = "abs_max",          # "abs_max" | "max" | "min"
+        op: str | None = None,                 # None | "log"
+        eps_log: float = 1e-16,
+        stage: str | None = None,
+        # ---- Case A correction ----
+        fix_A_relative: bool = True,
+        motions_root: str | Path | None = Path(r"C:\Users\nmb\Dropbox\UANDES EC\San Ramon v3\motions_reduced"),
+        # ---- selection like the original pga_df_long ----
+        model: str | Iterable[str] | None = None,
+        station: str | Iterable[str] | None = None,
+        rupture: str | Iterable[str] | None = None,
+        order: Callable[[tuple[str, str, str], Any], Any] | None = None,
+    ) -> pd.DataFrame:
+        """
+        Compute PGA per (Tier, Case, sta, rup), with optional Case A correction.
+
+        Robust to different record lengths (e.g., model 40s vs GM 60s):
+        - alignment is always done by INNER join on the step index.
+        """
+
+        if fix_A_relative and motions_root is None:
+            raise ValueError("motions_root must be provided when fix_A_relative=True.")
+        motions_root = Path(motions_root) if motions_root is not None else None
+
+        if combine not in ("srss", "maxabs", "none"):
+            raise ValueError("combine must be 'srss', 'maxabs', or 'none'.")
+        if reduce_time not in ("abs_max", "max", "min"):
+            raise ValueError("reduce_time must be 'abs_max', 'max', or 'min'.")
+        if op not in (None, "log"):
+            raise ValueError("op must be None or 'log'.")
+        if op == "log" and eps_log <= 0:
+            raise ValueError("eps_log must be > 0 when op='log'.")
+        if not components:
+            raise ValueError("components must be non-empty.")
+        if combine == "none" and len(components) != 1:
+            raise ValueError("combine='none' requires a single component.")
+
+        comps = tuple(int(c) for c in components)
+
+        def _norm_sta_folder(sta: str) -> str:
+            s = str(sta)
+            return s if s.startswith("sta_") else f"sta_{s}"
+
+        def _load_ground_acc_step(sta: str, rup: str, comp: int) -> pd.Series:
+            """
+            Reads acceleration.txt:
+                time ax ay az   (m/s^2)
+
+            Returns:
+                Series indexed by integer step (0..N-1), values in m/s^2
+            """
+            sta_dir = _norm_sta_folder(sta)
+            rup_s = str(rup)
+
+            candidates: list[Path] = [
+                motions_root / sta_dir / rup_s / "acceleration.txt",
+            ]
+            if not rup_s.startswith("rup_"):
+                candidates.append(motions_root / sta_dir / f"rup_{rup_s}" / "acceleration.txt")
+
+            last_err: Exception | None = None
+            for f in candidates:
+                try:
+                    data = np.loadtxt(f, skiprows=1)
+                    if data.ndim != 2 or data.shape[1] != 4:
+                        raise ValueError(f"Expected (t,ax,ay,az) in {f}, got shape={data.shape}")
+                    a = data[:, comp]  # comp=1,2,3
+                    return pd.Series(
+                        a.astype(float),
+                        index=pd.RangeIndex(len(a), name="step"),
+                        name=f"ag[{comp}]",
+                    )
+                except Exception as e:
+                    last_err = e
+                    continue
+
+            raise FileNotFoundError(
+                f"Could not load acceleration.txt for sta={sta!r}, rup={rup!r}. Tried: {candidates}"
+            ) from last_err
+
+        def _select_stage(s: pd.Series | pd.DataFrame) -> pd.Series | pd.DataFrame:
+            if not isinstance(s, (pd.Series, pd.DataFrame)):
+                return s
+            idx = s.index
+            if not isinstance(idx, pd.MultiIndex) or idx.nlevels != 3:
+                return s
+
+            stages = tuple(sorted({str(x) for x in idx.get_level_values(0)}))
+            if not stages:
+                return s.iloc[0:0]
+
+            if stage is not None:
+                st = str(stage)
+                if st in stages:
+                    return s.xs(st, level=0)
+                raise ValueError(f"Requested stage={st!r} not found. Available stages={stages}")
+
+            return s.xs(stages[-1], level=0)
+
+        def _reduce(arr: np.ndarray) -> float:
+            if arr.size == 0:
+                return float("nan")
+            if reduce_time == "abs_max":
+                return float(np.nanmax(np.abs(arr)))
+            if reduce_time == "max":
+                return float(np.nanmax(arr))
+            if reduce_time == "min":
+                return float(np.nanmin(arr))
+            raise RuntimeError("unreachable")
+
+        def _apply_op(x: float) -> float:
+            if not np.isfinite(x):
+                return float("nan")
+            if op is None:
+                return float(x)
+            return float(np.log(np.maximum(float(x), float(eps_log))))
+
+        pairs = self.select(model=model, station=station, rupture=rupture, order=order)
+        rows: list[dict[str, Any]] = []
+
+        for (model_name, sta, rup), nr in pairs:
+            tier, case = self.parse_tier_letter(model_name)
+
+            if isinstance(node, (int, np.integer)):
+                node_id = int(node)
+            else:
+                node_id = int(nr.info.nearest_node_id([node], return_distance=False)[0])
+
+            series_list: list[pd.Series] = []
+
+            for comp in comps:
+                try:
+                    s = nr.fetch(result_name=result_name, component=comp, node_ids=[node_id])
+                except Exception:
+                    continue
+
+                s = _select_stage(s)
+
+                if not (isinstance(s.index, pd.MultiIndex) and s.index.nlevels == 2):
+                    continue
+
+                s = s.xs(node_id, level=0).sort_index().astype(float)
+                if s.empty:
+                    continue
+
+                # Case A correction: relative -> absolute
+                if fix_A_relative and str(case) == "A":
+                    ag = _load_ground_acc_step(str(sta), str(rup), int(comp))
+                    # INNER alignment makes 60s vs 40s safe
+                    s, ag = s.align(ag, join="inner")
+                    if s.empty:
+                        continue
+                    s = s + 1000.0 * ag  # m/s^2 -> mm/s^2
+
+                series_list.append(s)
+
+            if not series_list:
+                continue
+
+            # Align components on common steps
+            dfc = pd.concat(series_list, axis=1, join="inner").astype(float).dropna(how="any")
+            if dfc.empty:
+                continue
+
+            vals = dfc.to_numpy(dtype=float)  # (nsteps, ncomp)
+
+            if combine == "srss":
+                combined = np.sqrt(np.nansum(vals * vals, axis=1))
+            elif combine == "maxabs":
+                combined = np.nanmax(np.abs(vals), axis=1)
+            else:  # "none"
+                combined = vals[:, 0]
+
+            pga_val = _apply_op(_reduce(combined))
+
+            rows.append(
+                dict(
+                    Tier=int(tier),
+                    Case=str(case),
+                    sta=str(sta),
+                    rup=str(rup),
+                    pga=float(pga_val) if np.isfinite(pga_val) else float("nan"),
+                )
+            )
+
+        df = pd.DataFrame(rows)
+        if df.empty:
+            return df
+
+        df["Tier"] = df["Tier"].astype(int)
+        df["Case"] = df["Case"].astype("category")
+        df["sta"] = df["sta"].astype("category")
+        df["rup"] = df["rup"].astype("category")
+        return df
+
+
+    def pga_df_long_mod(
+        self,
+        *,
+        node: int | tuple[float, float] | tuple[float, float, float],
+        components: tuple[int, ...] = (1, 2),
+        result_name: str = "ACCELERATION",
+        stage: str | None = None,
+        combine: str = "srss",                  # "srss" | "maxabs" | "none"
+        reduce_time: str = "abs_max",           # "abs_max" | "max" | "min"
+        op: str | None = "log",                 # None | "log"
+        eps_log: float = 1e-16,
+        fix_A_relative: bool = True,
+        motions_root: str | Path | None = Path(r"C:\Users\nmb\Dropbox\UANDES EC\San Ramon v3\motions_reduced"),
+        # keep same structure as pga_df_long:
+        model: str | Iterable[str] | None = None,
+        station: str | Iterable[str] | None = None,
+        rupture: str | Iterable[str] | None = None,
+        order: Callable[[tuple[str, str, str], Any], Any] | None = None,
+    ) -> pd.DataFrame:
+        """
+        LONG-format PGA table (BayesStatsModel compatible).
+
+        Output columns (LONG):
+            Tier | Case | sta | rup | runkey | component | result_name |
+            reduce_time | relative_drift | op | edp
+        """
+
+        if op not in (None, "log"):
+            raise ValueError("pga_df_long_mod: op must be None or 'log'.")
+        if op == "log" and eps_log <= 0:
+            raise ValueError("pga_df_long_mod: eps_log must be > 0 when op='log'.")
+
+        df_wide = self.pga_df_mod(
+            node=node,
+            components=components,
+            result_name=result_name,
+            combine=combine,
+            reduce_time=reduce_time,
+            op=op,
+            eps_log=eps_log,
+            stage=stage,
+            fix_A_relative=fix_A_relative,
+            motions_root=motions_root,
+            model=model,
+            station=station,
+            rupture=rupture,
+            order=order,
+        )
+
+        # Always return a proper LONG table (even if empty)
+        if df_wide.empty:
+            return pd.DataFrame(
+                columns=[
+                    "Tier", "Case", "sta", "rup", "runkey",
+                    "component", "result_name", "reduce_time",
+                    "relative_drift", "op", "edp",
+                ]
+            )
+
+        df_wide = df_wide.copy()
+        df_wide["EDP"] = pd.to_numeric(df_wide["pga"], errors="coerce")
+
+        # component metadata to match your LONG conventions
+        comp_meta: str | int = int(components[0]) if combine == "none" else str(combine)
+
+        return self.wide_to_long(
+            df_wide,
+            id_cols=("Tier", "Case", "sta", "rup"),
+            value_col="EDP",
+            result_name=result_name,
+            component=comp_meta,
+            reduce_time=reduce_time,
+            relative_drift=None,
+            op=("log" if op == "log" else "raw"),
+        )
+
+
+
+
 
     # ------------------------------------------------------------------
     # TORSION (WIDE + LONG)
