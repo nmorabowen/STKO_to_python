@@ -225,23 +225,35 @@ class NodalResults:
         node_ids: int | Sequence[int] | None = None,
         selection_set_id: int | Sequence[int] | None = None,
         selection_set_name: str | Sequence[str] | None = None,
+        coordinates: Sequence[Sequence[float]] | None = None,
         only_available: bool = True,
-    ) -> pd.Series | pd.DataFrame:
+        return_nodes: bool = False,
+    ) -> (
+        pd.Series
+        | pd.DataFrame
+        | tuple[pd.Series | pd.DataFrame, list[int]]
+    ):
         """
         Fetch results with optional node filtering.
 
         You can filter by any combination of:
-          - node_ids
-          - selection_set_id
-          - selection_set_name
+        - node_ids
+        - selection_set_id
+        - selection_set_name
+        - coordinates  (x,y) or (x,y,z) -> nearest nodes
 
         Semantics: UNION of all node sources.
 
         only_available:
-          Passed to selection_set resolver(s) to optionally intersect with self.info.nodes_ids.
+        Passed to selection_set resolver(s) to optionally intersect with self.info.nodes_ids.
+
+        return_nodes:
+        If True, return (data, resolved_node_ids). The resolved ids correspond to the UNION
+        of all node sources (after uniquing). If no node filter was provided, returns [].
         """
         df = self.df
         gathered: list[np.ndarray] = []
+        resolved_node_ids: list[int] = []
 
         # ---- selection by id ----
         if selection_set_id is not None:
@@ -263,11 +275,34 @@ class NodalResults:
                     raise ValueError("node_ids is empty.")
                 gathered.append(arr)
 
+        # ---- coordinates -> nearest node_ids ----
+        if coordinates is not None:
+            if not isinstance(coordinates, (list, tuple, np.ndarray)):
+                raise TypeError(
+                    "coordinates must be a sequence of points like [(x,y), ...] or [(x,y,z), ...]."
+                )
+            if len(coordinates) == 0:
+                raise ValueError("coordinates is empty.")
+
+            pts: list[tuple[float, ...]] = []
+            for i, p in enumerate(coordinates):
+                if not isinstance(p, (list, tuple, np.ndarray)):
+                    raise TypeError(f"coordinates[{i}] must be a sequence (x,y) or (x,y,z).")
+                pp = tuple(float(v) for v in p)
+                if len(pp) not in (2, 3):
+                    raise TypeError(f"coordinates[{i}] must have length 2 or 3. Got {len(pp)}.")
+                pts.append(pp)
+
+            ids = self.info.nearest_node_id(pts, return_distance=False)
+            gathered.append(np.asarray(ids, dtype=np.int64))
+
         # ---- apply node filter ----
         if gathered:
             node_ids_arr = np.unique(np.concatenate(gathered))
             if node_ids_arr.size == 0:
                 raise ValueError("Resolved node set is empty.")
+
+            resolved_node_ids = node_ids_arr.astype(int).tolist()
 
             idx = df.index
             if not isinstance(idx, pd.MultiIndex):
@@ -302,6 +337,12 @@ class NodalResults:
 
         cols = df.columns
 
+        # helper to optionally attach nodes
+        def _ret(out: pd.Series | pd.DataFrame):
+            if return_nodes:
+                return out, resolved_node_ids
+            return out
+
         # ---- MultiIndex columns: (result_name, component) ----
         if isinstance(cols, pd.MultiIndex):
             if result_name is None:
@@ -314,11 +355,11 @@ class NodalResults:
                 sub_cols = [c for c in cols if str(c[0]) == str(result_name)]
                 if not sub_cols:
                     raise ValueError(f"No components found for result '{result_name}'.")
-                return df.loc[:, sub_cols]
+                return _ret(df.loc[:, sub_cols])
 
             for c0, c1 in cols:
                 if str(c0) == str(result_name) and str(c1) == str(component):
-                    return df.loc[:, (c0, c1)]
+                    return _ret(df.loc[:, (c0, c1)])
 
             raise ValueError(
                 f"Component '{component}' not found for result '{result_name}'.\n"
@@ -330,14 +371,14 @@ class NodalResults:
             raise ValueError("Single-level columns: use fetch(component=...) only.")
 
         if component is None:
-            return df
+            return _ret(df)
 
         if component in cols:
-            return df[component]
+            return _ret(df[component])
 
         comp_str = str(component)
         if comp_str in cols:
-            return df[comp_str]
+            return _ret(df[comp_str])
 
         raise ValueError(
             f"Component '{component}' not found.\n"

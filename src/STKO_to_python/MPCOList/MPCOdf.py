@@ -8,6 +8,7 @@ from collections.abc import Callable, Iterable, Sequence
 
 if TYPE_CHECKING:
     from .MPCOResults import MPCOResults
+    from ..results.nodal_results_dataclass import NodalResults
 
 
 class MPCO_df:
@@ -603,31 +604,37 @@ class MPCO_df:
         self,
         *,
         node: int | tuple[float, float] | tuple[float, float, float],
-        components: tuple[int, ...] = (1, 2),
+        components: Sequence[int | str] = (1, 2),
         result_name: str = "ACCELERATION",
         combine: str = "srss",                 # "srss" | "maxabs" | "none"
         reduce_time: str = "abs_max",          # "abs_max" | "max" | "min"
         op: str | None = None,                 # None | "log"
         eps_log: float = 1e-16,
         stage: str | None = None,
-        # ---- Case A correction ----
-        fix_A_relative: bool = True,
-        motions_root: str | Path | None = Path(r"C:\Users\nmb\Dropbox\UANDES EC\San Ramon v3\motions_reduced"),
-        # ---- selection like the original pga_df_long ----
+
+        # keep consistent with pga_df
         model: str | Iterable[str] | None = None,
         station: str | Iterable[str] | None = None,
         rupture: str | Iterable[str] | None = None,
         order: Callable[[tuple[str, str, str], Any], Any] | None = None,
+
+        # optional "advanced" selector (kept for backward-compat)
+        selection: dict | None = None,
+
+        # ---- Tier 1 correction ----
+        fix_tier1_relative: bool = True,
+        motions_root: str | Path | None = Path(r"C:\Users\nmb\Dropbox\UANDES EC\San Ramon v3\motions_reduced"),
     ) -> pd.DataFrame:
         """
-        Compute PGA per (Tier, Case, sta, rup), with optional Case A correction.
+        Compute PGA per (Tier, Case, sta, rup).
 
-        Robust to different record lengths (e.g., model 40s vs GM 60s):
-        - alignment is always done by INNER join on the step index.
+        Tier 1 correction (if enabled):
+            a_abs(t) = a_rel(t) + ag(t)
+        where ag(t) is imposed ground acceleration (m/s^2), interpolated to model time grid.
         """
 
-        if fix_A_relative and motions_root is None:
-            raise ValueError("motions_root must be provided when fix_A_relative=True.")
+        if fix_tier1_relative and motions_root is None:
+            raise ValueError("motions_root must be provided when fix_tier1_relative=True.")
         motions_root = Path(motions_root) if motions_root is not None else None
 
         if combine not in ("srss", "maxabs", "none"):
@@ -638,31 +645,27 @@ class MPCO_df:
             raise ValueError("op must be None or 'log'.")
         if op == "log" and eps_log <= 0:
             raise ValueError("eps_log must be > 0 when op='log'.")
-        if not components:
-            raise ValueError("components must be non-empty.")
-        if combine == "none" and len(components) != 1:
-            raise ValueError("combine='none' requires a single component.")
-
         comps = tuple(int(c) for c in components)
+        if not comps:
+            raise ValueError("components must be non-empty.")
+        if any(c not in (1, 2, 3) for c in comps):
+            raise ValueError("components must be a subset of (1, 2, 3) mapping to (ax, ay, az).")
+        if combine == "none" and len(comps) != 1:
+            raise ValueError("combine='none' requires a single component.")
 
         def _norm_sta_folder(sta: str) -> str:
             s = str(sta)
             return s if s.startswith("sta_") else f"sta_{s}"
 
-        def _load_ground_acc_step(sta: str, rup: str, comp: int) -> pd.Series:
+        def _load_ground_acc_time(sta: str, rup: str, comp: int) -> tuple[np.ndarray, np.ndarray]:
             """
-            Reads acceleration.txt:
-                time ax ay az   (m/s^2)
-
-            Returns:
-                Series indexed by integer step (0..N-1), values in m/s^2
+            acceleration.txt: time ax ay az   (m/s^2)
+            returns (t_gm, a_gm) in seconds and m/s^2
             """
             sta_dir = _norm_sta_folder(sta)
             rup_s = str(rup)
 
-            candidates: list[Path] = [
-                motions_root / sta_dir / rup_s / "acceleration.txt",
-            ]
+            candidates: list[Path] = [motions_root / sta_dir / rup_s / "acceleration.txt"]
             if not rup_s.startswith("rup_"):
                 candidates.append(motions_root / sta_dir / f"rup_{rup_s}" / "acceleration.txt")
 
@@ -672,12 +675,9 @@ class MPCO_df:
                     data = np.loadtxt(f, skiprows=1)
                     if data.ndim != 2 or data.shape[1] != 4:
                         raise ValueError(f"Expected (t,ax,ay,az) in {f}, got shape={data.shape}")
-                    a = data[:, comp]  # comp=1,2,3
-                    return pd.Series(
-                        a.astype(float),
-                        index=pd.RangeIndex(len(a), name="step"),
-                        name=f"ag[{comp}]",
-                    )
+                    t = data[:, 0].astype(float)
+                    a = data[:, comp].astype(float)  # comp=1,2,3
+                    return t, a
                 except Exception as e:
                     last_err = e
                     continue
@@ -723,18 +723,28 @@ class MPCO_df:
                 return float(x)
             return float(np.log(np.maximum(float(x), float(eps_log))))
 
-        pairs = self.select(model=model, station=station, rupture=rupture, order=order)
+        # selector consistent with pga_df; selection overrides explicit args
+        sel = dict(model=model, station=station, rupture=rupture, order=order)
+        if selection:
+            sel.update(selection)
+
+        pairs = self.select(**sel)
         rows: list[dict[str, Any]] = []
 
         for (model_name, sta, rup), nr in pairs:
             tier, case = self.parse_tier_letter(model_name)
 
+            t_model = np.asarray(getattr(nr, "time", None), dtype=float)
+            if t_model.size == 0:
+                continue
+
+            # node selection
             if isinstance(node, (int, np.integer)):
                 node_id = int(node)
             else:
                 node_id = int(nr.info.nearest_node_id([node], return_distance=False)[0])
 
-            series_list: list[pd.Series] = []
+            comp_arrays: list[np.ndarray] = []
 
             for comp in comps:
                 try:
@@ -751,33 +761,40 @@ class MPCO_df:
                 if s.empty:
                     continue
 
-                # Case A correction: relative -> absolute
-                if fix_A_relative and str(case) == "A":
-                    ag = _load_ground_acc_step(str(sta), str(rup), int(comp))
-                    # INNER alignment makes 60s vs 40s safe
-                    s, ag = s.align(ag, join="inner")
-                    if s.empty:
+                n = min(len(s), len(t_model))
+                a_rel = s.to_numpy(dtype=float)[:n]
+                t = t_model[:n]
+
+                # ---- Tier 1 correction here ----
+                if fix_tier1_relative and int(tier) == 1:
+                    t_gm, a_gm = _load_ground_acc_time(str(sta), str(rup), int(comp))
+                    ag = np.interp(t, t_gm, a_gm, left=np.nan, right=np.nan)
+
+                    msk = np.isfinite(a_rel) & np.isfinite(ag)
+                    if not np.any(msk):
                         continue
-                    s = s + 1000.0 * ag  # m/s^2 -> mm/s^2
 
-                series_list.append(s)
+                    a_abs = a_rel[msk] + 1000.0 * ag[msk]  # m/s^2 -> mm/s^2
+                    comp_arrays.append(a_abs)
+                else:
+                    a_rel = a_rel[np.isfinite(a_rel)]
+                    if a_rel.size:
+                        comp_arrays.append(a_rel)
 
-            if not series_list:
+            if not comp_arrays:
                 continue
 
-            # Align components on common steps
-            dfc = pd.concat(series_list, axis=1, join="inner").astype(float).dropna(how="any")
-            if dfc.empty:
+            nmin = min(a.size for a in comp_arrays)
+            if nmin <= 0:
                 continue
-
-            vals = dfc.to_numpy(dtype=float)  # (nsteps, ncomp)
+            A = np.vstack([a[:nmin] for a in comp_arrays])  # (ncomp, nt)
 
             if combine == "srss":
-                combined = np.sqrt(np.nansum(vals * vals, axis=1))
+                combined = np.sqrt(np.nansum(A * A, axis=0))
             elif combine == "maxabs":
-                combined = np.nanmax(np.abs(vals), axis=1)
+                combined = np.nanmax(np.abs(A), axis=0)
             else:  # "none"
-                combined = vals[:, 0]
+                combined = A[0]
 
             pga_val = _apply_op(_reduce(combined))
 
@@ -801,36 +818,32 @@ class MPCO_df:
         df["rup"] = df["rup"].astype("category")
         return df
 
-
     def pga_df_long_mod(
         self,
         *,
         node: int | tuple[float, float] | tuple[float, float, float],
-        components: tuple[int, ...] = (1, 2),
+        components: Sequence[int | str] = (1, 2),
         result_name: str = "ACCELERATION",
         stage: str | None = None,
-        combine: str = "srss",                  # "srss" | "maxabs" | "none"
-        reduce_time: str = "abs_max",           # "abs_max" | "max" | "min"
-        op: str | None = "log",                 # None | "log"
+        combine: str = "srss",
+        reduce_time: str = "abs_max",
+        op: str = "log",                       # "log" | "raw"
         eps_log: float = 1e-16,
-        fix_A_relative: bool = True,
-        motions_root: str | Path | None = Path(r"C:\Users\nmb\Dropbox\UANDES EC\San Ramon v3\motions_reduced"),
-        # keep same structure as pga_df_long:
+
+        # keep consistent with pga_df
         model: str | Iterable[str] | None = None,
         station: str | Iterable[str] | None = None,
         rupture: str | Iterable[str] | None = None,
         order: Callable[[tuple[str, str, str], Any], Any] | None = None,
+
+        # optional advanced selector
+        selection: dict | None = None,
+
+        fix_tier1_relative: bool = True,
+        motions_root: str | Path | None = Path(r"C:\Users\nmb\Dropbox\UANDES EC\San Ramon v3\motions_reduced"),
     ) -> pd.DataFrame:
-        """
-        LONG-format PGA table (BayesStatsModel compatible).
-
-        Output columns (LONG):
-            Tier | Case | sta | rup | runkey | component | result_name |
-            reduce_time | relative_drift | op | edp
-        """
-
-        if op not in (None, "log"):
-            raise ValueError("pga_df_long_mod: op must be None or 'log'.")
+        if op not in ("raw", "log"):
+            raise ValueError("pga_df_long_mod: op must be 'raw' or 'log'.")
         if op == "log" and eps_log <= 0:
             raise ValueError("pga_df_long_mod: eps_log must be > 0 when op='log'.")
 
@@ -840,18 +853,18 @@ class MPCO_df:
             result_name=result_name,
             combine=combine,
             reduce_time=reduce_time,
-            op=op,
+            op=("log" if op == "log" else None),
             eps_log=eps_log,
             stage=stage,
-            fix_A_relative=fix_A_relative,
-            motions_root=motions_root,
             model=model,
             station=station,
             rupture=rupture,
             order=order,
+            selection=selection,
+            fix_tier1_relative=fix_tier1_relative,
+            motions_root=motions_root,
         )
 
-        # Always return a proper LONG table (even if empty)
         if df_wide.empty:
             return pd.DataFrame(
                 columns=[
@@ -864,8 +877,8 @@ class MPCO_df:
         df_wide = df_wide.copy()
         df_wide["EDP"] = pd.to_numeric(df_wide["pga"], errors="coerce")
 
-        # component metadata to match your LONG conventions
-        comp_meta: str | int = int(components[0]) if combine == "none" else str(combine)
+        comps = tuple(int(c) for c in components)
+        comp_meta: str | int = int(comps[0]) if combine == "none" else str(combine)
 
         return self.wide_to_long(
             df_wide,
@@ -877,9 +890,6 @@ class MPCO_df:
             relative_drift=None,
             op=("log" if op == "log" else "raw"),
         )
-
-
-
 
 
     # ------------------------------------------------------------------
