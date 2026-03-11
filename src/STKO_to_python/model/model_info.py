@@ -463,8 +463,8 @@ class ModelInfo:
                     # Iterate over all steps and collect STEP & TIME attributes
                     for step_name in data_group.keys():
                         step_group = data_group[step_name]
-                        step_value = step_group.attrs.get("STEP")
-                        time_value = step_group.attrs.get("TIME")
+                        step_value = self._coerce_hdf5_attr_scalar(step_group.attrs.get("STEP"))
+                        time_value = self._coerce_hdf5_attr_scalar(step_group.attrs.get("TIME"))
 
                         if step_value is not None and time_value is not None:
                             time_series_dict[int(step_value)] = float(time_value)  # Store STEP -> TIME mapping
@@ -506,8 +506,8 @@ class ModelInfo:
                     # Iterate over all steps and collect STEP & TIME attributes
                     for step_name in data_group.keys():
                         step_group = data_group[step_name]
-                        step_value = step_group.attrs.get("STEP")
-                        time_value = step_group.attrs.get("TIME")
+                        step_value = self._coerce_hdf5_attr_scalar(step_group.attrs.get("STEP"))
+                        time_value = self._coerce_hdf5_attr_scalar(step_group.attrs.get("TIME"))
 
                         if step_value is not None and time_value is not None:
                             time_series_dict[int(step_value)] = float(time_value)  # Store STEP -> TIME mapping
@@ -701,6 +701,27 @@ class ModelInfo:
             return {row.node_id: row._asdict() for row in sub.itertuples(index=False)}
         return sub
     # ─────────────────────────────────────────────────────────────────────────
+    @staticmethod
+    def _coerce_hdf5_attr_scalar(value: Any) -> Any:
+        """
+        Normalize common h5py attribute scalars, including 1-element NumPy arrays.
+        """
+        if value is None:
+            return None
+        if hasattr(value, "shape") and getattr(value, "shape", ()) == ():
+            try:
+                return value.item()
+            except Exception:
+                return value
+        if hasattr(value, "__len__") and not isinstance(value, (str, bytes)):
+            try:
+                if len(value) == 1:
+                    first = value[0]
+                    return first.item() if hasattr(first, "item") else first
+            except Exception:
+                return value
+        return value.item() if hasattr(value, "item") else value
+
     @staticmethod
     def _to_step_int(step_key: str | bytes, pattern: str = r"(\d+)$") -> int:
         """

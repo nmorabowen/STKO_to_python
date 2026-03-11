@@ -184,6 +184,16 @@ class MPCODataSet:
         Print a summary of the virtual dataset.
         ---------------------------------------
         """
+        def _metadata_len(value: Any) -> int:
+            if isinstance(value, dict):
+                df = value.get("dataframe")
+                if hasattr(df, "__len__"):
+                    return len(df)
+                arr = value.get("array")
+                if hasattr(arr, "__len__"):
+                    return len(arr)
+            return len(value)
+
         print(f'File name: {self.recorder_name}')
         print(f'Number of partitions: {len(self.results_partitions)}')
         
@@ -210,9 +220,9 @@ class MPCODataSet:
         print('------------------------------------------------------')
         print('General model information:')
         
-        print(f"Number of nodes: {len(self.nodes_info)}")
+        print(f"Number of nodes: {_metadata_len(self.nodes_info)}")
         print(f"Number of element types: {len(self.unique_element_types)}")
-        print(f"Number of elements: {len(self.elements_info)}")
+        print(f"Number of elements: {_metadata_len(self.elements_info)}")
         print(f"Number of steps: {self.number_of_steps}")
         print(f"Number of selection sets: {len(self.selection_set)}")
 
