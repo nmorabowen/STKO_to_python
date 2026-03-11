@@ -147,11 +147,21 @@ class Nodes:
         return tuple(map(str, requested))
 
     def _normalize_results(self, results) -> Tuple[str, ...]:
+        available = tuple(sorted(map(str, self.dataset.node_results_names)))
         if results is None:
-            return tuple(sorted(self.dataset.node_results_names))
+            return available
         if isinstance(results, str):
-            return (results,)
-        return tuple(results)
+            requested = (results,)
+        else:
+            requested = tuple(map(str, results))
+
+        missing = tuple(name for name in requested if name not in available)
+        if missing:
+            raise ValueError(
+                f"Invalid results_name value(s): {missing}. "
+                f"Available nodal results: {available}"
+            )
+        return requested
 
     def _selection_set_helper(self):
         if self._selection_info is None:

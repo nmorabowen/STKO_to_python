@@ -1,11 +1,8 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 import pandas as pd
 import pytest
 
-from STKO_to_python import MPCODataSet
 from STKO_to_python.nodes.nodes import Nodes
 from STKO_to_python.results.nodal_results_info import NodalResultsInfo
 
@@ -15,6 +12,28 @@ def _info_with_selection_set(selection_set: dict) -> NodalResultsInfo:
         selection_set=selection_set,
         nodes_ids=(1, 2, 3, 4),
     )
+
+
+class _DummyDataset:
+    def __init__(self) -> None:
+        self.model_stages = ["MODEL_STAGE[1]"]
+        self.node_results_names = ["DISPLACEMENT"]
+        self.selection_set = {
+            33: {"SET_NAME": "TopNode", "NODES": []},
+            41: {"SET_NAME": "topNode", "NODES": [2]},
+        }
+        self.nodes_info = {
+            "dataframe": pd.DataFrame(
+                {
+                    "node_id": [1, 2, 3, 4],
+                    "file_id": [0, 0, 0, 0],
+                    "index": [0, 1, 2, 3],
+                    "x": [0.0, 1.0, 2.0, 3.0],
+                    "y": [0.0, 0.0, 0.0, 0.0],
+                    "z": [0.0, 0.0, 0.0, 0.0],
+                }
+            )
+        }
 
 
 def test_selection_set_name_uses_exact_case_first():
@@ -64,16 +83,11 @@ def test_empty_selection_set_raises_clear_error():
 
 
 def test_example_stage_validation_happens_before_selection_lookup():
-    model_path = Path(
-        r"c:\Users\nmb\Documents\GitHub\STKO_to_python\examples\test1"
-    )
-    model = MPCODataSet(
-        hdf5_directory=model_path,
-        recorder_name="results_nodes",
-    )
+    model = _DummyDataset()
+    nodes = Nodes(model)
 
     with pytest.raises(ValueError, match=r"Invalid model_stage value\(s\): \('MODEL_STAGE\[5\]',\)\. Available: \('MODEL_STAGE\[1\]',\)"):
-        model.nodes.get_nodal_results(
+        nodes.get_nodal_results(
             results_name="DISPLACEMENT",
             model_stage="MODEL_STAGE[5]",
             selection_set_name="TopNode",
@@ -81,19 +95,14 @@ def test_example_stage_validation_happens_before_selection_lookup():
 
 
 def test_example_topnode_resolves_exact_case_then_fails_empty():
-    model_path = Path(
-        r"c:\Users\nmb\Documents\GitHub\STKO_to_python\examples\test1"
-    )
-    model = MPCODataSet(
-        hdf5_directory=model_path,
-        recorder_name="results_nodes",
-    )
+    model = _DummyDataset()
+    nodes = Nodes(model)
 
     assert model.model_stages == ["MODEL_STAGE[1]"]
     assert model.selection_set[33]["SET_NAME"] == "TopNode"
 
     with pytest.raises(ValueError, match="Selection set 'TopNode' \\(id=33\\) contains 0 nodes"):
-        model.nodes.get_nodal_results(
+        nodes.get_nodal_results(
             results_name="DISPLACEMENT",
             model_stage="MODEL_STAGE[1]",
             selection_set_name="TopNode",

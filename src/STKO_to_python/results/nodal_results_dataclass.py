@@ -287,6 +287,77 @@ class NodalResults:
             raise ValueError("Resolved node ids are not present in nodes_info.")
         return out.copy()
 
+    def _resolve_node_input(
+        self,
+        value: int | Sequence[float],
+        *,
+        name: str,
+    ) -> int:
+        if isinstance(value, (int, np.integer)):
+            return int(value)
+        if not isinstance(value, (list, tuple, np.ndarray)):
+            raise TypeError(f"{name} must be a node id or coordinates (x,y) or (x,y,z).")
+
+        coords = tuple(float(x) for x in value)
+        if len(coords) not in (2, 3):
+            raise TypeError(f"{name} coordinates must have length 2 or 3. Got {len(coords)}.")
+        return int(self.info.nearest_node_id([coords])[0])
+
+    def _require_node_step_index(
+        self,
+        data: pd.Series | pd.DataFrame,
+        *,
+        stage: Optional[str],
+        index_error: str,
+    ) -> pd.Series | pd.DataFrame:
+        if isinstance(data.index, pd.MultiIndex) and data.index.nlevels == 3:
+            if stage is None:
+                stages = tuple(sorted({str(x) for x in data.index.get_level_values(0)}))
+                raise ValueError(
+                    f"Multi-stage results detected. Provide stage=... Available: {stages}"
+                )
+            data = data.xs(str(stage), level=0)
+
+        if not (isinstance(data.index, pd.MultiIndex) and data.index.nlevels == 2):
+            raise ValueError(index_error)
+        return data
+
+    def _require_nodes_info(self, *, missing_message: str) -> pd.DataFrame:
+        ni = self.info.nodes_info
+        if ni is None:
+            raise ValueError(missing_message)
+        return ni
+
+    def _node_info_value(
+        self,
+        node_id: int,
+        key: str,
+        *,
+        nodes_info: pd.DataFrame,
+    ) -> float:
+        col = self.info._resolve_column(nodes_info, key, required=True)
+        nid_col = self.info._resolve_column(nodes_info, "node_id", required=False)
+        if nid_col is not None:
+            row = nodes_info.loc[nodes_info[nid_col].to_numpy() == int(node_id)]
+            if row.empty:
+                raise ValueError(f"node_id={int(node_id)} not found in nodes_info.")
+            return float(row.iloc[0][col])
+
+        if int(node_id) not in nodes_info.index:
+            raise ValueError(f"node_id={int(node_id)} not found in nodes_info index.")
+        return float(nodes_info.loc[int(node_id), col])
+
+    def _node_xy(
+        self,
+        node_id: int,
+        *,
+        nodes_info: pd.DataFrame,
+    ) -> tuple[float, float]:
+        return (
+            self._node_info_value(node_id, "x", nodes_info=nodes_info),
+            self._node_info_value(node_id, "y", nodes_info=nodes_info),
+        )
+
     def fetch(
         self,
         result_name: Optional[str] = None,
@@ -392,6 +463,27 @@ class NodalResults:
             f"Available components: {tuple(map(str, cols))}"
         )
 
+    def resolve_node_ids(
+        self,
+        *,
+        selection: Selection | None = None,
+        node_ids: int | Sequence[int] | None = None,
+        selection_set_id: int | Sequence[int] | None = None,
+        selection_set_name: str | Sequence[str] | None = None,
+        coordinates: Sequence[Sequence[float]] | None = None,
+        selection_box: SelectionBox | Sequence[Sequence[float]] | None = None,
+        only_available: bool = True,
+    ) -> list[int]:
+        selection_obj = self._normalize_selection(
+            selection=selection,
+            node_ids=node_ids,
+            selection_set_id=selection_set_id,
+            selection_set_name=selection_set_name,
+            coordinates=coordinates,
+            selection_box=selection_box,
+        )
+        return self.info.resolve_selection(selection_obj, only_available=only_available)
+
     def select(
         self,
         *,
@@ -403,16 +495,24 @@ class NodalResults:
         selection_box: SelectionBox | Sequence[Sequence[float]] | None = None,
         only_available: bool = True,
     ) -> "NodalResults":
-        selection_obj = self._normalize_selection(
+        resolved_node_ids = self.resolve_node_ids(
             selection=selection,
             node_ids=node_ids,
             selection_set_id=selection_set_id,
             selection_set_name=selection_set_name,
             coordinates=coordinates,
             selection_box=selection_box,
+            only_available=only_available,
         )
 
-        if selection_obj.is_empty():
+        if (
+            selection is None
+            and node_ids is None
+            and selection_set_id is None
+            and selection_set_name is None
+            and coordinates is None
+            and selection_box is None
+        ):
             resolved_node_ids = (
                 list(self.info.nodes_ids)
                 if self.info.nodes_ids is not None
@@ -421,10 +521,6 @@ class NodalResults:
             df = self.df
             nodes_info = self.info.nodes_info
         else:
-            resolved_node_ids = self.info.resolve_selection(
-                selection_obj,
-                only_available=only_available,
-            )
             df = self._filter_df_by_node_ids(self.df, resolved_node_ids)
             nodes_info = self._subset_nodes_info(resolved_node_ids)
 
@@ -481,31 +577,15 @@ class NodalResults:
             - node id (int), or
             - coordinates (x,y) or (x,y,z) resolved to nearest node.
         """
-
-        def _as_node_id(v: int | Sequence[float], *, name: str) -> int:
-            if isinstance(v, (int, np.integer)):
-                return int(v)
-            if not isinstance(v, (list, tuple, np.ndarray)):
-                raise TypeError(f"{name} must be a node id or coordinates (x,y) or (x,y,z).")
-            coords = tuple(float(x) for x in v)
-            if len(coords) not in (2, 3):
-                raise TypeError(f"{name} coordinates must have length 2 or 3. Got {len(coords)}.")
-            return int(self.info.nearest_node_id([coords])[0])
-
-        top_id = _as_node_id(top, name="top")
-        bot_id = _as_node_id(bottom, name="bottom")
+        top_id = self._resolve_node_input(top, name="top")
+        bot_id = self._resolve_node_input(bottom, name="bottom")
 
         s = self.fetch(result_name=result_name, component=component, node_ids=[top_id, bot_id])
-
-        # multi-stage -> require stage
-        if isinstance(s.index, pd.MultiIndex) and s.index.nlevels == 3:
-            if stage is None:
-                stages = tuple(sorted({str(x) for x in s.index.get_level_values(0)}))
-                raise ValueError(f"Multi-stage results detected. Provide stage=... Available: {stages}")
-            s = s.xs(str(stage), level=0)
-
-        if not (isinstance(s.index, pd.MultiIndex) and s.index.nlevels == 2):
-            raise ValueError("delta_u() expects index (node_id, step) after stage selection.")
+        s = self._require_node_step_index(
+            s,
+            stage=stage,
+            index_error="delta_u() expects index (node_id, step) after stage selection.",
+        )
 
         u_top = s.xs(top_id, level=0).sort_index()
         u_bot = s.xs(bot_id, level=0).sort_index()
@@ -543,58 +623,25 @@ class NodalResults:
             - node id (int), or
             - coordinates (x,y) or (x,y,z) resolved to nearest node.
         """
+        top_id = self._resolve_node_input(top, name="top")
+        bot_id = self._resolve_node_input(bottom, name="bottom")
 
-        def _as_node_id(v: int | Sequence[float], *, name: str) -> int:
-            if isinstance(v, (int, np.integer)):
-                return int(v)
-
-            if not isinstance(v, (list, tuple, np.ndarray)):
-                raise TypeError(f"{name} must be a node id or coordinates (x,y) or (x,y,z).")
-
-            coords = tuple(float(x) for x in v)
-            if len(coords) not in (2, 3):
-                raise TypeError(f"{name} coordinates must have length 2 or 3. Got {len(coords)}.")
-
-            return int(self.info.nearest_node_id([coords])[0])
-
-        top_id = _as_node_id(top, name="top")
-        bot_id = _as_node_id(bottom, name="bottom")
-
-        # ---- z coords ----
-        if self.info.nodes_info is None:
-            raise ValueError("nodes_info is None. z-coordinates are required for drift().")
-        ni = self.info.nodes_info
-        zcol = self.info._resolve_column(ni, "z", required=True)
-        nid_col = self.info._resolve_column(ni, "node_id", required=False)
-
-        def _z_of(nid: int) -> float:
-            if nid_col is not None:
-                row = ni.loc[ni[nid_col].to_numpy() == nid]
-                if row.empty:
-                    raise ValueError(f"node_id={nid} not found in nodes_info.")
-                return float(row.iloc[0][zcol])
-            if nid not in ni.index:
-                raise ValueError(f"node_id={nid} not found in nodes_info index.")
-            return float(ni.loc[nid, zcol])
-
-        z_top = _z_of(top_id)
-        z_bot = _z_of(bot_id)
+        ni = self._require_nodes_info(
+            missing_message="nodes_info is None. z-coordinates are required for drift()."
+        )
+        z_top = self._node_info_value(top_id, "z", nodes_info=ni)
+        z_bot = self._node_info_value(bot_id, "z", nodes_info=ni)
         dz = float(z_top - z_bot)
         if dz == 0.0:
             raise ValueError("z_top == z_bottom → dz = 0. Cannot compute drift.")
 
         # ---- fetch displacement for both nodes ----
         s = self.fetch(result_name=result_name, component=component, node_ids=[top_id, bot_id])
-
-        # multi-stage -> require stage
-        if isinstance(s.index, pd.MultiIndex) and s.index.nlevels == 3:
-            if stage is None:
-                stages = tuple(sorted({str(x) for x in s.index.get_level_values(0)}))
-                raise ValueError(f"Multi-stage results detected. Provide stage=... Available: {stages}")
-            s = s.xs(str(stage), level=0)
-
-        if not (isinstance(s.index, pd.MultiIndex) and s.index.nlevels == 2):
-            raise ValueError("drift() expects index (node_id, step) after stage selection.")
+        s = self._require_node_step_index(
+            s,
+            stage=stage,
+            index_error="drift() expects index (node_id, step) after stage selection.",
+        )
 
         u_top = s.xs(top_id, level=0).sort_index()
         u_bot = s.xs(bot_id, level=0).sort_index()
@@ -833,15 +880,18 @@ class NodalResults:
         Parameters
         ----------
         reduce_nodes:
-            - "max_abs": story pga is max abs over nodes at story (typical)
-            - "max":     story peak = max over nodes then over time (positive)
-            - "min":     story peak = min over nodes then over time (negative)
+            Controls the extra reduced summary fields returned alongside the
+            fixed envelope fields:
+            - "max_abs": reduced_acc = pga,     ctrl_node_reduced = ctrl_node_pga
+            - "max":     reduced_acc = max_acc, ctrl_node_reduced = ctrl_node_max
+            - "min":     reduced_acc = min_acc, ctrl_node_reduced = ctrl_node_min
 
         Returns
         -------
         DataFrame indexed by story_z with columns:
             n_nodes, max_acc, min_acc, pga,
-            ctrl_node_max, ctrl_node_min, ctrl_node_pga
+            ctrl_node_max, ctrl_node_min, ctrl_node_pga,
+            reduced_acc, ctrl_node_reduced
 
         Notes
         -----
@@ -865,16 +915,11 @@ class NodalResults:
             raise ValueError("No nodes resolved.")
 
         s = self.fetch(result_name=result_name, component=component, node_ids=all_ids)
-
-        # multi-stage -> require stage
-        if isinstance(s.index, pd.MultiIndex) and s.index.nlevels == 3:
-            if stage is None:
-                stages = tuple(sorted({str(x) for x in s.index.get_level_values(0)}))
-                raise ValueError(f"Multi-stage results detected. Provide stage=... Available: {stages}")
-            s = s.xs(str(stage), level=0)
-
-        if not (isinstance(s.index, pd.MultiIndex) and s.index.nlevels == 2):
-            raise ValueError("story_pga_envelope() expects index (node_id, step) after stage selection.")
+        s = self._require_node_step_index(
+            s,
+            stage=stage,
+            index_error="story_pga_envelope() expects index (node_id, step) after stage selection.",
+        )
 
         # wide: rows=node_id, cols=step
         wide = s.unstack(level=-1)
@@ -922,12 +967,18 @@ class NodalResults:
             story_min = float(arr_min[i_min])
             story_pga = float(arr_pga[i_pga])
 
-            # optional alternate "reduce_nodes" semantics
-            # (kept simple: story fields still report max/min/pga; reduce_nodes can choose
-            # which one you care about downstream. If you want it to change pga definition,
-            # uncomment below and define accordingly.)
             if reduce_nodes not in ("max_abs", "max", "min"):
                 raise ValueError("reduce_nodes must be one of: 'max_abs', 'max', 'min'.")
+
+            if reduce_nodes == "max_abs":
+                reduced_acc = story_pga
+                ctrl_node_reduced = int(present_nodes[i_pga])
+            elif reduce_nodes == "max":
+                reduced_acc = story_max
+                ctrl_node_reduced = int(present_nodes[i_max])
+            else:
+                reduced_acc = story_min
+                ctrl_node_reduced = int(present_nodes[i_min])
 
             rows.append(
                 {
@@ -940,6 +991,8 @@ class NodalResults:
                     "ctrl_node_max": int(present_nodes[i_max]),
                     "ctrl_node_min": int(present_nodes[i_min]),
                     "ctrl_node_pga": int(present_nodes[i_pga]),
+                    "reduced_acc": float(reduced_acc),
+                    "ctrl_node_reduced": int(ctrl_node_reduced),
                 }
             )
 
@@ -1012,26 +1065,11 @@ class NodalResults:
         # ----------------------------
         # Baseline plan geometry (dx, dy)
         # ----------------------------
-        if self.info.nodes_info is None:
-            raise ValueError("nodes_info is required (must contain x,y) for roof_torsion().")
-
-        ni = self.info.nodes_info
-        xcol = self.info._resolve_column(ni, "x", required=True)
-        ycol = self.info._resolve_column(ni, "y", required=True)
-        nid_col = self.info._resolve_column(ni, "node_id", required=False)
-
-        def _xy_of(nid: int) -> tuple[float, float]:
-            if nid_col is not None:
-                row = ni.loc[ni[nid_col].to_numpy() == nid]
-                if row.empty:
-                    raise ValueError(f"node_id={nid} not found in nodes_info.")
-                return float(row.iloc[0][xcol]), float(row.iloc[0][ycol])
-            if nid not in ni.index:
-                raise ValueError(f"node_id={nid} not found in nodes_info index.")
-            return float(ni.loc[nid, xcol]), float(ni.loc[nid, ycol])
-
-        xa, ya = _xy_of(a_id)
-        xb, yb = _xy_of(b_id)
+        ni = self._require_nodes_info(
+            missing_message="nodes_info is required (must contain x,y) for roof_torsion()."
+        )
+        xa, ya = self._node_xy(a_id, nodes_info=ni)
+        xb, yb = self._node_xy(b_id, nodes_info=ni)
 
         dx = float(xb - xa)
         dy = float(yb - ya)
@@ -1049,19 +1087,16 @@ class NodalResults:
         ux = self.fetch(result_name=result_name, component=ux_component, node_ids=[a_id, b_id])
         uy = self.fetch(result_name=result_name, component=uy_component, node_ids=[a_id, b_id])
 
-        def _select_stage(s: pd.Series | pd.DataFrame):
-            if isinstance(s.index, pd.MultiIndex) and s.index.nlevels == 3:
-                if stage is None:
-                    stages = tuple(sorted({str(x) for x in s.index.get_level_values(0)}))
-                    raise ValueError(f"Multi-stage results detected. Provide stage=... Available: {stages}")
-                return s.xs(str(stage), level=0)
-            return s
-
-        ux = _select_stage(ux)
-        uy = _select_stage(uy)
-
-        if not (isinstance(ux.index, pd.MultiIndex) and ux.index.nlevels == 2):
-            raise ValueError("roof_torsion(): expected index (node_id, step) after stage selection.")
+        ux = self._require_node_step_index(
+            ux,
+            stage=stage,
+            index_error="roof_torsion(): expected index (node_id, step) after stage selection.",
+        )
+        uy = self._require_node_step_index(
+            uy,
+            stage=stage,
+            index_error="roof_torsion(): expected index (node_id, step) after stage selection.",
+        )
 
         ux_a = ux.xs(a_id, level=0).sort_index()
         ux_b = ux.xs(b_id, level=0).sort_index()
@@ -1401,15 +1436,11 @@ class NodalResults:
         # --------------------------------------------------
         uz = self.fetch(result_name=result_name, component=uz_component, node_ids=[n1, n2, n3])
 
-        # stage selection
-        if isinstance(uz.index, pd.MultiIndex) and uz.index.nlevels == 3:
-            if stage is None:
-                stages = tuple(sorted({str(x) for x in uz.index.get_level_values(0)}))
-                raise ValueError(f"Multi-stage results detected. Provide stage=... Available: {stages}")
-            uz = uz.xs(str(stage), level=0)
-
-        if not (isinstance(uz.index, pd.MultiIndex) and uz.index.nlevels == 2):
-            raise ValueError("base_rocking(): expected index (node_id, step) after stage selection.")
+        uz = self._require_node_step_index(
+            uz,
+            stage=stage,
+            index_error="base_rocking(): expected index (node_id, step) after stage selection.",
+        )
 
         # wide: rows=node, cols=step
         W = uz.unstack(level=-1).loc[[n1, n2, n3]]
@@ -1418,27 +1449,12 @@ class NodalResults:
         # --------------------------------------------------
         # Get plan coords for resolved nodes
         # --------------------------------------------------
-        if self.info.nodes_info is None:
-            raise ValueError("nodes_info is required (must contain x,y) for base_rocking().")
-
-        ni = self.info.nodes_info
-        xcol = self.info._resolve_column(ni, "x", required=True)
-        ycol = self.info._resolve_column(ni, "y", required=True)
-        nid_col = self.info._resolve_column(ni, "node_id", required=False)
-
-        def _xy_of(nid: int) -> tuple[float, float]:
-            if nid_col is not None:
-                row = ni.loc[ni[nid_col].to_numpy() == nid]
-                if row.empty:
-                    raise ValueError(f"node_id={nid} not found in nodes_info.")
-                return float(row.iloc[0][xcol]), float(row.iloc[0][ycol])
-            if nid not in ni.index:
-                raise ValueError(f"node_id={nid} not found in nodes_info index.")
-            return float(ni.loc[nid, xcol]), float(ni.loc[nid, ycol])
-
-        x1, y1 = _xy_of(n1)
-        x2, y2 = _xy_of(n2)
-        x3, y3 = _xy_of(n3)
+        ni = self._require_nodes_info(
+            missing_message="nodes_info is required (must contain x,y) for base_rocking()."
+        )
+        x1, y1 = self._node_xy(n1, nodes_info=ni)
+        x2, y2 = self._node_xy(n2, nodes_info=ni)
+        x3, y3 = self._node_xy(n3, nodes_info=ni)
 
         # --------------------------------------------------
         # Build geometry matrix A and detect singularity
@@ -1811,11 +1827,12 @@ class NodalResults:
         result_name: str = "DISPLACEMENT",
         x_component: object = '1',
         y_component: object = '2',
-        # node selection (exactly like fetch)
+        selection: Selection | None = None,
         node_ids: int | Sequence[int] | None = None,
         selection_set_id: int | Sequence[int] | None = None,
         selection_set_name: str | Sequence[str] | None = None,
         coordinates: Sequence[Sequence[float]] | None = None,  # (x,y) or (x,y,z) -> nearest nodes
+        selection_box: SelectionBox | Sequence[Sequence[float]] | None = None,
         stage: Optional[str] = None,
         # how to combine if multiple nodes are selected
         reduce_nodes: str = "none",  # "none" | "mean" | "median" | "max_abs"
@@ -1835,41 +1852,28 @@ class NodalResults:
                          different controlling nodes per step)
         """
 
-        provided = sum(x is not None for x in (node_ids, selection_set_id, selection_set_name, coordinates))
-        if provided != 1:
+        selection_obj = self._normalize_selection(
+            selection=selection,
+            node_ids=node_ids,
+            selection_set_id=selection_set_id,
+            selection_set_name=selection_set_name,
+            coordinates=coordinates,
+            selection_box=selection_box,
+        )
+        if selection_obj.is_empty():
             raise ValueError(
-                "orbit(): Provide exactly ONE of: node_ids, selection_set_id, selection_set_name, coordinates."
+                "orbit(): provide at least one selector via selection, node_ids, "
+                "selection_set_id, selection_set_name, coordinates, or selection_box."
             )
 
-        resolved_node_ids: list[int] | None = None
-
-        if coordinates is not None:
-            ids = self.info.nearest_node_id(coordinates, return_distance=False)
-            resolved_node_ids = [int(i) for i in ids]
-        else:
-            # leverage fetch()'s resolver for selection sets + node_ids,
-            # but we want the *resolved ids* to optionally return them.
-            gathered: list[np.ndarray] = []
-
-            if selection_set_id is not None:
-                ids = self.info.selection_set_node_ids(selection_set_id)
-                gathered.append(np.asarray(ids, dtype=np.int64))
-
-            if selection_set_name is not None:
-                ids = self.info.selection_set_node_ids_by_name(selection_set_name)
-                gathered.append(np.asarray(ids, dtype=np.int64))
-
-            if node_ids is not None:
-                if isinstance(node_ids, (int, np.integer)):
-                    gathered.append(np.asarray([int(node_ids)], dtype=np.int64))
-                else:
-                    arr = np.asarray(list(node_ids), dtype=np.int64)
-                    if arr.size == 0:
-                        raise ValueError("orbit(): node_ids is empty.")
-                    gathered.append(arr)
-
-            resolved_node_ids = sorted(set(np.unique(np.concatenate(gathered)).astype(int).tolist()))
-
+        resolved_node_ids = self.resolve_node_ids(
+            selection=selection,
+            node_ids=node_ids,
+            selection_set_id=selection_set_id,
+            selection_set_name=selection_set_name,
+            coordinates=coordinates,
+            selection_box=selection_box,
+        )
         if not resolved_node_ids:
             raise ValueError("orbit(): resolved node set is empty.")
 
@@ -1877,22 +1881,16 @@ class NodalResults:
         sx = self.fetch(result_name=result_name, component=x_component, node_ids=resolved_node_ids)
         sy = self.fetch(result_name=result_name, component=y_component, node_ids=resolved_node_ids)
 
-        # stage selection if needed
-        def _select_stage(s: pd.Series) -> pd.Series:
-            if isinstance(s.index, pd.MultiIndex) and s.index.nlevels == 3:
-                if stage is None:
-                    stages = tuple(sorted({str(x) for x in s.index.get_level_values(0)}))
-                    raise ValueError(f"Multi-stage results detected. Provide stage=... Available: {stages}")
-                return s.xs(str(stage), level=0)
-            return s
-
-        sx = _select_stage(sx)
-        sy = _select_stage(sy)
-
-        if not (isinstance(sx.index, pd.MultiIndex) and sx.index.nlevels == 2):
-            raise ValueError("orbit(): expected index (node_id, step) after stage selection.")
-        if not (isinstance(sy.index, pd.MultiIndex) and sy.index.nlevels == 2):
-            raise ValueError("orbit(): expected index (node_id, step) after stage selection.")
+        sx = self._require_node_step_index(
+            sx,
+            stage=stage,
+            index_error="orbit(): expected index (node_id, step) after stage selection.",
+        )
+        sy = self._require_node_step_index(
+            sy,
+            stage=stage,
+            index_error="orbit(): expected index (node_id, step) after stage selection.",
+        )
 
         # align (important if any missing steps)
         sx, sy = sx.align(sy, join="inner")
