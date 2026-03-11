@@ -11,6 +11,7 @@ from .model.cdata import CData
 
 from .plotting.plot import Plot
 from .plotting.plot_dataclasses import ModelPlotSettings
+from .core.selection import Selection, SelectionBox
 
 from .dataprocess import Aggregator, StrOp
 
@@ -31,6 +32,8 @@ __all__ = [
     "Nodes",
     "Elements",
     "Plot",
+    "Selection",
+    "SelectionBox",
     "Aggregator",
     "StrOp",
     "H5RepairTool",

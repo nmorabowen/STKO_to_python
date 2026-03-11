@@ -5,6 +5,13 @@ from typing import Optional, Sequence, Tuple
 import numpy as np
 import pandas as pd
 
+from ..core.selection import Selection, SelectionBox
+
+try:
+    from scipy.spatial import cKDTree
+except Exception:  # pragma: no cover - NumPy fallback is tested explicitly
+    cKDTree = None
+
 
 class NodalResultsInfo:
     """
@@ -30,6 +37,13 @@ class NodalResultsInfo:
         "analysis_time",
         "size",
         "name",
+        "_coord_cols",
+        "_node_ids_array",
+        "_file_id_array",
+        "_coords_2d",
+        "_coords_3d",
+        "_kdtree_2d",
+        "_kdtree_3d",
     )
 
     def __init__(
@@ -44,9 +58,6 @@ class NodalResultsInfo:
         size: Optional[int] = None,
         name: Optional[str] = None,
     ) -> None:
-        # --------------------
-        # Normalize
-        # --------------------
         if nodes_ids is not None:
             nodes_ids = tuple(int(i) for i in nodes_ids)
 
@@ -56,16 +67,12 @@ class NodalResultsInfo:
         if results_components is not None:
             results_components = tuple(str(c) for c in results_components)
 
-        # --------------------
-        # Basic validation
-        # --------------------
         if nodes_info is not None and not isinstance(nodes_info, pd.DataFrame):
             raise TypeError(
                 "nodes_info must be a pandas DataFrame "
                 f"(got {type(nodes_info)!r})."
             )
 
-        # Optional nicety: name the index if it's node_id-like
         if isinstance(nodes_info, pd.DataFrame) and nodes_info.index.name is None:
             nodes_info = nodes_info.rename_axis("node_id")
 
@@ -77,6 +84,14 @@ class NodalResultsInfo:
         self.analysis_time = analysis_time
         self.size = size
         self.name = name
+
+        self._coord_cols: dict[str, str] | None = None
+        self._node_ids_array: np.ndarray | None = None
+        self._file_id_array: np.ndarray | None = None
+        self._coords_2d: np.ndarray | None = None
+        self._coords_3d: np.ndarray | None = None
+        self._kdtree_2d = None
+        self._kdtree_3d = None
 
     # ------------------------------------------------------------------ #
     # Geometry helpers
@@ -90,100 +105,149 @@ class NodalResultsInfo:
     ) -> list[int] | Tuple[list[int], list[float]]:
         """
         Find nearest node(s) to a list of query points.
-
-        Parameters
-        ----------
-        points
-            Sequence of points with consistent dimensionality:
-                [(x, y), ...]    or
-                [(x, y, z), ...]
-        file_id
-            If provided, restrict search to nodes with that file_id
-            (requires `nodes_info` to contain a 'file_id' column).
-        return_distance
-            If True, also return Euclidean distance(s) to the nearest node.
-
-        Returns
-        -------
-        list[int]
-            Nearest node_id for each query point.
-
-        (list[int], list[float])
-            If return_distance=True.
         """
-        if self.nodes_info is None:
-            raise ValueError("nodes_info is None. Cannot search nearest node.")
-        if not isinstance(self.nodes_info, pd.DataFrame):
-            raise TypeError("nearest_node_id expects nodes_info as a pandas DataFrame.")
-
-        df = self.nodes_info
-
-        # ---- optional file filter ------------------------------------- #
-        if file_id is not None:
-            fid_col = self._resolve_column(df, "file_id")
-            mask = df[fid_col].to_numpy() == int(file_id)
-            df = df.loc[mask]
-            if df.empty:
-                raise ValueError(f"No nodes found for file_id={file_id}.")
-
-        # ---- parse points --------------------------------------------- #
         pts = np.asarray(points, dtype=float)
-
         if pts.ndim != 2 or pts.shape[1] not in (2, 3):
             raise TypeError(
                 "points must be a sequence of (x,y) or (x,y,z) coordinates. "
                 "Example: [(0,0), (1,2)] or [(0,0,0), (1,2,3)]."
             )
 
-        is_3d = pts.shape[1] == 3
-
-        # ---- resolve coordinate columns ------------------------------- #
-        xcol = self._resolve_column(df, "x")
-        ycol = self._resolve_column(df, "y")
-        zcol = self._resolve_column(df, "z", required=is_3d)
-
-        X = df[xcol].to_numpy(dtype=float, copy=False)
-        Y = df[ycol].to_numpy(dtype=float, copy=False)
-
-        if is_3d:
-            assert zcol is not None
-            Z = df[zcol].to_numpy(dtype=float, copy=False)
+        if pts.shape[1] == 2:
+            coords = self._coords_array(ndim=2)
         else:
-            Z = None
+            coords = self._coords_array(ndim=3)
 
-        # ---- node id resolution --------------------------------------- #
-        has_node_id_col = "node_id" in self._normalized_columns(df)
-        nid_col = self._resolve_column(df, "node_id") if has_node_id_col else None
-        idx_values = df.index.to_numpy()
+        mask = self._mask_for_file_id(file_id)
+        node_ids = self._node_ids()
 
-        out_ids: list[int] = []
-        out_dist: list[float] = []
+        if mask is not None:
+            coords = coords[mask]
+            node_ids = node_ids[mask]
 
-        # Loop over queries (usually small)
-        for p in pts:
-            dx = X - p[0]
-            dy = Y - p[1]
+        if coords.size == 0:
+            raise ValueError("No candidate nodes are available for nearest-node search.")
 
-            if is_3d:
-                assert Z is not None
-                dz = Z - p[2]
-                d2 = dx * dx + dy * dy + dz * dz
-            else:
-                d2 = dx * dx + dy * dy
-
-            i = int(np.argmin(d2))
-
-            if nid_col is not None:
-                out_ids.append(int(df[nid_col].iloc[i]))
-            else:
-                out_ids.append(int(idx_values[i]))
-
+        if cKDTree is not None:
+            tree = self._get_kdtree(ndim=pts.shape[1], file_id=file_id)
+            dist, idx = tree.query(pts)
+            idx = np.asarray(idx, dtype=np.int64)
+            out_ids = node_ids[idx].astype(np.int64, copy=False).tolist()
             if return_distance:
-                out_dist.append(float(np.sqrt(d2[i])))
+                return [int(v) for v in out_ids], np.asarray(dist, dtype=float).tolist()
+            return [int(v) for v in out_ids]
 
+        diff = coords[None, :, :] - pts[:, None, :]
+        dist2 = np.sum(diff * diff, axis=2)
+        idx = np.argmin(dist2, axis=1)
+        out_ids = node_ids[idx].astype(np.int64, copy=False).tolist()
         if return_distance:
-            return out_ids, out_dist
-        return out_ids
+            return [int(v) for v in out_ids], np.sqrt(dist2[np.arange(len(idx)), idx]).tolist()
+        return [int(v) for v in out_ids]
+
+    def node_ids_in_box(
+        self,
+        box: SelectionBox,
+        *,
+        file_id: Optional[int] = None,
+    ) -> list[int]:
+        coords = self._coords_array(ndim=box.ndim)
+        node_ids = self._node_ids()
+        mask = self._mask_for_file_id(file_id)
+
+        if mask is not None:
+            coords = coords[mask]
+            node_ids = node_ids[mask]
+
+        lo = np.asarray(box.min_corner, dtype=float)
+        hi = np.asarray(box.max_corner, dtype=float)
+
+        if box.inclusive:
+            in_box = np.all((coords >= lo) & (coords <= hi), axis=1)
+        else:
+            in_box = np.all((coords > lo) & (coords < hi), axis=1)
+
+        out = node_ids[in_box].astype(np.int64, copy=False)
+        if out.size == 0:
+            raise ValueError(
+                f"No nodes found inside selection box {box.min_corner} -> {box.max_corner}."
+            )
+        return [int(v) for v in np.unique(out).tolist()]
+
+    def resolve_selection(
+        self,
+        selection: Selection | None = None,
+        *,
+        only_available: bool = True,
+    ) -> list[int]:
+        selection = selection or Selection()
+
+        if not isinstance(selection, Selection):
+            raise TypeError(
+                f"selection must be a Selection instance or None. Got {type(selection)!r}."
+            )
+
+        sources: list[np.ndarray] = []
+
+        if selection.ids is not None:
+            sources.append(np.asarray(selection.ids, dtype=np.int64))
+
+        if selection.selection_set_id is not None:
+            ids = self.selection_set_node_ids(
+                selection.selection_set_id,
+                only_available=only_available,
+            )
+            sources.append(np.asarray(ids, dtype=np.int64))
+
+        if selection.selection_set_name is not None:
+            ids = self.selection_set_node_ids_by_name(
+                selection.selection_set_name,
+                only_available=only_available,
+            )
+            sources.append(np.asarray(ids, dtype=np.int64))
+
+        if selection.coordinates is not None:
+            ids = self.nearest_node_id(
+                selection.coordinates,
+                file_id=selection.file_id,
+                return_distance=False,
+            )
+            sources.append(np.asarray(ids, dtype=np.int64))
+
+        if selection.box is not None:
+            ids = self.node_ids_in_box(selection.box, file_id=selection.file_id)
+            sources.append(np.asarray(ids, dtype=np.int64))
+
+        if not sources:
+            out = self.available_node_ids()
+        elif selection.combine == "union":
+            out = np.unique(np.concatenate([np.unique(src) for src in sources]))
+        else:
+            out = np.unique(sources[0])
+            for src in sources[1:]:
+                out = np.intersect1d(out, np.unique(src), assume_unique=False)
+
+        if only_available and self.nodes_ids is not None:
+            out = np.intersect1d(
+                out,
+                np.asarray(self.nodes_ids, dtype=np.int64),
+                assume_unique=False,
+            )
+
+        if out.size == 0:
+            raise ValueError("Resolved node set is empty.")
+        return [int(v) for v in out.tolist()]
+
+    def available_node_ids(self) -> np.ndarray:
+        if self.nodes_ids is not None:
+            out = np.asarray(self.nodes_ids, dtype=np.int64)
+            if out.size:
+                return np.unique(out)
+
+        if self.nodes_info is None:
+            return np.empty((0,), dtype=np.int64)
+
+        return np.unique(self._node_ids())
 
     # ------------------------------------------------------------------ #
     # Column helpers
@@ -227,7 +291,6 @@ class NodalResultsInfo:
             return ()
         if isinstance(selection_set_name, str):
             s = selection_set_name.strip()
-            # convenience: "A, B" -> ("A","B")
             if "," in s:
                 parts = [p.strip() for p in s.split(",") if p.strip()]
                 return tuple(parts)
@@ -242,12 +305,6 @@ class NodalResultsInfo:
         return tuple(out)
 
     def _selection_set_name_for(self, sid: int) -> str:
-        """
-        Extract selection set name for a given selection_set_id.
-
-        Your schema uses:
-            selection_set[id]["SET_NAME"] = "ControlPoint"
-        """
         if self.selection_set is None:
             return ""
         d = self.selection_set.get(int(sid), {})
@@ -267,12 +324,6 @@ class NodalResultsInfo:
         self,
         selection_set_name: str | Sequence[str],
     ) -> Tuple[int, ...]:
-        """
-        Resolve selection set name(s) -> selection set id(s) using
-        case-insensitive exact match.
-
-        Raises if a name is missing or ambiguous.
-        """
         if self.selection_set is None:
             raise ValueError("selection_set is None. No selection sets available.")
 
@@ -280,37 +331,64 @@ class NodalResultsInfo:
         if not names:
             raise ValueError("selection_set_name is empty.")
 
-        buckets: dict[str, list[int]] = {}
+        resolved: list[int] = []
+        for raw in names:
+            sid_i, _ = self._resolve_selection_set_name(raw)
+            resolved.append(sid_i)
+
+        return tuple(resolved)
+
+    def _resolve_selection_set_name(self, raw_name: str) -> tuple[int, str]:
+        if self.selection_set is None:
+            raise ValueError("selection_set is None. No selection sets available.")
+
+        query = str(raw_name).strip()
+        if not query:
+            raise ValueError("selection_set_name is empty.")
+
+        exact_hits: list[tuple[int, str]] = []
+        folded_hits: list[tuple[int, str]] = []
+        available: set[str] = set()
+
         for sid in self.selection_set.keys():
             try:
                 sid_i = int(sid)
             except Exception:
                 continue
-            nm = self._selection_set_name_for(sid_i)
-            key = nm.strip().lower()
-            if not key:
+
+            name = self._selection_set_name_for(sid_i)
+            if not name:
                 continue
-            buckets.setdefault(key, []).append(sid_i)
 
-        resolved: list[int] = []
-        for raw in names:
-            q = str(raw).strip().lower()
-            hits = buckets.get(q, [])
-            if len(hits) == 0:
-                available = sorted(buckets.keys())
-                preview = ", ".join(available[:50]) + (" ..." if len(available) > 50 else "")
-                raise ValueError(
-                    f"Selection set name not found: {raw!r}. "
-                    f"Available (normalized) names include: {preview}"
-                )
-            if len(hits) > 1:
-                raise ValueError(
-                    f"Ambiguous selection set name {raw!r}: matches IDs {sorted(hits)}. "
-                    f"Use selection_set_id instead."
-                )
-            resolved.append(hits[0])
+            available.add(name)
+            if name == query:
+                exact_hits.append((sid_i, name))
+            if name.lower() == query.lower():
+                folded_hits.append((sid_i, name))
 
-        return tuple(resolved)
+        if len(exact_hits) == 1:
+            return exact_hits[0]
+
+        if len(exact_hits) > 1:
+            raise ValueError(
+                f"Ambiguous selection set name {raw_name!r}: exact matches IDs "
+                f"{sorted(sid for sid, _ in exact_hits)}. Use selection_set_id instead."
+            )
+
+        if len(folded_hits) == 1:
+            return folded_hits[0]
+
+        if len(folded_hits) > 1:
+            raise ValueError(
+                f"Ambiguous selection set name {raw_name!r}: case-insensitive matches IDs "
+                f"{sorted(sid for sid, _ in folded_hits)}. Use selection_set_id instead."
+            )
+
+        preview = ", ".join(sorted(available)[:50]) + (" ..." if len(available) > 50 else "")
+        raise ValueError(
+            f"Selection set name not found: {raw_name!r}. "
+            f"Available names include: {preview}"
+        )
 
     def selection_set_node_ids_by_name(
         self,
@@ -318,9 +396,6 @@ class NodalResultsInfo:
         *,
         only_available: bool = True,
     ) -> list[int]:
-        """
-        Resolve selection set name(s) -> node ids (union across multiple names).
-        """
         sids = self.selection_set_ids_from_names(selection_set_name)
         return self.selection_set_node_ids(sids, only_available=only_available)
 
@@ -330,21 +405,6 @@ class NodalResultsInfo:
         *,
         only_available: bool = True,
     ) -> list[int]:
-        """
-        Return node ids for one or more selection set ids.
-
-        Parameters
-        ----------
-        selection_set_id
-            An int or a sequence of ints (multiple sets will be unioned).
-        only_available
-            If True, intersect with `self.nodes_ids` when available.
-
-        Returns
-        -------
-        list[int]
-            Sorted unique node ids.
-        """
         if self.selection_set is None:
             raise ValueError("selection_set is None. No selection sets available.")
 
@@ -363,9 +423,13 @@ class NodalResultsInfo:
 
             entry = self.selection_set.get(sid_i) or {}
             nodes = entry.get("NODES")
+            set_name = self._selection_set_name_for(sid_i) or str(sid_i)
 
             if nodes is None or len(nodes) == 0:
-                raise ValueError(f"Selection set {sid_i} has no nodes.")
+                raise ValueError(
+                    f"Selection set '{set_name}' (id={sid_i}) contains 0 nodes "
+                    f"in the source .cdata."
+                )
 
             gathered.append(np.asarray(nodes, dtype=np.int64))
 
@@ -388,6 +452,114 @@ class NodalResultsInfo:
             )
 
         return [int(v) for v in out.tolist()]
+
+    # ------------------------------------------------------------------ #
+    # Cached geometry helpers
+    # ------------------------------------------------------------------ #
+    def _ensure_geometry_cache(self) -> None:
+        if self._coords_2d is not None:
+            return
+
+        if self.nodes_info is None:
+            raise ValueError("nodes_info is None. Cannot resolve geometric node selection.")
+        if not isinstance(self.nodes_info, pd.DataFrame):
+            raise TypeError("nodes_info must be a pandas DataFrame.")
+
+        df = self.nodes_info
+        xcol = self._resolve_column(df, "x", required=True)
+        ycol = self._resolve_column(df, "y", required=True)
+        zcol = self._resolve_column(df, "z", required=False)
+        fid_col = self._resolve_column(df, "file_id", required=False)
+        nid_col = self._resolve_column(df, "node_id", required=False)
+
+        x = df[xcol].to_numpy(dtype=float, copy=False)
+        y = df[ycol].to_numpy(dtype=float, copy=False)
+        if zcol is not None:
+            z = df[zcol].to_numpy(dtype=float, copy=False)
+        else:
+            z = np.zeros_like(x, dtype=float)
+
+        if nid_col is not None:
+            node_ids = df[nid_col].to_numpy(dtype=np.int64, copy=False)
+        else:
+            try:
+                node_ids = df.index.to_numpy(dtype=np.int64, copy=False)
+            except TypeError as exc:
+                raise ValueError(
+                    "nodes_info must provide node ids either as a 'node_id' column "
+                    "or as an integer index."
+                ) from exc
+
+        file_ids = None
+        if fid_col is not None:
+            file_ids = df[fid_col].to_numpy(dtype=np.int64, copy=False)
+
+        coord_cols = {"x": xcol, "y": ycol}
+        if zcol is not None:
+            coord_cols["z"] = zcol
+        if fid_col is not None:
+            coord_cols["file_id"] = fid_col
+        if nid_col is not None:
+            coord_cols["node_id"] = nid_col
+
+        object.__setattr__(self, "_coord_cols", coord_cols)
+        object.__setattr__(
+            self,
+            "_coords_2d",
+            np.column_stack([x, y]).astype(float, copy=False),
+        )
+        object.__setattr__(
+            self,
+            "_coords_3d",
+            np.column_stack([x, y, z]).astype(float, copy=False),
+        )
+        object.__setattr__(self, "_node_ids_array", np.asarray(node_ids, dtype=np.int64))
+        object.__setattr__(
+            self,
+            "_file_id_array",
+            None if file_ids is None else np.asarray(file_ids, dtype=np.int64),
+        )
+
+    def _coords_array(self, *, ndim: int) -> np.ndarray:
+        self._ensure_geometry_cache()
+        if ndim == 2:
+            assert self._coords_2d is not None
+            return self._coords_2d
+        if ndim == 3:
+            assert self._coords_3d is not None
+            return self._coords_3d
+        raise ValueError(f"Unsupported ndim={ndim}.")
+
+    def _node_ids(self) -> np.ndarray:
+        self._ensure_geometry_cache()
+        assert self._node_ids_array is not None
+        return self._node_ids_array
+
+    def _mask_for_file_id(self, file_id: int | None) -> np.ndarray | None:
+        if file_id is None:
+            return None
+        self._ensure_geometry_cache()
+        if self._file_id_array is None:
+            raise ValueError("nodes_info does not contain 'file_id'; file_id filtering is unavailable.")
+
+        mask = self._file_id_array == int(file_id)
+        if not np.any(mask):
+            raise ValueError(f"No nodes found for file_id={int(file_id)}.")
+        return mask
+
+    def _get_kdtree(self, *, ndim: int, file_id: int | None):
+        coords = self._coords_array(ndim=ndim)
+        mask = self._mask_for_file_id(file_id)
+
+        if mask is None:
+            attr = "_kdtree_2d" if ndim == 2 else "_kdtree_3d"
+            tree = getattr(self, attr)
+            if tree is None:
+                tree = cKDTree(coords)
+                object.__setattr__(self, attr, tree)
+            return tree
+
+        return cKDTree(coords[mask])
 
     # ------------------------------------------------------------------ #
     # Small utilities

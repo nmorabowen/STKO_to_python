@@ -10,6 +10,7 @@ import pickle
 import numpy as np
 import pandas as pd
 
+from ..core.selection import Selection, SelectionBox
 from .nodal_results_plotting import NodalResultsPlotter
 from .nodal_results_info import NodalResultsInfo
 
@@ -217,6 +218,75 @@ class NodalResults:
     # Data access
     # ------------------------------------------------------------------ #
 
+    def _normalize_selection(
+        self,
+        *,
+        selection: Selection | None = None,
+        node_ids: int | Sequence[int] | Sequence[Sequence[int]] | np.ndarray | None = None,
+        selection_set_id: int | Sequence[int] | None = None,
+        selection_set_name: str | Sequence[str] | None = None,
+        coordinates: Sequence[Sequence[float]] | None = None,
+        selection_box: SelectionBox | Sequence[Sequence[float]] | None = None,
+    ) -> Selection:
+        return Selection.from_node_filters(
+            selection=selection,
+            node_ids=node_ids,
+            selection_set_id=selection_set_id,
+            selection_set_name=selection_set_name,
+            coordinates=coordinates,
+            selection_box=selection_box,
+        )
+
+    def _node_level(self, idx: pd.MultiIndex) -> int:
+        names = list(idx.names) if idx.names is not None else [None] * idx.nlevels
+        if "node_id" in names:
+            return names.index("node_id")
+        if idx.nlevels == 2:
+            return 0
+        if idx.nlevels == 3:
+            return 1
+        raise ValueError(
+            "[fetch] Cannot infer node_id level. "
+            f"Index nlevels={idx.nlevels}, names={names}."
+        )
+
+    def _filter_df_by_node_ids(
+        self,
+        df: pd.DataFrame,
+        resolved_node_ids: Sequence[int],
+    ) -> pd.DataFrame:
+        idx = df.index
+        if not isinstance(idx, pd.MultiIndex):
+            raise ValueError(
+                "[fetch] Expected a MultiIndex containing node_id. "
+                f"Got index type={type(idx).__name__}."
+            )
+
+        node_ids_arr = np.asarray(resolved_node_ids, dtype=np.int64)
+        lvl = idx.get_level_values(self._node_level(idx))
+        out = df.loc[lvl.isin(node_ids_arr)]
+        if out.empty:
+            raise ValueError(
+                f"[fetch] None of the requested node_ids are present. "
+                f"Requested (sample): {node_ids_arr[:10].tolist()}"
+            )
+        return out
+
+    def _subset_nodes_info(self, resolved_node_ids: Sequence[int]) -> Optional[pd.DataFrame]:
+        ni = self.info.nodes_info
+        if ni is None:
+            return None
+
+        node_ids_arr = np.asarray(resolved_node_ids, dtype=np.int64)
+        if "node_id" in ni.columns:
+            out = ni.loc[ni["node_id"].isin(node_ids_arr)]
+        else:
+            out = ni.loc[ni.index.isin(node_ids_arr)]
+
+        if out.empty:
+            raise ValueError("Resolved node ids are not present in nodes_info.")
+        return out.copy()
+
     def fetch(
         self,
         result_name: Optional[str] = None,
@@ -226,6 +296,8 @@ class NodalResults:
         selection_set_id: int | Sequence[int] | None = None,
         selection_set_name: str | Sequence[str] | None = None,
         coordinates: Sequence[Sequence[float]] | None = None,
+        selection_box: SelectionBox | Sequence[Sequence[float]] | None = None,
+        selection: Selection | None = None,
         only_available: bool = True,
         return_nodes: bool = False,
     ) -> (
@@ -252,88 +324,23 @@ class NodalResults:
         of all node sources (after uniquing). If no node filter was provided, returns [].
         """
         df = self.df
-        gathered: list[np.ndarray] = []
         resolved_node_ids: list[int] = []
 
-        # ---- selection by id ----
-        if selection_set_id is not None:
-            ids = self.info.selection_set_node_ids(selection_set_id, only_available=only_available)
-            gathered.append(np.asarray(ids, dtype=np.int64))
+        selection_obj = self._normalize_selection(
+            selection=selection,
+            node_ids=node_ids,
+            selection_set_id=selection_set_id,
+            selection_set_name=selection_set_name,
+            coordinates=coordinates,
+            selection_box=selection_box,
+        )
 
-        # ---- selection by name ----
-        if selection_set_name is not None:
-            ids = self.info.selection_set_node_ids_by_name(selection_set_name, only_available=only_available)
-            gathered.append(np.asarray(ids, dtype=np.int64))
-
-        # ---- explicit node_ids ----
-        if node_ids is not None:
-            if isinstance(node_ids, (int, np.integer)):
-                gathered.append(np.asarray([int(node_ids)], dtype=np.int64))
-            else:
-                arr = np.asarray(list(node_ids), dtype=np.int64)
-                if arr.size == 0:
-                    raise ValueError("node_ids is empty.")
-                gathered.append(arr)
-
-        # ---- coordinates -> nearest node_ids ----
-        if coordinates is not None:
-            if not isinstance(coordinates, (list, tuple, np.ndarray)):
-                raise TypeError(
-                    "coordinates must be a sequence of points like [(x,y), ...] or [(x,y,z), ...]."
-                )
-            if len(coordinates) == 0:
-                raise ValueError("coordinates is empty.")
-
-            pts: list[tuple[float, ...]] = []
-            for i, p in enumerate(coordinates):
-                if not isinstance(p, (list, tuple, np.ndarray)):
-                    raise TypeError(f"coordinates[{i}] must be a sequence (x,y) or (x,y,z).")
-                pp = tuple(float(v) for v in p)
-                if len(pp) not in (2, 3):
-                    raise TypeError(f"coordinates[{i}] must have length 2 or 3. Got {len(pp)}.")
-                pts.append(pp)
-
-            ids = self.info.nearest_node_id(pts, return_distance=False)
-            gathered.append(np.asarray(ids, dtype=np.int64))
-
-        # ---- apply node filter ----
-        if gathered:
-            node_ids_arr = np.unique(np.concatenate(gathered))
-            if node_ids_arr.size == 0:
-                raise ValueError("Resolved node set is empty.")
-
-            resolved_node_ids = node_ids_arr.astype(int).tolist()
-
-            idx = df.index
-            if not isinstance(idx, pd.MultiIndex):
-                raise ValueError(
-                    "[fetch] Expected a MultiIndex containing node_id. "
-                    f"Got index type={type(idx).__name__}."
-                )
-
-            nlevels = idx.nlevels
-            names = list(idx.names) if idx.names is not None else [None] * nlevels
-
-            if "node_id" in names:
-                node_level = names.index("node_id")
-            else:
-                if nlevels == 2:
-                    node_level = 0  # (node_id, step)
-                elif nlevels == 3:
-                    node_level = 1  # (stage, node_id, step)
-                else:
-                    raise ValueError(
-                        "[fetch] Cannot infer node_id level. "
-                        f"Index nlevels={nlevels}, names={names}."
-                    )
-
-            lvl = idx.get_level_values(node_level)
-            df = df.loc[lvl.isin(node_ids_arr)]
-            if df.empty:
-                raise ValueError(
-                    f"[fetch] None of the requested node_ids are present. "
-                    f"Requested (sample): {node_ids_arr[:10].tolist()}"
-                )
+        if not selection_obj.is_empty():
+            resolved_node_ids = self.info.resolve_selection(
+                selection_obj,
+                only_available=only_available,
+            )
+            df = self._filter_df_by_node_ids(df, resolved_node_ids)
 
         cols = df.columns
 
@@ -383,6 +390,56 @@ class NodalResults:
         raise ValueError(
             f"Component '{component}' not found.\n"
             f"Available components: {tuple(map(str, cols))}"
+        )
+
+    def select(
+        self,
+        *,
+        selection: Selection | None = None,
+        node_ids: int | Sequence[int] | None = None,
+        selection_set_id: int | Sequence[int] | None = None,
+        selection_set_name: str | Sequence[str] | None = None,
+        coordinates: Sequence[Sequence[float]] | None = None,
+        selection_box: SelectionBox | Sequence[Sequence[float]] | None = None,
+        only_available: bool = True,
+    ) -> "NodalResults":
+        selection_obj = self._normalize_selection(
+            selection=selection,
+            node_ids=node_ids,
+            selection_set_id=selection_set_id,
+            selection_set_name=selection_set_name,
+            coordinates=coordinates,
+            selection_box=selection_box,
+        )
+
+        if selection_obj.is_empty():
+            resolved_node_ids = (
+                list(self.info.nodes_ids)
+                if self.info.nodes_ids is not None
+                else []
+            )
+            df = self.df
+            nodes_info = self.info.nodes_info
+        else:
+            resolved_node_ids = self.info.resolve_selection(
+                selection_obj,
+                only_available=only_available,
+            )
+            df = self._filter_df_by_node_ids(self.df, resolved_node_ids)
+            nodes_info = self._subset_nodes_info(resolved_node_ids)
+
+        return NodalResults(
+            df=df.copy(),
+            time=self.time,
+            name=self.name,
+            nodes_ids=tuple(int(v) for v in resolved_node_ids) if resolved_node_ids else self.info.nodes_ids,
+            nodes_info=nodes_info.copy() if isinstance(nodes_info, pd.DataFrame) else nodes_info,
+            results_components=self.info.results_components,
+            model_stages=self.info.model_stages,
+            plot_settings=self.plot_settings,
+            selection_set=self.info.selection_set,
+            analysis_time=self.info.analysis_time,
+            size=self.info.size,
         )
 
     def fetch_nearest(
