@@ -1,10 +1,32 @@
-# Ignore Python bytecode
+# Python bytecode and caches
 __pycache__/
 *.py[cod]
+*$py.class
 
-# Ignore Python packaging files
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Tool caches
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.hypothesis/
+
+# Build and packaging artifacts
+.Python
+build/
+dist/
+site/
 *.egg-info/
-src/STKO_to_python/examples/log.log
+.eggs/
+pip-wheel-metadata/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Local logs
 log.log
-src/STKO_to_python/examples/log.log
 src/STKO_to_python/examples/log.log
