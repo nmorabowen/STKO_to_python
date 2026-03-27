@@ -208,12 +208,11 @@ class MPCOResults:
     @staticmethod
     def parse_tier_letter(model_label: str) -> tuple[int, str]:
         s = str(model_label).upper()
-        m1 = re.search(r"([1-4])", s)
-        m2 = re.search(r"([A-D])", s)
-        if not m1 or not m2:
+        m = re.search(r"(\d+)([A-Z])", s)
+        if not m:
             raise ValueError(f"Could not parse tier/letter from model label: {model_label!r}")
-        tier = int(m1.group(1))
-        letter = m2.group(1)
+        tier = int(m.group(1))
+        letter = m.group(2)
         return tier, letter
 
     # ------------------------------------------------------------------
