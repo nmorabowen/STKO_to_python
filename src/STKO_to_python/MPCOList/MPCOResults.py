@@ -277,8 +277,8 @@ class MPCOResults:
     def _tag_from_key(self, k: Key) -> dict[str, str]:
         m, sta, rup = k
         mm = str(m).strip()
-        mnum = re.search(r"([1-4])", mm)
-        mlet = re.search(r"([A-Da-d])\s*$", mm)
+        mnum = re.search(r"(\d+)", mm)
+        mlet = re.search(r"([A-Za-z])\s*$", mm)
         return {
             "number": mnum.group(1) if mnum else "",
             "letter": mlet.group(1).upper() if mlet else "",
@@ -1402,11 +1402,11 @@ class MPCOResults:
                 return str(r)
             if group_by_color == "letter":
                 mm = str(m)
-                m2 = re.search(r"([A-Da-d])\s*$", mm)
+                m2 = re.search(r"([A-Za-z])\s*$", mm)
                 return m2.group(1).upper() if m2 else ""
             if group_by_color == "number":
                 mm = str(m)
-                m2 = re.search(r"([1-4])", mm)
+                m2 = re.search(r"(\d+)", mm)
                 return m2.group(1) if m2 else ""
             raise RuntimeError("unreachable")
 
@@ -1572,11 +1572,11 @@ class MPCOResults:
                 return str(r)
             if group_by_color == "letter":
                 mm = str(m)
-                m2 = re.search(r"([A-Da-d])\s*$", mm)
+                m2 = re.search(r"([A-Za-z])\s*$", mm)
                 return m2.group(1).upper() if m2 else ""
             if group_by_color == "number":
                 mm = str(m)
-                m2 = re.search(r"([1-4])", mm)
+                m2 = re.search(r"(\d+)", mm)
                 return m2.group(1) if m2 else ""
             raise RuntimeError("unreachable")
 
