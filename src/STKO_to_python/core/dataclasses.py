@@ -1,11 +1,11 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 @dataclass
 class MetaData:
-    date_created: datetime = field(default_factory=datetime.utcnow)
+    date_created: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     _extras: dict[str, Any] = field(default_factory=dict, repr=False)
 
     def __getattr__(self, name):

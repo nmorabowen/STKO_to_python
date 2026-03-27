@@ -5,6 +5,7 @@ from .io.hdf5_utils import HDF5Utils
 from .nodes.nodes import Nodes
 
 from .elements.elements import Elements
+from .elements.element_results import ElementResults
 
 from .model.model_info import ModelInfo
 from .model.cdata import CData
@@ -30,6 +31,7 @@ __all__ = [
     "CData",
     "Nodes",
     "Elements",
+    "ElementResults",
     "Plot",
     "Aggregator",
     "StrOp",
