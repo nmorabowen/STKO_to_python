@@ -623,7 +623,7 @@ class MPCO_df:
 
         # ---- Tier 1 correction ----
         fix_tier1_relative: bool = True,
-        motions_root: str | Path | None = Path(r"C:\Users\nmb\Dropbox\UANDES EC\San Ramon v3\motions_reduced"),
+        motions_root: str | Path | None = None,
     ) -> pd.DataFrame:
         """
         Compute PGA per (Tier, Case, sta, rup).
@@ -840,7 +840,7 @@ class MPCO_df:
         selection: dict | None = None,
 
         fix_tier1_relative: bool = True,
-        motions_root: str | Path | None = Path(r"C:\Users\nmb\Dropbox\UANDES EC\San Ramon v3\motions_reduced"),
+        motions_root: str | Path | None = None,
     ) -> pd.DataFrame:
         if op not in ("raw", "log"):
             raise ValueError("pga_df_long_mod: op must be 'raw' or 'log'.")

@@ -2007,11 +2007,14 @@ class MPCOResults:
         T["Tier"] = tiers
         T["Case"] = cases
 
+        cases_sorted = sorted(T["Case"].unique())
+        tiers_sorted = sorted(T["Tier"].unique())
+
         mat = (
             T.groupby(["Case", "Tier"])[metric]
             .agg(agg)
             .unstack("Tier")
-            .reindex(index=list("ABCD"), columns=[1, 2, 3, 4])
+            .reindex(index=cases_sorted, columns=tiers_sorted)
         )
         return mat
 
@@ -2069,26 +2072,29 @@ class MPCOResults:
         T["Tier"] = tiers
         T["Case"] = cases
 
+        cases_sorted = sorted(T["Case"].unique())
+        tiers_sorted = sorted(T["Tier"].unique())
+
         gb = T.groupby(["Case", "Tier"])[metric]
 
         if agg == "mean":
-            mat_mean = gb.mean().unstack("Tier").reindex(index=list("ABCD"), columns=[1, 2, 3, 4])
-            mat_std = gb.std(ddof=1).unstack("Tier").reindex(index=list("ABCD"), columns=[1, 2, 3, 4])
+            mat_mean = gb.mean().unstack("Tier").reindex(index=cases_sorted, columns=tiers_sorted)
+            mat_std = gb.std(ddof=1).unstack("Tier").reindex(index=cases_sorted, columns=tiers_sorted)
             Z = mat_mean.to_numpy(dtype=float)
         elif agg == "median":
-            mat_mean = gb.median().unstack("Tier").reindex(index=list("ABCD"), columns=[1, 2, 3, 4])
+            mat_mean = gb.median().unstack("Tier").reindex(index=cases_sorted, columns=tiers_sorted)
             mat_std = None
             Z = mat_mean.to_numpy(dtype=float)
         elif agg == "max":
-            mat_mean = gb.max().unstack("Tier").reindex(index=list("ABCD"), columns=[1, 2, 3, 4])
+            mat_mean = gb.max().unstack("Tier").reindex(index=cases_sorted, columns=tiers_sorted)
             mat_std = None
             Z = mat_mean.to_numpy(dtype=float)
         elif agg == "min":
-            mat_mean = gb.min().unstack("Tier").reindex(index=list("ABCD"), columns=[1, 2, 3, 4])
+            mat_mean = gb.min().unstack("Tier").reindex(index=cases_sorted, columns=tiers_sorted)
             mat_std = None
             Z = mat_mean.to_numpy(dtype=float)
         elif agg == "sum":
-            mat_mean = gb.sum().unstack("Tier").reindex(index=list("ABCD"), columns=[1, 2, 3, 4])
+            mat_mean = gb.sum().unstack("Tier").reindex(index=cases_sorted, columns=tiers_sorted)
             mat_std = None
             Z = mat_mean.to_numpy(dtype=float)
         else:
@@ -2556,13 +2562,16 @@ class MPCOResults:
         T["Tier"] = tiers
         T["Case"] = cases
 
+        cases_sorted = sorted(T["Case"].unique())
+        tiers_sorted = sorted(T["Tier"].unique())
+
         gb = T.groupby(["Case", "Tier"])[metric_name]
 
         if show_std:
-            mat_mean = gb.mean().unstack("Tier").reindex(index=list("ABCD"), columns=[1, 2, 3, 4])
-            mat_std = gb.std(ddof=1).unstack("Tier").reindex(index=list("ABCD"), columns=[1, 2, 3, 4])
+            mat_mean = gb.mean().unstack("Tier").reindex(index=cases_sorted, columns=tiers_sorted)
+            mat_std = gb.std(ddof=1).unstack("Tier").reindex(index=cases_sorted, columns=tiers_sorted)
         else:
-            mat_mean = gb.mean().unstack("Tier").reindex(index=list("ABCD"), columns=[1, 2, 3, 4])
+            mat_mean = gb.mean().unstack("Tier").reindex(index=cases_sorted, columns=tiers_sorted)
             mat_std = None
 
         Z = mat_mean.to_numpy(dtype=float)
