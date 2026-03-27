@@ -1,7 +1,0 @@
-numpy
-h5py
-matplotlib
-jupyter
-tables
-pandas
-scipy

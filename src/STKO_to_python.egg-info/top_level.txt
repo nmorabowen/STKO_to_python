@@ -1,1 +1,0 @@
-STKO_to_python
