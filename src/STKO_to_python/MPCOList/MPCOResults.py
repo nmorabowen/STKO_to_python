@@ -29,6 +29,33 @@ from .MPCOdf import MPCO_df
 Key = Tuple[str, str, str]  # (model, station, rupture)
 GroupKey: TypeAlias = tuple[str, ...]
 
+
+class _LazyPickle:
+    """Proxy that defers loading a pickle file until first attribute access."""
+
+    def __init__(self, path: Path) -> None:
+        object.__setattr__(self, "_path", path)
+        object.__setattr__(self, "_obj", None)
+
+    def _load(self):
+        obj = object.__getattribute__(self, "_obj")
+        if obj is None:
+            from ..results.nodal_results_dataclass import NodalResults
+            path = object.__getattribute__(self, "_path")
+            obj = NodalResults.load_pickle(path)
+            object.__setattr__(self, "_obj", obj)
+        return obj
+
+    def __getattr__(self, name: str):
+        return getattr(self._load(), name)
+
+    def __repr__(self) -> str:
+        obj = object.__getattribute__(self, "_obj")
+        if obj is None:
+            path = object.__getattribute__(self, "_path")
+            return f"<_LazyPickle(not loaded) {path.name}>"
+        return repr(obj)
+
 class MPCOResults:
     """
     Orchestration wrapper around Dict[(model, station, rupture) -> NodalResults].
@@ -77,12 +104,12 @@ class MPCOResults:
         out_dir: Path,
         style: Optional[dict] = None,
         name: Optional[str] = None,
+        lazy: bool = True,
     ) -> "MPCOResults":
         out_dir = Path(out_dir)
         out: Dict[Key, Any] = {}
 
-        # local import to avoid circular deps
-        from ..results.nodal_results_dataclass import NodalResults  # adjust to your package path
+        from ..results.nodal_results_dataclass import NodalResults
 
         for p in out_dir.glob("*.pkl*"):
             m = cls._FNAME_PATTERN.match(p.name)
@@ -91,7 +118,10 @@ class MPCOResults:
             key: Key = (m.group("model"), m.group("station"), m.group("rupture"))
             if key in out:
                 raise ValueError(f"Duplicate key {key} from file {p.name!r}")
-            out[key] = NodalResults.load_pickle(p)
+            if lazy:
+                out[key] = _LazyPickle(p)
+            else:
+                out[key] = NodalResults.load_pickle(p)
 
         return cls(out, style=style, name=name)
 
@@ -1656,6 +1686,185 @@ class MPCOResults:
             ylim=ylim,
             sym_x=False,
             sym_y=(component != "theta_mag_rad"),  # |θ| is nonnegative; others symmetric-ish
+            vline0=False,
+            legend=False,
+            grid=True,
+        )
+
+        def _legend(fig: plt.Figure, ax: plt.Axes) -> None:
+            self._legend_below(
+                fig,
+                ax,
+                fontsize=legend_fontsize,
+                ncol=legend_ncol,
+                frameon=legend_frameon,
+            )
+
+        if overlay:
+            fig, ax = out
+            _legend(fig, ax)
+            plt.tight_layout()
+            return fig, ax
+
+        figs = out
+        for fig, ax in figs:
+            _legend(fig, ax)
+            plt.tight_layout()
+        return figs
+
+    def plot_roof_torsion(
+        self,
+        *,
+        z_coord: float,
+        node_a_xy: tuple[float, float],
+        node_b_xy: tuple[float, float],
+        model: str | Iterable[str] | None = None,
+        station: str | Iterable[str] | None = None,
+        rupture: str | Iterable[str] | None = None,
+        plot_residual: str | None = None,   # None | 'rigidity'
+        overlay: bool = True,
+        figsize: tuple[float, float] = (10, 5),
+        title: str | None = None,
+        xlim: tuple[float, float] | None = None,
+        ylim: tuple[float, float] | None = None,
+        group_by_color: str | None = None,  # None | "sta" | "rup" | "letter" | "number"
+        linewidth: float = 1.0,
+        legend_fontsize: float = 7,
+        legend_ncol: int | None = None,
+        legend_frameon: bool = False,
+    ):
+        """
+        Plot roof torsion (rotation about z) time history.
+
+        Parameters
+        ----------
+        z_coord : float
+            Z-coordinate of the roof level (model units).
+        node_a_xy, node_b_xy : (float, float)
+            XY coordinates of the two reference nodes at the roof level.
+            Full 3-D coords are built as (*node_a_xy, z_coord).
+        plot_residual : None | 'rigidity'
+            None   -> plot theta_rad time series (default).
+            'rigidity' -> plot the rigidity_ratio quality indicator instead
+                          (requires return_quality=True on NodalResults.roof_torsion).
+        """
+        valid_residuals = {None, "rigidity"}
+        if plot_residual not in valid_residuals:
+            raise ValueError(f"plot_residual must be one of {valid_residuals}")
+
+        valid_groups = {None, "sta", "rup", "letter", "number"}
+        if group_by_color not in valid_groups:
+            raise ValueError(f"group_by_color must be one of {valid_groups}")
+
+        node_a_coord = (*node_a_xy, float(z_coord))
+        node_b_coord = (*node_b_xy, float(z_coord))
+        return_quality = plot_residual == "rigidity"
+
+        pairs = self.select(model=model, station=station, rupture=rupture)
+        if not pairs:
+            raise ValueError("No matching results for the given selection.")
+        pairs = sorted(pairs, key=lambda kv: kv[0])
+
+        palette = list(plt.rcParams["axes.prop_cycle"].by_key().get("color", ["C0", "C1", "C2", "C3"]))
+
+        def _group_value(k: Key) -> str:
+            m, s, r = k
+            if group_by_color is None:
+                return ""
+            if group_by_color == "sta":
+                return str(s)
+            if group_by_color == "rup":
+                return str(r)
+            if group_by_color == "letter":
+                mm = str(m)
+                m2 = re.search(r"([A-Za-z])\s*$", mm)
+                return m2.group(1).upper() if m2 else ""
+            if group_by_color == "number":
+                mm = str(m)
+                m2 = re.search(r"(\d+)", mm)
+                return m2.group(1) if m2 else ""
+            raise RuntimeError("unreachable")
+
+        color_map: dict[Any, str] = {}
+        if group_by_color is None:
+            for i, (k, _) in enumerate(pairs):
+                color_map[k] = palette[i % len(palette)]
+        else:
+            groups_seen: list[str] = []
+            for k, _ in pairs:
+                g = _group_value(k)
+                if g not in groups_seen:
+                    groups_seen.append(g)
+            for i, g in enumerate(sorted(groups_seen)):
+                color_map[g] = palette[i % len(palette)]
+
+        def plot_one(ax: plt.Axes, k: Key, nr: Any) -> tuple[float, float, float, float] | None:
+            result = nr.roof_torsion(
+                node_a_coord=node_a_coord,
+                node_b_coord=node_b_coord,
+                result_name="DISPLACEMENT",
+                ux_component=1,
+                uy_component=2,
+                return_quality=return_quality,
+            )
+
+            if return_quality:
+                # result is (theta_series, debug_df)
+                theta_series, debug_df = result
+                if plot_residual == "rigidity":
+                    y_series = debug_df["rigidity_ratio"]
+                else:
+                    y_series = theta_series
+            else:
+                y_series = result
+
+            y = np.asarray(y_series.to_numpy(), dtype=float)
+
+            t = getattr(nr, "time", None)
+            if t is not None and len(t) == len(y):
+                x = np.asarray(t, dtype=float)
+            else:
+                x = np.asarray(y_series.index, dtype=float)
+
+            x2, y2, *_ = self._align_xy(x, y)
+            if x2.size == 0:
+                return None
+
+            label = self._label_for(k, nr)
+            kw = self._style_for_key(k)
+            kw["linewidth"] = linewidth
+
+            if group_by_color is None:
+                kw["color"] = color_map[k]
+            else:
+                kw["color"] = color_map[_group_value(k)]
+
+            ax.plot(x2, y2, label=label, **kw)
+
+            xmin, xmax = float(np.nanmin(x2)), float(np.nanmax(x2))
+            ymin, ymax = float(np.nanmin(y2)), float(np.nanmax(y2))
+            return (xmin, xmax, ymin, ymax)
+
+        if plot_residual == "rigidity":
+            ylabel = "Rigidity ratio (–)"
+            default_title = "Roof torsion — rigidity ratio"
+        else:
+            ylabel = "Roof rotation θz (rad)"
+            default_title = "Roof torsion θz"
+
+        out = self._plot_overlay_or_facets(
+            pairs=pairs,
+            plot_one=plot_one,
+            overlay=overlay,
+            figsize_overlay=figsize,
+            figsize_single=figsize,
+            title=title or default_title,
+            xlabel="Time (s)",
+            ylabel=ylabel,
+            xlim=xlim,
+            ylim=ylim,
+            sym_x=False,
+            sym_y=(plot_residual is None),
             vline0=False,
             legend=False,
             grid=True,
