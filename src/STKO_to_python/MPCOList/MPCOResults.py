@@ -111,7 +111,10 @@ class MPCOResults:
 
         from ..results.nodal_results_dataclass import NodalResults
 
+        _SKIP_SUFFIXES = ("__energy_balance.pkl", "__energy_balance.pkl.gz")
         for p in out_dir.glob("*.pkl*"):
+            if p.name.endswith(_SKIP_SUFFIXES):
+                continue
             m = cls._FNAME_PATTERN.match(p.name)
             if not m:
                 continue
@@ -545,6 +548,7 @@ class MPCOResults:
         vline0: bool = False,
         legend: bool = True,
         grid: bool = True,
+        ax: plt.Axes | None = None,
     ):
         """
         plot_one returns bounds (xmin, xmax, ymin, ymax) or None if nothing plotted.
@@ -554,7 +558,10 @@ class MPCOResults:
           - minmax otherwise
         """
         if overlay:
-            fig, ax = plt.subplots(figsize=figsize_overlay)
+            if ax is None:
+                fig, ax = plt.subplots(figsize=figsize_overlay)
+            else:
+                fig = ax.figure
             if vline0:
                 ax.axvline(0.0, linewidth=1)
 
@@ -638,6 +645,7 @@ class MPCOResults:
         legend_fontsize: float = 7,
         legend_ncol: int | None = None,
         legend_frameon: bool = False,
+        ax: plt.Axes | None = None,
     ):
         """
         Plot drift histories over MPCO collection.
@@ -751,6 +759,7 @@ class MPCOResults:
             vline0=False,
             legend=False,
             grid=True,
+            ax=ax,
         )
 
         def _legend(fig: plt.Figure, ax: plt.Axes):
@@ -794,6 +803,7 @@ class MPCOResults:
         legend_fontsize: float = 9,
         legend_ncol: int | None = None,
         legend_frameon: bool = False,
+        ax: plt.Axes | None = None,
     ):
         group_by, color_by, stat, color_by_group = self._normalize_grouping_spec(group_by=group_by, color_by=color_by, stat=stat)
 
@@ -940,7 +950,10 @@ class MPCOResults:
                 return None
             return float(xmin), float(xmax), float(ymin), float(ymax)
 
-        fig, ax = plt.subplots(figsize=figsize)
+        if ax is None:
+            fig, ax = plt.subplots(figsize=figsize)
+        else:
+            fig = ax.figure
         ax.axvline(0.0, lw=1)
         bounds = _plot(ax)
 
@@ -993,6 +1006,7 @@ class MPCOResults:
         legend_fontsize: float = 7,
         legend_ncol: int | None = None,
         legend_frameon: bool = False,
+        ax: plt.Axes | None = None,
     ):
         if agg not in ("mean", "median"):
             raise ValueError("agg must be 'mean' or 'median'.")
@@ -1168,7 +1182,10 @@ class MPCOResults:
                 ax.set_ylim(*ylim)
 
         if overlay:
-            fig, ax = plt.subplots(figsize=figsize)
+            if ax is None:
+                fig, ax = plt.subplots(figsize=figsize)
+            else:
+                fig = ax.figure
             ax.axvline(0.0, linewidth=1)
             bounds = _plot_axes(ax)
             ax.set_xlabel("Residual interstory drift")
@@ -1224,6 +1241,7 @@ class MPCOResults:
         legend_fontsize: float = 7,
         legend_ncol: int | None = None,
         legend_frameon: bool = False,
+        ax: plt.Axes | None = None,
     ):
         group_by, color_by, stat, color_by_group = self._normalize_grouping_spec(group_by=group_by, color_by=color_by, stat=stat)
 
@@ -1354,7 +1372,10 @@ class MPCOResults:
                 ax.set_ylim(*ylim)
 
         if overlay:
-            fig, ax = plt.subplots(figsize=figsize)
+            if ax is None:
+                fig, ax = plt.subplots(figsize=figsize)
+            else:
+                fig = ax.figure
             bounds = _plot_axes(ax)
             ax.set_xlabel("PGA (g)" if in_g else "PGA")
             ax.set_ylabel("z")
@@ -1401,6 +1422,7 @@ class MPCOResults:
         legend_fontsize: float = 7,
         legend_ncol: int | None = None,
         legend_frameon: bool = False,
+        ax: plt.Axes | None = None,
     ):
         """
         Plot torsion θ(t) computed from two reference roof points A,B.
@@ -1523,6 +1545,7 @@ class MPCOResults:
             vline0=False,
             legend=False,  # <- we place legend below, like drift
             grid=True,
+            ax=ax,
         )
 
         def _legend(fig: plt.Figure, ax: plt.Axes) -> None:
@@ -1571,6 +1594,7 @@ class MPCOResults:
         legend_fontsize: float = 7,
         legend_ncol: int | None = None,
         legend_frameon: bool = False,
+        ax: plt.Axes | None = None,
     ):
         """
         Plot base rocking time history.
@@ -1689,6 +1713,7 @@ class MPCOResults:
             vline0=False,
             legend=False,
             grid=True,
+            ax=ax,
         )
 
         def _legend(fig: plt.Figure, ax: plt.Axes) -> None:
@@ -1732,6 +1757,7 @@ class MPCOResults:
         legend_fontsize: float = 7,
         legend_ncol: int | None = None,
         legend_frameon: bool = False,
+        ax: plt.Axes | None = None,
     ):
         """
         Plot roof torsion (rotation about z) time history.
@@ -1868,6 +1894,7 @@ class MPCOResults:
             vline0=False,
             legend=False,
             grid=True,
+            ax=ax,
         )
 
         def _legend(fig: plt.Figure, ax: plt.Axes) -> None:
@@ -1920,6 +1947,9 @@ class MPCOResults:
         # kept for compatibility; styling is handled by _style_for_key
         group_by_color: str | None = None,
 
+        # subplot grouping
+        subplot_by: str | None = None,          # None | "sta" | "rup" | "model"
+
         # style
         linewidth: float = 1.0,
         alpha: float = 1.0,
@@ -1931,6 +1961,9 @@ class MPCOResults:
         # markers
         show_start_end: bool = True,
         start_end_size: float = 20.0,
+
+        # external axes
+        ax: plt.Axes | None = None,
     ):
         """
         Orbit plot of relative motion between top and bottom, using the same aligned samples:
@@ -2067,6 +2100,68 @@ class MPCOResults:
             symx = False
             symy = False
 
+        def _legend(fig: plt.Figure, ax: plt.Axes):
+            self._legend_below(fig, ax, fontsize=legend_fontsize, ncol=legend_ncol, frameon=legend_frameon)
+
+        # ------------------------------------------------------------
+        # subplot_by: group pairs by a key component, one subplot per group
+        # ------------------------------------------------------------
+        if subplot_by is not None:
+            _group_idx = {"model": 0, "sta": 1, "rup": 2}
+            if subplot_by not in _group_idx:
+                raise ValueError(f"subplot_by must be one of {set(_group_idx)}")
+            gi = _group_idx[subplot_by]
+
+            from collections import OrderedDict
+            groups: OrderedDict[str, list] = OrderedDict()
+            for k, nr in pairs:
+                gname = k[gi]
+                groups.setdefault(gname, []).append((k, nr))
+
+            n_groups = len(groups)
+            fig, axes = plt.subplots(
+                n_groups, 1,
+                figsize=(figsize[0], figsize[1] * n_groups),
+                squeeze=False,
+            )
+
+            for idx, (gname, group_pairs) in enumerate(groups.items()):
+                ax = axes[idx, 0]
+
+                bounds = {"xmin": np.inf, "xmax": -np.inf, "ymin": np.inf, "ymax": -np.inf}
+                any_plotted = False
+
+                for k, nr in group_pairs:
+                    b = plot_one(ax, k, nr)
+                    if b is None:
+                        continue
+                    any_plotted = True
+                    self._bounds_update(bounds, xmin=b[0], xmax=b[1], ymin=b[2], ymax=b[3])
+
+                ax.set_xlabel(xlabel)
+                ax.set_ylabel(ylabel)
+                ax.set_title(f"{ttl} — {gname}")
+
+                if any_plotted:
+                    self._apply_limits(ax, bounds=bounds, xlim=xlim, ylim=ylim, sym_x=symx, sym_y=symy)
+
+                if grid:
+                    ax.grid(True, alpha=0.35)
+
+                if equal_aspect:
+                    ax.set_aspect("equal", adjustable="box")
+
+                if square_axes and (xlim is None) and (ylim is None):
+                    _square_axis_limits(ax, symmetric=relative_drift)
+
+                _legend(fig, ax)
+
+            plt.tight_layout()
+            return fig, axes
+
+        # ------------------------------------------------------------
+        # Default: overlay / facets
+        # ------------------------------------------------------------
         out = self._plot_overlay_or_facets(
             pairs=pairs,
             plot_one=plot_one,
@@ -2083,10 +2178,8 @@ class MPCOResults:
             vline0=False,
             legend=False,
             grid=grid,
+            ax=ax,
         )
-
-        def _legend(fig: plt.Figure, ax: plt.Axes):
-            self._legend_below(fig, ax, fontsize=legend_fontsize, ncol=legend_ncol, frameon=legend_frameon)
 
         if overlay:
             fig, ax = out
@@ -2732,6 +2825,7 @@ class MPCOResults:
         center: float | None = None,
         vmin: float | None = None,
         vmax: float | None = None,
+        ax: plt.Axes | None = None,
     ):
         metric_name = "asce_torsion_ratio"
 
@@ -2802,7 +2896,10 @@ class MPCOResults:
                     else:
                         annot_data[i, j] = format(float(v), fmt_mean)
 
-        fig, ax = plt.subplots(figsize=figsize)
+        if ax is None:
+            fig, ax = plt.subplots(figsize=figsize)
+        else:
+            fig = ax.figure
 
         if use_seaborn:
             try:
@@ -2878,6 +2975,7 @@ class MPCOResults:
         sort: bool = True,
         figsize: tuple[float, float] = (8, 7),
         title: str | None = None,
+        ax: plt.Axes | None = None,
     ):
         metric_name = "asce_torsion_ratio"
 
@@ -2925,7 +3023,10 @@ class MPCOResults:
         else:
             T = T.reset_index(drop=True)
 
-        fig, ax = plt.subplots(figsize=figsize)
+        if ax is None:
+            fig, ax = plt.subplots(figsize=figsize)
+        else:
+            fig = ax.figure
         y = np.arange(len(T))
         vals = T[metric_name].to_numpy(dtype=float)
 
@@ -3418,6 +3519,7 @@ class MPCOResults:
         legend_fontsize: float = 8,
         legend_ncol: int | None = None,
         legend_frameon: bool = False,
+        ax: plt.Axes | None = None,
     ):
         """
         Plot histograms of a drift envelope metric by group, at a selected story.
@@ -3480,7 +3582,10 @@ class MPCOResults:
 
         # --- plot ---
         if overlay:
-            fig, ax = plt.subplots(figsize=figsize)
+            if ax is None:
+                fig, ax = plt.subplots(figsize=figsize)
+            else:
+                fig = ax.figure
 
             for g in sorted(groups.keys()):
                 x = groups[g][metric].to_numpy(dtype=float)
