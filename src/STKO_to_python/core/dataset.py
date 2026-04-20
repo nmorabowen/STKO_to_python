@@ -9,6 +9,8 @@ from ..model.model_info import ModelInfo
 from ..model.cdata import CData
 from ..plotting.plot import Plot
 from ..io.info import Info
+from ..io.partition_pool import Hdf5PartitionPool
+from ..io.format_policy import MpcoFormatPolicy
 from .dataclasses import MetaData
 from ..plotting.plot_dataclasses import ModelPlotSettings
 
@@ -146,6 +148,7 @@ class MPCODataSet:
         file_extension='*.mpco',
         verbose=False,
         plot_settings: Optional[ModelPlotSettings] = None,
+        pool_size: int = 0,
     ):
         
         self.hdf5_directory = hdf5_directory
@@ -153,9 +156,16 @@ class MPCODataSet:
         self.name=name
         self.file_extension = file_extension
         self.verbose = verbose
+        self._pool_size = int(pool_size)
 
         if verbose:
             logger.setLevel(logging.INFO)
+
+        # Phase 1 Layer 1 collaborators. The pool is constructed with the
+        # partition map after `_create_object_attributes` discovers the
+        # files; the format policy is stateless and can be built up front.
+        self._format_policy = MpcoFormatPolicy()
+        self._pool: Optional[Hdf5PartitionPool] = None
 
         # Initialize the metadata
         self.metadata = MetaData()
@@ -183,6 +193,15 @@ class MPCODataSet:
         # Extract the results partition for the given recorder name
         self.results_partitions=self.model_info._get_file_list_for_results_name(extension='mpco', verbose=False)
         self.cdata_partitions=self.model_info._get_file_list_for_results_name(extension='cdata', verbose=False)
+
+        # Build the partition pool now that we know the partition map.
+        # pool_size=0 preserves legacy open-per-call behavior; Phase 2
+        # will flip the default to min(16, n_partitions) once the query
+        # engines consume the pool.
+        self._pool = Hdf5PartitionPool(
+            self.results_partitions,
+            pool_size=self._pool_size,
+        )
         
         # Extract the model stages information
         self.model_stages= self.model_info._get_model_stages()
@@ -332,11 +351,15 @@ class MPCODataSet:
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
         """Exit the runtime context.
 
-        Phase 0 stub: currently a no-op. In Phase 1 this will call
-        ``self._pool.close_all()`` so that ``with MPCODataSet(...) as ds:``
-        releases HDF5 handles deterministically on scope exit. Returning
-        ``None`` (implicitly) means exceptions propagate unchanged.
+        Closes every handle held by the partition pool. Safe to call
+        even when ``pool_size=0`` (the legacy default) — the pool holds
+        no handles in that configuration, so ``close_all()`` is a no-op.
+        Returning ``None`` (implicitly) means exceptions raised inside
+        the ``with`` block propagate unchanged.
         """
+        pool = getattr(self, "_pool", None)
+        if pool is not None:
+            pool.close_all()
         return None
         
         
