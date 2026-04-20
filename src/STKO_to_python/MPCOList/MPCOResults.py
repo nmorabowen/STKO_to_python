@@ -76,7 +76,9 @@ class MPCOResults:
       - nr.info.<metric> (analysis_time, size, ...)
     """
 
-    _FNAME_PATTERN = re.compile(r"^(?P<model>.+?)__(?P<station>.+?)__(?P<rupture>.+?)\.pkl(\.gz)?$")
+    _FNAME_PATTERN = re.compile(
+        r"^(?P<model>[^_]+(?:_[^_]+)*)__(?P<station>[^_]+(?:_[^_]+)*)__(?P<rupture>[^_]+(?:_[^_]+)*)\.pkl(\.gz)?$"
+    )
     _DIMS_ALL = ("number", "letter", "sta", "rup")
     _PSTAT_RE = re.compile(r"^p(\d{1,2})$")
 

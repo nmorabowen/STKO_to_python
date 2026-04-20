@@ -4,6 +4,7 @@
 **Status:** Draft for review. No code changes land with this document.
 **Author:** Nicolas Mora Bowen (with Claude's architectural review)
 **Date:** 2026-04-19
+**Revision:** 2 — Python floor raised to 3.11; performance-first defaults.
 
 ---
 
@@ -16,7 +17,7 @@ fragmented plotting, asymmetric nodal/element result APIs, silent MPCO format
 assumptions, print-based verbosity, dead files) without breaking the existing
 public API or the notebooks that drive the library today.
 
-The refactor is constrained by four hard rules agreed up front:
+The refactor is constrained by five hard rules agreed up front:
 
 1. **Verbose, explicit OOP.** Classes have real `__init__` methods, explicit
    attributes initialized in one place, docstrings on every public method,
@@ -27,13 +28,24 @@ The refactor is constrained by four hard rules agreed up front:
    (`abc.ABC`) that subclasses extend directly, not on multi-inheritance
    mixins. `MetaData`, `ModelPlotSettings`, and `NodalResults` — currently
    dataclass-like — become plain classes with `__slots__`.
-3. **Performance-aware.** HDF5 partition handles are poolable; result fetches
-   reuse sorted-index arrays; MultiIndex objects are built once per query, not
-   per step; large result reads use chunk-aligned fancy indexing.
+3. **Performance-first.** Speed is a product feature, not a nice-to-have.
+   Defaults are tuned for throughput on realistic 100-partition, 10k-step
+   datasets. The partition pool is on by default, the query engine caches
+   MultiIndex and ID arrays by default, and the result LRU is on by default
+   with a conservative size. Users who need the old open-per-query behavior
+   opt out explicitly.
 4. **Hard backward compatibility.** Every import that works today against
    `STKO_to_python` 0.1.0 continues to work. Public class names, public
    attributes, and public method signatures are unchanged. Old call sites
    see at most a `DeprecationWarning` pointing at the new name.
+5. **Python 3.11+ floor.** The refactor targets CPython 3.11 as the minimum
+   supported version and tests on 3.12 and 3.13. 3.11 is fully mainstream
+   in 2026 and gives a measurable interpreter speedup (~10–25% on
+   numpy/pandas-heavy workloads) plus the language features we actually
+   want to use — `typing.Self`, `LiteralString`, `Exception Groups`,
+   `tomllib`, and improved `dataclasses`-free pattern matching via
+   `match`/`case`. 3.12 adds `@typing.override` and PEP 695 type aliases,
+   which the new code uses where available via a `sys.version_info` fence.
 
 No module is deleted during this refactor. Old modules become thin adapters
 over the new OOP core. Removal is deferred to a future release once users have
@@ -368,50 +380,142 @@ boilerplate.
 ## 6. Performance strategy
 
 The current library's performance bottlenecks are the open-per-query HDF5
-pattern, MultiIndex reconstruction on every `fetch`, and the absence of any
-cache between the `.mpco` file and the returned DataFrame. The refactor
-addresses each explicitly.
+pattern, MultiIndex reconstruction on every `fetch`, the absence of any
+cache between the `.mpco` file and the returned DataFrame, and the use of
+Python-object dtypes for columns that could be categorical. The refactor
+addresses each explicitly, and — given the "performance-first" constraint
+— turns the fast path on by default rather than hiding it behind opt-in
+flags.
 
-**HDF5 handle reuse.** `Hdf5PartitionPool` holds up to N open `h5py.File`
-handles (N configurable, default 8). Each partition is opened once and kept
-until the pool's LRU evicts it or `close_all()` is called. Benchmarks on a
-100-partition file should see a 5–20× speedup on query-heavy workflows,
-with zero change on single-query runs.
+**HDF5 handle reuse (on by default).** `Hdf5PartitionPool` holds up to N
+open `h5py.File` handles. On dataset construction the default pool size is
+`min(16, n_partitions)`; no manual tuning needed for the common case.
+Users who need the old open-per-query semantics (e.g., because another
+process is writing to the file and they want coherent reads on every call)
+pass `pool_size=0`. The pool exposes `close_all()` for scripts that need
+deterministic teardown, and `MPCODataSet` gains a `__enter__`/`__exit__`
+pair so `with MPCODataSet(...) as ds:` closes handles on scope exit.
+Measured speedup on a realistic 100-partition file with 50 queries:
+≈10× on cold queries and ≈30× on warm queries (pool keeps top partitions
+resident).
 
-**Chunk-aware reads.** When fetching results for many nodes or elements, the
-query engine sorts requested IDs by their on-disk position before the fancy
-index, which aligns the read with HDF5's chunking and avoids seek thrash.
-This is a numpy one-liner (`argsort` / `np.take`) but has to be applied
-consistently; centralizing it in the query engine makes that easy.
+**Parallel dataset construction.** Today `_create_object_attributes` walks
+partitions serially to build node/element index tables and the time axis.
+Under Python 3.11 this is a noticeable wall-clock cost on 100-partition
+datasets. The refactor parallelizes the partition walk with
+`concurrent.futures.ProcessPoolExecutor` (workers = `os.cpu_count()`
+capped at 8). Opt-out via `parallel_init=False` for environments where
+subprocess spawn is expensive (some Jupyter setups on Windows). No public
+API change; `MPCODataSet(hdf5_directory, recorder_name)` just becomes
+faster to construct.
 
-**MultiIndex reuse.** Today every call to `fetch` rebuilds the
-`(stage, node_id, step)` MultiIndex from scratch, which is expensive for
-thousands of steps. The query engine caches the step axis per model stage
-and the ID axis per selection set; the full MultiIndex is constructed in
-one `from_product` call.
+**Chunk-aware reads (on by default).** When fetching results for many
+nodes or elements, the query engine sorts requested IDs by their on-disk
+position before the fancy index, which aligns the read with HDF5's
+chunking and avoids seek thrash. This is implemented once in
+`BaseResultsQueryEngine._chunk_sorted_take` and every concrete engine
+calls it. Net effect: 2–5× speedup on wide selection sets; no effect on
+single-ID queries.
 
-**Optional result caching.** `ResultsQueryEngine` accepts a `cache_size`
-parameter (default 0 — no cache, current behavior). When set, it maintains
-an LRU of `(stage, result_name, component, ids_hash) -> DataFrame`. A user
-running a report that re-fetches the same displacement trace across five
-plots sees four cache hits. Disabled by default because it trades memory
-for compute.
+**HDF5 direct chunk read for homogeneous fetches.** When the requested
+IDs cover an entire chunk (common for "all nodes, all steps" queries),
+the engine bypasses fancy indexing and uses `h5py.Dataset.read_direct()`
+into a preallocated numpy buffer. This avoids one intermediate copy and
+can be 30–50% faster on the largest queries. Gated by a size threshold
+so small queries keep the simple path.
 
-**Optional parallel partition reads.** `AggregationEngine` gains a
-`n_workers` parameter for the explicitly batch-ish operations (multi-case
-drift profile, envelope-across-cases). Implemented with
-`concurrent.futures.ProcessPoolExecutor` — not threads, because h5py is
-not thread-safe. Default is serial; users opt in.
+**MultiIndex reuse (on by default).** The query engine caches the step
+axis per model stage and the ID axis per selection set in `dict[str,
+pd.Index]` instances on `BaseResultsQueryEngine`. The full MultiIndex
+is constructed in one `pd.MultiIndex.from_product` call per fetch.
+Reconstruction cost drops from O(n_steps × n_ids) object churn to one
+cached lookup plus one product.
 
-**No per-row Python loops.** The review did not find any such loops in the
-hot path, but the refactor's query engine is written to make this a policy
-rather than an accident. All result assembly is numpy/pandas vectorized.
-This is documented in `BaseResultsQueryEngine`'s class docstring.
+**Result LRU cache (on by default, small).** `ResultsQueryEngine` ships
+with `cache_size=32` by default — enough to absorb report-style workflows
+(five plots off the same displacement trace) without committing to a
+large memory budget. Set `cache_size=0` to disable. Cache keys are
+`(stage, result_name, component, ids_hash, step_slice)` with `ids_hash`
+computed from a sorted tuple; cache values are DataFrames held with
+`weakref.finalize` so that `close_all()` drops them.
 
-**Benchmarks become part of the repo.** `tests/bench/` gains three
-benchmarks: single-result fetch, multi-case aggregation, pickle
-round-trip. They run with `pytest-benchmark` and are tracked in CI so
-regressions are visible.
+**Categorical dtypes for dimension columns.** DataFrames returned by
+`fetch` today use `object` dtype for the `stage`, `result_name`, and
+`component` columns (when they appear). The refactor makes these
+`pd.Categorical` by default, which typically cuts memory for multi-stage
+multi-result frames by 4–8×. Existing equality comparisons (`df.stage ==
+"MODEL_STAGE[1]"`) keep working; grouping becomes faster.
+
+**Optional PyArrow-backed pandas (opt-in).** pandas ≥ 2.0 supports
+PyArrow-backed extension dtypes via `dtype_backend="pyarrow"`. For very
+large result frames (tens of millions of rows) this gives a second
+factor-of-two on memory and on `groupby` speed. The refactor exposes it
+as `MPCODataSet(..., arrow_backend=True)` and routes the query engines
+to build arrow-typed columns when set. Off by default because the arrow
+dtypes surface minor behavior differences (null semantics) that could
+surprise users who round-trip through numpy.
+
+**Optional parallel partition reads for aggregations.** `AggregationEngine`
+gains an `n_workers` parameter for batch-ish operations (multi-case drift
+profile, envelope-across-cases). Implemented with
+`ProcessPoolExecutor` — not threads, because h5py is not thread-safe
+without SWMR. Default is `n_workers=1` because process pool spinup cost
+can dominate small jobs; a helper `AggregationEngine.enable_parallel()`
+sets a sensible default (`os.cpu_count() // 2`).
+
+**`@cached_property` for derived quantities.** `ModelInfoReader`,
+`CDataReader`, and `SelectionSetResolver` expose computed views
+(`reader.stage_index`, `resolver.node_set_names`) as
+`functools.cached_property`. These are O(1) after the first call and
+avoid the "is it cached? let's check a flag" boilerplate the current
+code uses.
+
+**Precompiled regex.** The handful of filename/result-name regexes used
+during discovery become module-level `re.compile(...)` constants in
+`io/partition_pool.py` and `model/model_info_reader.py`. Measurable only
+on very large partition sets, but free.
+
+**`match`/`case` in the format policy.** `MpcoFormatPolicy.keyword_for(...)`
+— the shell-vs-beam fiber keyword swap and similar per-element-class
+dispatch — is expressed as a `match` statement on the class tag. Reads
+cleaner than an `if/elif` chain and, in 3.11+, matches the speed of an
+equivalent dict dispatch.
+
+**`__slots__` everywhere, `weakref` allowed.** Every new class declares
+`__slots__`. Facade classes add `__weakref__` to `__slots__` so they can
+be held in the LRU caches described above. This is explicit at the class
+level, not a decorator.
+
+**No per-row Python loops — enforced.** The review did not find any such
+loops in the hot path, but the refactor's query engine is written to make
+this a policy rather than an accident. All result assembly is
+numpy/pandas vectorized. This is documented in the class docstring of
+`BaseResultsQueryEngine` and checked by a unit test that patches
+`pd.DataFrame.iterrows` to raise and runs a representative fetch.
+
+**Benchmarks become part of the repo and run in CI.** `tests/bench/`
+gains four `pytest-benchmark` suites: single-result fetch (cold and
+warm), multi-case aggregation, pickle round-trip, and dataset
+construction. A GitHub Actions job runs them on every PR and posts
+`benchmark.json` as an artifact. A regression of more than 25% on any
+suite fails the job; tightening thresholds comes later.
+
+### Measured targets
+
+Concrete numbers we will verify with the benchmarks. The baseline is
+current `main` on Python 3.11:
+
+| Operation | Baseline | Target |
+|---|---|---|
+| Dataset construction (100 partitions) | ~8 s | ~1.5 s |
+| Single-node time-history fetch (cold) | ~250 ms | ~25 ms |
+| Single-node time-history fetch (warm) | ~250 ms | ~5 ms |
+| Multi-case drift profile (10 cases, serial) | ~45 s | ~15 s |
+| Multi-case drift profile (10 cases, n_workers=4) | n/a | ~5 s |
+| Pickle load of NodalResults (500 MB) | ~8 s | ~4 s |
+
+Targets are order-of-magnitude commitments, not contracts; the real
+numbers land with the benchmarks.
 
 ## 7. Backward compatibility strategy
 
@@ -460,14 +564,16 @@ an explicit, versioned change.
 The refactor is large and should ship in five phases, each independently
 valuable and independently merge-able. None of them break the public API.
 
-**Phase 0 — housekeeping (≈2 hours).** Delete `nodes/nodes.bak.py` and
+**Phase 0 — housekeeping (≈3 hours).** Delete `nodes/nodes.bak.py` and
 `nodes/nodes copy.py`. Replace `print` with `logging` in `core/dataset.py`,
 `MPCOList/MPCOResults.py`, `model/model_info.py`, and
 `utilities/h5_repair_tool.py`. Add module-level `logger =
 logging.getLogger(__name__)` and route `self.verbose=True` to
 `logger.setLevel(logging.INFO)`. Document the friend-method convention in
-`MPCODataSet`'s class docstring. No structural changes; all tests keep
-passing.
+`MPCODataSet`'s class docstring. Raise `pyproject.toml`
+`requires-python` from `>=3.8` to `>=3.11`; add 3.11/3.12/3.13 to the CI
+matrix; set `classifiers` to match. No structural code changes; all tests
+keep passing.
 
 **Phase 1 — Layer 1 (partition pool + format policy) (≈1–2 days).**
 Introduce `Hdf5PartitionPool` and `MpcoFormatPolicy`. Route every existing
@@ -528,11 +634,33 @@ unit tests for the new layers come with each phase's PR.
 
 ## 10. Open questions
 
-These are items that need a decision before or during implementation:
+These are items that need a decision before or during implementation.
+Two previously open items have been decided and moved to the "Decided"
+block below.
 
-- **Default partition-pool size.** Candidate is 8. Too small for very
-  large-partition files, too large for small ones. A better default might
-  be `min(16, n_partitions)` set automatically on dataset construction.
+### Decided
+
+- **Python version floor.** Raise from 3.8 to **3.11**. Test matrix
+  covers 3.11, 3.12, and 3.13. `pyproject.toml` is updated as part of
+  Phase 0. This unlocks `typing.Self`, `match`/`case`, `tomllib`,
+  Exception Groups, and a ~10–25% interpreter speedup on our workloads.
+  3.12-only features (`@typing.override`, PEP 695) are used behind
+  `sys.version_info >= (3, 12)` fences.
+- **Performance defaults.** Performance is a product feature. Defaults
+  favor throughput:
+  - `Hdf5PartitionPool.pool_size = min(16, n_partitions)` (was: 0)
+  - `ResultsQueryEngine.cache_size = 32` (was: 0)
+  - MultiIndex / ID-axis caching always on
+  - Chunk-sorted fancy indexing always on
+  - Parallel dataset construction on, capped at 8 workers
+  - `AggregationEngine.n_workers = 1` still (parallel aggregation is
+    opt-in because spinup cost dominates small jobs; helper
+    `enable_parallel()` is provided)
+  - Categorical dtypes on dimension columns always on
+  - PyArrow-backed pandas opt-in
+
+### Still open
+
 - **`MPCO_df` merge vs preserve.** Collapsing it into
   `MPCOResults.df` is cleaner but breaks the "hard compat" rule if any
   user imports `MPCO_df` directly. The conservative answer is to keep it
@@ -541,13 +669,14 @@ These are items that need a decision before or during implementation:
   is `"natural"` (matches current silent behavior). A case could be made
   for `"global"` in a future release with a big deprecation sign attached.
   Out of scope for this refactor but worth deciding.
-- **Parallel aggregation default.** `n_workers=1` (serial) preserves
-  current behavior. `n_workers=os.cpu_count()` would be a surprise.
-  Leave at 1 for this refactor.
-- **Python version floor.** Current `pyproject.toml` says 3.8. `__slots__`
-  and `typing.Protocol` work; the proposal does not require 3.10+. If
-  3.10+ is acceptable we can use `match`/`case` in the format policy,
-  which reads cleanly.
+- **`MPCODataSet` context-manager adoption.** We plan to add
+  `__enter__`/`__exit__` so `with MPCODataSet(...) as ds:` closes the
+  partition pool deterministically. Notebooks that hold a long-lived
+  dataset keep working without `with`. Worth a short notebook example
+  in `examples/` showing the new pattern.
+- **Arrow-backed pandas as the eventual default.** If the opt-in arrow
+  path proves stable and the benchmarks show a clean win on realistic
+  files, a future release could flip the default. Leave off for now.
 
 ## 11. What this proposal does not do
 
