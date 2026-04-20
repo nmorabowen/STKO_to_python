@@ -80,12 +80,12 @@ class H5RepairTool:
 
     # ───────────────────────────────────────────────────────────────────── #
     def print_report(self) -> None:
-        """Print a summary table of file statuses."""
-        print("File Status Report:")
+        """Log a summary table of file statuses at INFO level."""
+        log.info("File Status Report:")
         for f, stat in self.status.items():
-            print(f"{f.name:<30} →  {stat}")
+            log.info("%-30s →  %s", f.name, stat)
 
-        print("\nSummary:")
+        log.info("Summary:")
         counts = {"OK": 0, "FLAGGED": 0, "ERROR": 0}
         for s in self.status.values():
             if s == "OK":
@@ -95,7 +95,7 @@ class H5RepairTool:
             else:
                 counts["ERROR"] += 1
         for k, v in counts.items():
-            print(f"{k:<8}: {v}")
+            log.info("%-8s: %d", k, v)
 
     # ───────────────────────────────────────────────────────────────────── #
     def fix_flagged(self, *, dry_run: bool = False) -> None:

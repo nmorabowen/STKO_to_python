@@ -16,6 +16,7 @@ from typing import (
 )
 
 import fnmatch
+import logging
 import re
 
 import numpy as np
@@ -25,6 +26,8 @@ from matplotlib import cm
 from matplotlib.colors import Normalize
 
 from .MPCOdf import MPCO_df
+
+logger = logging.getLogger(__name__)
 
 Key = Tuple[str, str, str]  # (model, station, rupture)
 GroupKey: TypeAlias = tuple[str, ...]
@@ -702,7 +705,10 @@ class MPCOResults:
 
             t2, y2, t_trim, y_trim = self._align_xy(t, y)
             if warn_mismatch and (t_trim or y_trim):
-                print(f"[plot_drift] mismatch {k}: time={len(t)} y={len(y)} → {len(t2)}")
+                logger.info(
+                    "[plot_drift] mismatch %s: time=%d y=%d -> %d",
+                    k, len(t), len(y), len(t2),
+                )
 
             if t2.size == 0:
                 return None

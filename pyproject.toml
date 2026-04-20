@@ -13,16 +13,26 @@ authors = [
 license = {text = "MIT"}
 classifiers = [
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Operating System :: OS Independent",
 ]
-requires-python = ">=3.8"
+requires-python = ">=3.11"
 dependencies = [
+    # numpy: numerical arrays used everywhere
     "numpy",
+    # h5py: .mpco HDF5 reader
     "h5py",
+    # matplotlib: plotting backend for Plot / NodalResultsPlotter
     "matplotlib",
+    # jupyter: examples/notebooks smoke-tested in CI
     "jupyter",
+    # tables: PyTables backend used by some pandas HDF paths
     "tables",
+    # pandas: result DataFrames are the primary return type
     "pandas",
+    # scipy: aggregation helpers (interpolation, signal processing)
     "scipy",
 ]
 

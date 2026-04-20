@@ -9,6 +9,8 @@ from datetime import datetime
 if TYPE_CHECKING:
     from ..core.dataset import MPCODataSet
 
+logger = logging.getLogger(__name__)
+
 
 class Info:
     """

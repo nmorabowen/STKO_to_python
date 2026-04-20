@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Any, Dict, Optional, Sequence, Tuple, Union
 import re
 
@@ -10,6 +11,8 @@ import h5py
 if TYPE_CHECKING:
     from ..core.dataset import MPCODataSet
     from ..results.nodal_results_dataclass import NodalResults
+
+logger = logging.getLogger(__name__)
 
 
 class Nodes:

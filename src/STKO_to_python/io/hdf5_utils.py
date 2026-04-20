@@ -1,5 +1,10 @@
 # mcpo_virtual_dataset/io/hdf5_utils.py
+import logging
+
 import h5py
+
+logger = logging.getLogger(__name__)
+
 
 class HDF5Utils:
     """

@@ -74,7 +74,7 @@ class ModelInfo:
                         part = int(part_str.split(".")[0])
                         file_mapping[name][part] = file
                     except (ValueError, IndexError):
-                        print(f"Skipping file due to unexpected naming format: {file}")
+                        logger.warning("Skipping file due to unexpected naming format: %s", file)
                 else:
                     # Handle compound extensions like ".mpco.cdata"
                     if filename.endswith(f".{extension}"):
@@ -85,16 +85,16 @@ class ModelInfo:
                         file_mapping[base][0] = file
 
             if verbose:
-                print("\nFound files:")
+                logger.info("Found files:")
                 for name, parts in file_mapping.items():
-                    print(f"\n{name}:")
+                    logger.info("%s:", name)
                     for part, path in sorted(parts.items()):
-                        print(f"  Part: {part}, File: {path}")
+                        logger.info("  Part: %s, File: %s", part, path)
 
             return file_mapping
 
         except Exception as e:
-            print(f"Model Info Error during file listing: {e}")
+            logger.error("Model Info Error during file listing: %s", e)
             raise
         
     def _get_file_list_for_results_name(self, extension= None, verbose=False):
@@ -138,9 +138,9 @@ class ModelInfo:
             raise ValueError("Model Info Error: No model stages found in the result partitions.")
 
         if verbose:
-            print(f'The model stages found across partitions are: {model_stages}')
+            logger.info('The model stages found across partitions are: %s', model_stages)
 
-        return model_stages    
+        return model_stages
     
     def _get_node_results_names(
             self,
@@ -176,7 +176,7 @@ class ModelInfo:
                         node_results_names.update(nodes_group.keys())
 
             if verbose:
-                print(f"Node results in '{stage}': {sorted(node_results_names)}")
+                logger.info("Node results in '%s': %s", stage, sorted(node_results_names))
 
         # 3. Handle empty results according to caller’s wishes
         if not node_results_names:
@@ -224,7 +224,7 @@ class ModelInfo:
                         element_results_names.update(ele_group.keys())
 
             if verbose:
-                print(f"Element results in '{stage}': {sorted(element_results_names)}")
+                logger.info("Element results in '%s': %s", stage, sorted(element_results_names))
 
         # 3. Handle empty results according to caller’s wishes
         if not element_results_names:
@@ -292,7 +292,7 @@ class ModelInfo:
             if not result_names:
                 skipped_stages.append(stage)
                 if verbose:
-                    print(f"[info] Skipping stage '{stage}': no element results found.")
+                    logger.info("Skipping stage '%s': no element results found.", stage)
                 continue
 
             scanned_stages.append(stage)
@@ -322,7 +322,10 @@ class ModelInfo:
 
             if verbose:
                 counts = {k: len(v) for k, v in element_types_dict.items()}
-                print(f"[info] Stage '{stage}': collected types (counts per result) -> {counts}")
+                logger.info(
+                    "Stage '%s': collected types (counts per result) -> %s",
+                    stage, counts,
+                )
 
         # Finalize / convert sets -> sorted lists
         element_types_dict_sorted: dict[str, list[str]] = {
@@ -347,7 +350,7 @@ class ModelInfo:
             logger.warning(f"Model Info: {msg}")
 
         if verbose:
-            print(f"[info] Unique element types ({len(unique_all)}): {unique_all}")
+            logger.info("Unique element types (%d): %s", len(unique_all), unique_all)
 
         return {
             "element_types_dict": element_types_dict_sorted,
@@ -395,7 +398,7 @@ class ModelInfo:
             if not result_names:
                 skipped_stages.append(stage)
                 if verbose:
-                    print(f"[info] Skipping stage '{stage}': no element results found.")
+                    logger.info("Skipping stage '%s': no element results found.", stage)
                 continue  # nothing to do for this stage
 
             # 3) Walk all partitions and harvest element type groups per result name
@@ -418,7 +421,7 @@ class ModelInfo:
 
             if verbose:
                 found = sorted(element_types)
-                print(f"[info] Stage '{stage}': collected {len(found)} type(s) so far.")
+                logger.info("Stage '%s': collected %d type(s) so far.", stage, len(found))
 
         # 4) Finalize
         if not element_types:
@@ -470,13 +473,17 @@ class ModelInfo:
                             time_series_dict[int(step_value)] = float(time_value)  # Store STEP -> TIME mapping
 
             except Exception as e:
-                print(f"Model Info Error: Get time series error processing partition {part_number} for model stage '{model_stage}', results name '{results_name}': {e}")
+                logger.error(
+                    "Model Info Error: Get time series error processing partition %s "
+                    "for model stage '%s', results name '%s': %s",
+                    part_number, model_stage, results_name, e,
+                )
 
         # Convert to DataFrame
         df = pd.DataFrame(list(time_series_dict.items()), columns=['STEP', 'TIME']).sort_values(by='STEP')
 
         return df
-    
+
     def _get_time_series_on_elements_for_stage(self, model_stage, results_name, element_type):
         """
         Retrieve and consolidate the unique time series data across all partitions 
@@ -513,7 +520,11 @@ class ModelInfo:
                             time_series_dict[int(step_value)] = float(time_value)  # Store STEP -> TIME mapping
 
             except Exception as e:
-                print(f"Model Info Error: Get time series error processing partition {part_number} for model stage '{model_stage}', results name '{results_name}', element type '{element_type}': {e}")
+                logger.error(
+                    "Model Info Error: Get time series error processing partition %s "
+                    "for model stage '%s', results name '%s', element type '%s': %s",
+                    part_number, model_stage, results_name, element_type, e,
+                )
 
         # Convert to DataFrame
         df = pd.DataFrame(list(time_series_dict.items()), columns=['STEP', 'TIME']).sort_values(by='STEP')

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 from typing import TYPE_CHECKING, Any, Dict, Optional, Sequence, Tuple, Union
 
@@ -10,6 +11,8 @@ import pandas as pd
 if TYPE_CHECKING:
     from ..core.dataset import MPCODataSet
     from .element_results import ElementResults
+
+logger = logging.getLogger(__name__)
 
 
 class Elements:
