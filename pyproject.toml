@@ -36,6 +36,12 @@ dependencies = [
     "scipy",
 ]
 
+[project.optional-dependencies]
+# Installed with: pip install -e ".[test]"
+test = [
+    "pytest>=7.4",
+]
+
 [project.urls]
 "Homepage" = "https://github.com/nmorabowen/STKO_to_python"
 "Bug Tracker" = "https://github.com/nmorabowen/STKO_to_python/issues"
@@ -46,3 +52,22 @@ packages = {find = {where = ["src"]}}
 
 [tool.setuptools.package-data]
 "*" = ["*.ipynb"]
+
+[tool.pytest.ini_options]
+minversion = "7.4"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+]
+markers = [
+    "fixture: tests that require the golden .mpco fixture (skipped if absent)",
+    "slow: tests that take more than ~1s",
+]
+filterwarnings = [
+    "error::DeprecationWarning:STKO_to_python.*",
+]
