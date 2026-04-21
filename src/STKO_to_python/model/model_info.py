@@ -27,7 +27,10 @@ class ModelInfoReader:
     """
     def __init__(self, dataset:'MPCODataSet'):
         self.dataset = dataset
-        
+        # Lightweight collaborator — stateless, no construction cost.
+        from ..io.time_series_reader import TimeSeriesReader
+        self._time_series_reader = TimeSeriesReader()
+
     def _get_file_list(self, extension: Optional[str] = None, verbose: bool = False) -> Dict[str, Dict[int, str]]:
         """
         Retrieves a mapping of partitioned files from the dataset directory.
@@ -458,30 +461,15 @@ class ModelInfoReader:
             pd.DataFrame: A DataFrame with columns ['STEP', 'TIME'], sorted by STEP.
         """
 
-        time_series_dict = {}  # Dictionary to store STEP -> TIME mapping
+        time_series_dict: dict[int, float] = {}
 
         for part_number in self.dataset.results_partitions:
             try:
                 with self.dataset._pool.with_partition(part_number) as partition:
                     base_path = f"{model_stage}/RESULTS/ON_NODES/{results_name}/DATA"
-                    data_group = partition.get(base_path)
-
-                    if data_group is None:
-                        continue  # Skip if data does not exist
-
-                    # Iterate over all steps and collect STEP & TIME attributes
-                    for step_name in data_group.keys():
-                        step_group = data_group[step_name]
-                        step_value = step_group.attrs.get("STEP")
-                        time_value = step_group.attrs.get("TIME")
-
-                        if step_value is not None and time_value is not None:
-                            # STKO writes STEP/TIME as 1-element arrays;
-                            # np.asarray(...).item() unwraps both arrays
-                            # and python scalars safely.
-                            time_series_dict[int(np.asarray(step_value).item())] = float(
-                                np.asarray(time_value).item()
-                            )
+                    time_series_dict.update(
+                        self._time_series_reader.read_step_time_pairs(partition.get(base_path))
+                    )
 
             except Exception as e:
                 logger.error(
@@ -490,10 +478,9 @@ class ModelInfoReader:
                     part_number, model_stage, results_name, e,
                 )
 
-        # Convert to DataFrame
-        df = pd.DataFrame(list(time_series_dict.items()), columns=['STEP', 'TIME']).sort_values(by='STEP')
-
-        return df
+        return pd.DataFrame(
+            list(time_series_dict.items()), columns=['STEP', 'TIME']
+        ).sort_values(by='STEP')
 
     def _get_time_series_on_elements_for_stage(self, model_stage, results_name, element_type):
         """
@@ -510,27 +497,15 @@ class ModelInfoReader:
             pd.DataFrame: A DataFrame with columns ['STEP', 'TIME'], sorted by STEP.
         """
 
-        time_series_dict = {}  # Dictionary to store STEP -> TIME mapping
+        time_series_dict: dict[int, float] = {}
 
         for part_number in self.dataset.results_partitions:
             try:
                 with self.dataset._pool.with_partition(part_number) as partition:
                     base_path = f"{model_stage}/RESULTS/ON_ELEMENTS/{results_name}/{element_type}/DATA"
-                    data_group = partition.get(base_path)
-
-                    if data_group is None:
-                        continue  # Skip if DATA does not exist
-
-                    # Iterate over all steps and collect STEP & TIME attributes
-                    for step_name in data_group.keys():
-                        step_group = data_group[step_name]
-                        step_value = step_group.attrs.get("STEP")
-                        time_value = step_group.attrs.get("TIME")
-
-                        if step_value is not None and time_value is not None:
-                            time_series_dict[int(np.asarray(step_value).item())] = float(
-                                np.asarray(time_value).item()
-                            )
+                    time_series_dict.update(
+                        self._time_series_reader.read_step_time_pairs(partition.get(base_path))
+                    )
 
             except Exception as e:
                 logger.error(
