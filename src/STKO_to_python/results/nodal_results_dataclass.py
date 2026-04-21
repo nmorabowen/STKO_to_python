@@ -979,171 +979,21 @@ class NodalResults:
         signed: bool = True,
         tail: int | None = None,
     ) -> dict[str, Any]:
-        """
-        Compute ASCE-style torsional irregularity ratio from *edge drifts* at a story.
-
-        Inputs are *coordinates only* (x,y,z) tuples, resolved to nearest node IDs.
-
-        Drift time series per side:
-            drA(t) = (u_A_top(t) - u_A_bottom(t)) / (z_top - z_bottom)
-            drB(t) = (u_B_top(t) - u_B_bottom(t)) / (z_top - z_bottom)
-
-        Time reduction:
-            - "abs_max": max(|dr(t)|)
-            - "max":     max(dr(t))
-            - "min":     min(dr(t))
-
-        Ratio definitions:
-            - "max_over_avg":  max(DA, DB) / avg(DA, DB)
-            - "max_over_min":  max(DA, DB) / min(DA, DB)
-
-        Notes
-        -----
-        - This is a single-story check (user provides bottom & top points for that story).
-        - No center points are used.
-        - If tail is provided, the last `tail` samples are ignored for the reduction
-        (useful if your record ends with solver noise / weird tail). Set tail=None to keep all.
-
-        Returns
-        -------
-        dict with:
-            drift_A, drift_B, drift_avg, drift_max, ratio, ctrl_side,
-            node_ids (resolved), metadata
-        """
-        # ----------------------------
-        # validate coords
-        # ----------------------------
-        def _as_xyz(pt: tuple[float, float, float], name: str) -> tuple[float, float, float]:
-            if not isinstance(pt, tuple):
-                raise TypeError(f"{name} must be a tuple (x,y,z). Got {type(pt).__name__}.")
-            if len(pt) != 3:
-                raise TypeError(f"{name} must be a tuple of length 3 (x,y,z). Got len={len(pt)}.")
-            x, y, z = pt
-            return float(x), float(y), float(z)
-
-        A_top = _as_xyz(side_a_top, "side_a_top")
-        A_bot = _as_xyz(side_a_bottom, "side_a_bottom")
-        B_top = _as_xyz(side_b_top, "side_b_top")
-        B_bot = _as_xyz(side_b_bottom, "side_b_bottom")
-
-        # ----------------------------
-        # resolve node ids (nearest)
-        # ----------------------------
-        pts = [A_top, A_bot, B_top, B_bot]
-        node_ids = self.info.nearest_node_id(pts, return_distance=False)
-        a_top_id, a_bot_id, b_top_id, b_bot_id = map(int, node_ids)
-
-        # sanity
-        if a_top_id == a_bot_id:
-            raise ValueError("Side A top and bottom resolved to the same node id (cannot compute drift).")
-        if b_top_id == b_bot_id:
-            raise ValueError("Side B top and bottom resolved to the same node id (cannot compute drift).")
-
-        # ----------------------------
-        # compute drift time histories
-        # ----------------------------
-        drA = self.drift(
-            top=a_top_id,
-            bottom=a_bot_id,
+        return self._aggregation_engine.asce_torsional_irregularity(
+            self,
             component=component,
+            side_a_top=side_a_top,
+            side_a_bottom=side_a_bottom,
+            side_b_top=side_b_top,
+            side_b_bottom=side_b_bottom,
             result_name=result_name,
             stage=stage,
+            reduce_time=reduce_time,
+            definition=definition,
+            eps=eps,
             signed=signed,
-            reduce="series",
+            tail=tail,
         )
-        drB = self.drift(
-            top=b_top_id,
-            bottom=b_bot_id,
-            component=component,
-            result_name=result_name,
-            stage=stage,
-            signed=signed,
-            reduce="series",
-        )
-
-        # align in case step indices differ
-        drA, drB = drA.align(drB, join="inner")
-        if drA.size == 0:
-            raise ValueError("No overlapping steps between Side A and Side B drift series.")
-
-        # optional tail trimming (drop last samples)
-        if tail is not None:
-            t = int(tail)
-            if t < 0:
-                raise ValueError("tail must be >= 0 or None.")
-            if t > 0:
-                if t >= drA.size:
-                    raise ValueError("tail is >= series length; nothing would remain.")
-                drA = drA.iloc[:-t]
-                drB = drB.iloc[:-t]
-
-        # ----------------------------
-        # reduce over time
-        # ----------------------------
-        a = drA.to_numpy(dtype=float)
-        b = drB.to_numpy(dtype=float)
-
-        def _reduce(x: np.ndarray, how: str) -> float:
-            if x.size == 0:
-                return float("nan")
-            if how == "abs_max":
-                return float(np.nanmax(np.abs(x)))
-            if how == "max":
-                return float(np.nanmax(x))
-            if how == "min":
-                return float(np.nanmin(x))
-            raise ValueError("reduce_time must be one of: 'abs_max', 'max', 'min'.")
-
-        DA = _reduce(a, reduce_time)
-        DB = _reduce(b, reduce_time)
-
-        # ensure positive magnitudes for ratio when using abs-based definitions
-        # (even if reduce_time="max"/"min", ratio should typically use magnitudes)
-        mA = float(abs(DA))
-        mB = float(abs(DB))
-
-        drift_max = max(mA, mB)
-        drift_min = min(mA, mB)
-        drift_avg = 0.5 * (mA + mB)
-
-        # ----------------------------
-        # ratio definition
-        # ----------------------------
-        if definition == "max_over_avg":
-            denom = max(drift_avg, float(eps))
-            ratio = drift_max / denom
-        elif definition == "max_over_min":
-            denom = max(drift_min, float(eps))
-            ratio = drift_max / denom
-        else:
-            raise ValueError("definition must be 'max_over_avg' or 'max_over_min'.")
-
-        ctrl_side = "A" if mA >= mB else "B"
-
-        return {
-            "drift_A": mA,
-            "drift_B": mB,
-            "drift_avg": drift_avg,
-            "drift_max": drift_max,
-            "ratio": float(ratio),
-            "ctrl_side": ctrl_side,
-            "node_ids": {
-                "A_top": a_top_id,
-                "A_bottom": a_bot_id,
-                "B_top": b_top_id,
-                "B_bottom": b_bot_id,
-            },
-            "metadata": {
-                "component": component,
-                "result_name": result_name,
-                "stage": stage,
-                "reduce_time": reduce_time,
-                "definition": definition,
-                "signed_drift_series": bool(signed),
-                "tail_dropped": int(tail or 0),
-                "eps": float(eps),
-            },
-        }
 
     def interstory_drift_envelope_pd(
         self,

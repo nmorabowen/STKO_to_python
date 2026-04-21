@@ -406,6 +406,134 @@ def test_base_rocking_unknown_reduce_raises(nodal_displacement):
 
 
 # ---------------------------------------------------------------------- #
+# asce_torsional_irregularity
+# ---------------------------------------------------------------------- #
+def _pick_two_sides(nr) -> tuple[tuple, tuple, tuple, tuple]:
+    """Pick (A_top, A_bot, B_top, B_bot) as (x,y,z) tuples from nodes_info,
+    such that A_top/A_bot share the same (x,y) with different z, and
+    similarly for B; sides A and B differ in (x,y). Returns the coords of
+    real nodes so nearest-node resolution is deterministic."""
+    ni = nr.info.nodes_info
+    xcol = nr.info._resolve_column(ni, "x", required=True)
+    ycol = nr.info._resolve_column(ni, "y", required=True)
+    zcol = nr.info._resolve_column(ni, "z", required=True)
+
+    rows = [(float(r[xcol]), float(r[ycol]), float(r[zcol])) for _, r in ni.iterrows()]
+
+    # group by (x, y)
+    by_xy: dict[tuple[float, float], list[float]] = {}
+    for x, y, z in rows:
+        by_xy.setdefault((x, y), []).append(z)
+
+    # find two (x, y) columns that each have >= 2 z levels
+    cols = [(xy, sorted(zs)) for xy, zs in by_xy.items() if len(zs) >= 2]
+    if len(cols) < 2:
+        pytest.skip("fixture lacks two distinct (x,y) columns each with >= 2 z levels.")
+
+    (xa, ya), zs_a = cols[0]
+    (xb, yb), zs_b = cols[1]
+    return (
+        (xa, ya, zs_a[-1]),   # A top (highest z)
+        (xa, ya, zs_a[0]),    # A bottom (lowest z)
+        (xb, yb, zs_b[-1]),
+        (xb, yb, zs_b[0]),
+    )
+
+
+def test_asce_forwarder_matches_engine(nodal_displacement):
+    nr = nodal_displacement
+    A_top, A_bot, B_top, B_bot = _pick_two_sides(nr)
+    via_nr = nr.asce_torsional_irregularity(
+        component=1,
+        side_a_top=A_top, side_a_bottom=A_bot,
+        side_b_top=B_top, side_b_bottom=B_bot,
+    )
+    via_eng = nr._aggregation_engine.asce_torsional_irregularity(
+        nr, component=1,
+        side_a_top=A_top, side_a_bottom=A_bot,
+        side_b_top=B_top, side_b_bottom=B_bot,
+    )
+    assert isinstance(via_nr, dict)
+    # Exclude keys that might be comparison-sensitive; check the structural keys equal.
+    for k in ("drift_A", "drift_B", "drift_avg", "drift_max", "ratio", "ctrl_side"):
+        assert via_nr[k] == via_eng[k]
+    assert via_nr["node_ids"] == via_eng["node_ids"]
+    assert via_nr["metadata"] == via_eng["metadata"]
+
+
+def test_asce_result_keys_and_metadata(nodal_displacement):
+    nr = nodal_displacement
+    A_top, A_bot, B_top, B_bot = _pick_two_sides(nr)
+    out = nr.asce_torsional_irregularity(
+        component=1,
+        side_a_top=A_top, side_a_bottom=A_bot,
+        side_b_top=B_top, side_b_bottom=B_bot,
+    )
+    assert set(out.keys()) == {
+        "drift_A", "drift_B", "drift_avg", "drift_max",
+        "ratio", "ctrl_side", "node_ids", "metadata",
+    }
+    assert set(out["node_ids"].keys()) == {"A_top", "A_bottom", "B_top", "B_bottom"}
+    assert out["metadata"]["definition"] == "max_over_avg"
+    assert out["metadata"]["reduce_time"] == "abs_max"
+
+
+def test_asce_ordering_invariants(nodal_displacement):
+    """Structural invariants: drift_max >= drift_avg, magnitudes are
+    non-negative, and ctrl_side is whichever side's magnitude is larger.
+    Avoids a ratio-magnitude check because elasticFrame drifts can be
+    below the eps guard for this fixture geometry."""
+    nr = nodal_displacement
+    A_top, A_bot, B_top, B_bot = _pick_two_sides(nr)
+    out = nr.asce_torsional_irregularity(
+        component=1,
+        side_a_top=A_top, side_a_bottom=A_bot,
+        side_b_top=B_top, side_b_bottom=B_bot,
+    )
+    assert out["drift_A"] >= 0.0
+    assert out["drift_B"] >= 0.0
+    assert out["drift_max"] >= out["drift_avg"]
+    expected_side = "A" if out["drift_A"] >= out["drift_B"] else "B"
+    assert out["ctrl_side"] == expected_side
+
+
+def test_asce_rejects_non_tuple_coord(nodal_displacement):
+    nr = nodal_displacement
+    with pytest.raises(TypeError, match="must be a tuple"):
+        nr.asce_torsional_irregularity(
+            component=1,
+            side_a_top=[0.0, 0.0, 0.0],   # list, not tuple
+            side_a_bottom=(0.0, 0.0, 0.0),
+            side_b_top=(0.0, 0.0, 0.0),
+            side_b_bottom=(0.0, 0.0, 0.0),
+        )
+
+
+def test_asce_bad_definition_raises(nodal_displacement):
+    nr = nodal_displacement
+    A_top, A_bot, B_top, B_bot = _pick_two_sides(nr)
+    with pytest.raises(ValueError, match="definition"):
+        nr.asce_torsional_irregularity(
+            component=1,
+            side_a_top=A_top, side_a_bottom=A_bot,
+            side_b_top=B_top, side_b_bottom=B_bot,
+            definition="nope",
+        )
+
+
+def test_asce_bad_reduce_time_raises(nodal_displacement):
+    nr = nodal_displacement
+    A_top, A_bot, B_top, B_bot = _pick_two_sides(nr)
+    with pytest.raises(ValueError, match="reduce_time"):
+        nr.asce_torsional_irregularity(
+            component=1,
+            side_a_top=A_top, side_a_bottom=A_bot,
+            side_b_top=B_top, side_b_bottom=B_bot,
+            reduce_time="nope",
+        )
+
+
+# ---------------------------------------------------------------------- #
 # Engine sanity
 # ---------------------------------------------------------------------- #
 def test_class_level_engine_is_shared_singleton(nodal_displacement):
