@@ -14,9 +14,13 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class Elements:
+class ElementManager:
     """
-    High-performance MPCO element reader.
+    High-performance MPCO element reader and domain manager.
+
+    Canonical name for the refactored Layer 3 domain manager. The legacy
+    name ``Elements`` is preserved as an alias at the bottom of this module
+    for back-compat; new code should prefer ``ElementManager``.
 
     Public API:
         - _get_all_element_index()   (called by MPCODataSet during init)
@@ -815,3 +819,9 @@ class Elements:
             results_by_type[str(decorated_type)] = elem_results
 
         return results_by_type
+
+
+# Back-compat alias — the legacy name ``Elements`` is guaranteed
+# importable from ``STKO_to_python.elements.elements`` and from the
+# ``STKO_to_python.elements`` package.
+Elements = ElementManager

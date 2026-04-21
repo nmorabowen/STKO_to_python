@@ -37,9 +37,13 @@ def _flatten_node_ids(
     return np.asarray(node_ids, dtype=np.int64)
 
 
-class Nodes:
+class NodeManager:
     """
-    High-performance MPCO nodal reader.
+    High-performance MPCO nodal reader and domain manager.
+
+    Canonical name for the refactored Layer 3 domain manager. The legacy
+    name ``Nodes`` is preserved as an alias at the bottom of this module
+    for back-compat; new code should prefer ``NodeManager``.
 
     Public API:
         - _get_all_nodes_ids()
@@ -372,3 +376,10 @@ class Nodes:
             analysis_time=self.dataset.info.analysis_time,
             size=self.dataset.info.size,
         )
+
+
+# Back-compat alias — see class docstring. The legacy name ``Nodes`` is
+# guaranteed importable from ``STKO_to_python.nodes.nodes`` and from the
+# ``STKO_to_python.nodes`` package. Do not remove without a migration
+# deprecation cycle.
+Nodes = NodeManager
