@@ -137,6 +137,70 @@ def test_drift_unknown_reduce_raises(nodal_displacement):
 
 
 # ---------------------------------------------------------------------- #
+# _resolve_story_nodes_by_z_tol
+# ---------------------------------------------------------------------- #
+def test_resolve_stories_forwarder_matches_engine(nodal_displacement):
+    """Forwarder == engine call; output is a sorted list of (z, [node_ids])."""
+    nr = nodal_displacement
+    via_nr = nr._resolve_story_nodes_by_z_tol(
+        selection_set_id=None,
+        selection_set_name=None,
+        node_ids=[1, 2, 3, 4],
+        coordinates=None,
+        dz_tol=1e-6,
+    )
+    via_eng = nr._aggregation_engine._resolve_story_nodes_by_z_tol(
+        nr,
+        selection_set_id=None,
+        selection_set_name=None,
+        node_ids=[1, 2, 3, 4],
+        coordinates=None,
+        dz_tol=1e-6,
+    )
+    assert via_nr == via_eng
+
+    # Sorted by z, each entry is (z, list[int])
+    zs = [z for z, _ in via_nr]
+    assert zs == sorted(zs)
+    for _, nids in via_nr:
+        assert all(isinstance(n, int) for n in nids)
+
+
+def test_resolve_stories_large_tol_merges_all_into_one_level(nodal_displacement):
+    nr = nodal_displacement
+    stories = nr._resolve_story_nodes_by_z_tol(
+        selection_set_id=None,
+        selection_set_name=None,
+        node_ids=[1, 2, 3, 4],
+        coordinates=None,
+        dz_tol=1e9,
+    )
+    # Every node clusters to the first story.
+    assert len(stories) == 1
+    assert sorted(stories[0][1]) == [1, 2, 3, 4]
+
+
+def test_resolve_stories_requires_exactly_one_selector(nodal_displacement):
+    nr = nodal_displacement
+    with pytest.raises(ValueError, match="exactly ONE"):
+        nr._resolve_story_nodes_by_z_tol(
+            selection_set_id=None,
+            selection_set_name=None,
+            node_ids=[1, 2],
+            coordinates=[(0.0, 0.0, 0.0)],
+            dz_tol=1e-3,
+        )
+    with pytest.raises(ValueError, match="exactly ONE"):
+        nr._resolve_story_nodes_by_z_tol(
+            selection_set_id=None,
+            selection_set_name=None,
+            node_ids=None,
+            coordinates=None,
+            dz_tol=1e-3,
+        )
+
+
+# ---------------------------------------------------------------------- #
 # Engine sanity
 # ---------------------------------------------------------------------- #
 def test_class_level_engine_is_shared_singleton(nodal_displacement):

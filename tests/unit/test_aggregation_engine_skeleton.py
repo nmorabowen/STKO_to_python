@@ -126,14 +126,5 @@ def test_public_method_stub_raises_not_implemented(name):
         method(**_dummy_kwargs_for(method))
 
 
-def test_private_helper_stub_raises_not_implemented():
-    eng = AggregationEngine()
-    with pytest.raises(NotImplementedError):
-        eng._resolve_story_nodes_by_z_tol(
-            results=None,
-            selection_set_id=None,
-            selection_set_name=None,
-            node_ids=None,
-            coordinates=None,
-            dz_tol=1e-3,
-        )
+# _resolve_story_nodes_by_z_tol moved out of skeleton state in Phase 4.3.2.c;
+# behavior is covered by tests/integration/test_aggregation_forwarders.py.

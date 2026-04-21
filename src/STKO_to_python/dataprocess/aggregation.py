@@ -53,10 +53,71 @@ class AggregationEngine:
         coordinates: Sequence[Sequence[float]] | None,
         dz_tol: float,
     ) -> list[tuple[float, list[int]]]:
-        raise NotImplementedError(
-            "AggregationEngine._resolve_story_nodes_by_z_tol not implemented yet; "
-            "filled in Phase 4.3.2."
-        )
+        """
+        Returns: [(z_ref, [node_ids_at_story]), ...] sorted by z_ref.
+        z_ref is the first z encountered in the cluster (deterministic after sorting).
+        """
+        provided = sum(x is not None for x in (selection_set_id, selection_set_name, node_ids, coordinates))
+        if provided != 1:
+            raise ValueError(
+                "Provide exactly ONE of: selection_set_id, selection_set_name, node_ids, coordinates."
+            )
+
+        # ---- resolve ids ----
+        if selection_set_id is not None:
+            ids = results.info.selection_set_node_ids(selection_set_id)
+        elif selection_set_name is not None:
+            ids = results.info.selection_set_node_ids_by_name(selection_set_name)
+        elif node_ids is not None:
+            if len(node_ids) == 0:
+                raise ValueError("node_ids is empty.")
+            ids = [int(i) for i in node_ids]
+        else:
+            assert coordinates is not None
+            if len(coordinates) == 0:
+                raise ValueError("coordinates is empty.")
+            ids = results.info.nearest_node_id(coordinates, return_distance=False)
+
+        ids = sorted(set(int(i) for i in ids))
+        if len(ids) == 0:
+            raise ValueError("Resolved node list is empty.")
+
+        if results.info.nodes_info is None:
+            raise ValueError("nodes_info is None. Need nodes_info with z-coordinates.")
+        ni = results.info.nodes_info
+        zcol = results.info._resolve_column(ni, "z", required=True)
+        nid_col = results.info._resolve_column(ni, "node_id", required=False)
+
+        # ---- build (node_id, z) pairs ----
+        pairs: list[tuple[int, float]] = []
+        if nid_col is not None:
+            sub = ni.loc[ni[nid_col].isin(ids), [nid_col, zcol]]
+            if sub.empty:
+                raise ValueError("None of the node ids were found in nodes_info.")
+            for nid, z in zip(sub[nid_col], sub[zcol]):
+                pairs.append((int(nid), float(z)))
+        else:
+            missing = [i for i in ids if i not in ni.index]
+            if missing:
+                raise ValueError(f"node_id(s) not found in nodes_info index: {missing[:10]}")
+            for nid in ids:
+                pairs.append((int(nid), float(ni.loc[int(nid), zcol])))
+
+        # ---- sort and cluster by tolerance ----
+        pairs.sort(key=lambda x: x[1])
+
+        stories: list[tuple[float, list[int]]] = []
+        for nid, z in pairs:
+            if not stories:
+                stories.append((z, [nid]))
+                continue
+            z_ref, members = stories[-1]
+            if abs(z - z_ref) <= float(dz_tol):
+                members.append(nid)
+            else:
+                stories.append((z, [nid]))
+
+        return stories
 
     # ------------------------------------------------------------------ #
     # Pair-wise drift utilities
