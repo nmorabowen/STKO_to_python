@@ -694,6 +694,64 @@ def test_story_pga_envelope_unknown_reduce_nodes_raises(nodal_displacement):
 
 
 # ---------------------------------------------------------------------- #
+# residual_interstory_drift_profile
+# ---------------------------------------------------------------------- #
+def test_residual_interstory_profile_forwarder_matches_engine(nodal_displacement):
+    nr = nodal_displacement
+    if not _distinct_z_levels_exist(nr):
+        pytest.skip("fixture has < 2 distinct z levels.")
+    via_nr = nr.residual_interstory_drift_profile(
+        component=1, node_ids=[1, 2, 3, 4], dz_tol=1e-6,
+    )
+    via_eng = nr._aggregation_engine.residual_interstory_drift_profile(
+        nr, component=1, node_ids=[1, 2, 3, 4], dz_tol=1e-6,
+    )
+    assert isinstance(via_nr, pd.DataFrame)
+    pd.testing.assert_frame_equal(via_nr, via_eng)
+
+
+def test_residual_interstory_profile_columns(nodal_displacement):
+    nr = nodal_displacement
+    if not _distinct_z_levels_exist(nr):
+        pytest.skip("fixture has < 2 distinct z levels.")
+    out = nr.residual_interstory_drift_profile(
+        component=1, node_ids=[1, 2, 3, 4], dz_tol=1e-6,
+    )
+    assert out.index.names == ["z_lower", "z_upper"]
+    assert {"z_lower", "z_upper", "lower_node", "upper_node", "dz", "residual_drift"}.issubset(
+        out.columns
+    )
+
+
+def test_residual_interstory_profile_values_match_pairwise_residual_drift(nodal_displacement):
+    """Each row's residual_drift equals calling residual_drift on its
+    (lower_node, upper_node) pair with the same tail/agg."""
+    nr = nodal_displacement
+    if not _distinct_z_levels_exist(nr):
+        pytest.skip("fixture has < 2 distinct z levels.")
+    out = nr.residual_interstory_drift_profile(
+        component=1, node_ids=[1, 2, 3, 4], dz_tol=1e-6,
+        tail=1, agg="mean",
+    )
+    for _, row in out.iterrows():
+        r_pair = nr.residual_drift(
+            top=int(row["upper_node"]),
+            bottom=int(row["lower_node"]),
+            component=1,
+            tail=1, agg="mean",
+        )
+        assert float(row["residual_drift"]) == pytest.approx(r_pair)
+
+
+def test_residual_interstory_profile_too_few_stories_raises(nodal_displacement):
+    nr = nodal_displacement
+    with pytest.raises(ValueError, match="at least 2 story levels"):
+        nr.residual_interstory_drift_profile(
+            component=1, node_ids=[1, 2, 3, 4], dz_tol=1e9,
+        )
+
+
+# ---------------------------------------------------------------------- #
 # Engine sanity
 # ---------------------------------------------------------------------- #
 def test_class_level_engine_is_shared_singleton(nodal_displacement):

@@ -585,10 +585,93 @@ class AggregationEngine:
         tail: int = 1,
         agg: str = "mean",
     ) -> pd.DataFrame:
-        raise NotImplementedError(
-            "AggregationEngine.residual_interstory_drift_profile not implemented yet; "
-            "filled in Phase 4.3.2."
+        """
+        Residual interstory drift ratio per story (profile).
+
+        Returns a DataFrame indexed by (z_lower, z_upper) with columns
+        ``lower_node``, ``upper_node``, ``dz``, ``residual_drift``.
+        """
+        import numpy as np
+
+        stories = self._resolve_story_nodes_by_z_tol(
+            results,
+            selection_set_id=selection_set_id,
+            selection_set_name=selection_set_name,
+            node_ids=node_ids,
+            coordinates=coordinates,
+            dz_tol=dz_tol,
         )
+        if len(stories) < 2:
+            raise ValueError("Need at least 2 story levels after z clustering.")
+
+        def _pick_node(nodes: list[int]) -> int:
+            if representative == "min_id":
+                return int(min(nodes))
+
+            if representative == "max_abs_peak":
+                s = results.fetch(
+                    result_name=result_name,
+                    component=component,
+                    node_ids=nodes,
+                )
+                if isinstance(s.index, pd.MultiIndex) and s.index.nlevels == 3:
+                    if stage is None:
+                        stages = tuple(sorted({str(x) for x in s.index.get_level_values(0)}))
+                        raise ValueError(
+                            f"Multi-stage results detected. Provide stage=... Available: {stages}"
+                        )
+                    s = s.xs(str(stage), level=0)
+
+                wide = s.unstack(level=-1)
+                A = wide.to_numpy(dtype=float)
+                peaks = np.nanmax(np.abs(A), axis=1)
+                return int(wide.index.to_numpy(dtype=int)[int(np.nanargmax(peaks))])
+
+            raise ValueError(f"Unknown representative='{representative}'")
+
+        rows: list[dict[str, float]] = []
+        idx: list[tuple[float, float]] = []
+
+        for (z_lo, nodes_lo), (z_up, nodes_up) in zip(stories[:-1], stories[1:]):
+            dz = float(z_up - z_lo)
+            if dz == 0.0:
+                continue
+
+            n_lo = _pick_node(nodes_lo)
+            n_up = _pick_node(nodes_up)
+
+            r = self.residual_drift(
+                results,
+                top=n_up,
+                bottom=n_lo,
+                component=component,
+                result_name=result_name,
+                stage=stage,
+                signed=signed,
+                tail=tail,
+                agg=agg,
+            )
+
+            rows.append(
+                {
+                    "lower_node": int(n_lo),
+                    "upper_node": int(n_up),
+                    "dz": float(dz),
+                    "residual_drift": float(r),
+                }
+            )
+            idx.append((float(z_lo), float(z_up)))
+
+        if not rows:
+            raise ValueError("No valid story pairs were produced (check z-coordinates).")
+
+        out = pd.DataFrame(
+            rows,
+            index=pd.MultiIndex.from_tuples(idx, names=("z_lower", "z_upper")),
+        )
+
+        out = out.reset_index().set_index(["z_lower", "z_upper"], drop=False)
+        return out
 
     def residual_drift_envelope(
         self,

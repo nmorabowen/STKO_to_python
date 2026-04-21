@@ -78,6 +78,7 @@ IMPLEMENTED_METHODS = frozenset({
     "asce_torsional_irregularity",
     "interstory_drift_envelope",
     "story_pga_envelope",
+    "residual_interstory_drift_profile",
 })
 
 STUB_METHODS = tuple(m for m in EXPECTED_PUBLIC_METHODS if m not in IMPLEMENTED_METHODS)
