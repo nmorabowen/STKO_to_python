@@ -18,7 +18,7 @@ from pathlib import Path
 import pytest
 
 from STKO_to_python import MPCODataSet
-from STKO_to_python.query import NodalResultsQueryEngine
+from STKO_to_python.query import ElementResultsQueryEngine, NodalResultsQueryEngine
 
 
 # ---------------------------------------------------------------------- #
@@ -72,6 +72,42 @@ def test_elastic_frame_engine_parity_and_cache(elastic_frame_dir: Path):
     )
     # LRU cache hit → same object
     assert nr2 is nr1
+
+
+def test_elastic_frame_element_force_fetch(elastic_frame_dir: Path):
+    ds = MPCODataSet(str(elastic_frame_dir), "results", verbose=False)
+    er = ds.elements.get_element_results(
+        results_name="force",
+        element_type="5-ElasticBeam3d",
+        element_ids=[1, 2, 3],
+        model_stage="MODEL_STAGE[1]",
+    )
+    # 3 elements × 10 steps × 12 force components
+    assert er.df.shape == (30, 12)
+    assert er.df.index.names == ["element_id", "step"]
+
+
+def test_elastic_frame_element_engine_parity_and_cache(elastic_frame_dir: Path):
+    ds = MPCODataSet(str(elastic_frame_dir), "results", verbose=False)
+    engine = ElementResultsQueryEngine(
+        dataset=ds,
+        pool=ds._pool,
+        policy=ds._format_policy,
+        resolver=ds._selection_resolver,
+    )
+    er1 = engine.fetch(
+        "force",
+        "5-ElasticBeam3d",
+        element_ids=[1, 2, 3],
+        model_stage="MODEL_STAGE[1]",
+    )
+    er2 = engine.fetch(
+        "force",
+        "5-ElasticBeam3d",
+        element_ids=[1, 2, 3],
+        model_stage="MODEL_STAGE[1]",
+    )
+    assert er2 is er1
 
 
 # ---------------------------------------------------------------------- #
