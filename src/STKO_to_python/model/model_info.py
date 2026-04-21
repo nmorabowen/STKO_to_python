@@ -4,6 +4,7 @@ import re
 from typing import TYPE_CHECKING
 from collections import defaultdict
 from typing import Optional, Dict, List, Sequence, Any
+import numpy as np
 import pandas as pd
 import logging
 
@@ -468,7 +469,12 @@ class ModelInfo:
                         time_value = step_group.attrs.get("TIME")
 
                         if step_value is not None and time_value is not None:
-                            time_series_dict[int(step_value)] = float(time_value)  # Store STEP -> TIME mapping
+                            # STKO writes STEP/TIME as 1-element arrays;
+                            # np.asarray(...).item() unwraps both arrays
+                            # and python scalars safely.
+                            time_series_dict[int(np.asarray(step_value).item())] = float(
+                                np.asarray(time_value).item()
+                            )
 
             except Exception as e:
                 logger.error(
@@ -515,7 +521,9 @@ class ModelInfo:
                         time_value = step_group.attrs.get("TIME")
 
                         if step_value is not None and time_value is not None:
-                            time_series_dict[int(step_value)] = float(time_value)  # Store STEP -> TIME mapping
+                            time_series_dict[int(np.asarray(step_value).item())] = float(
+                                np.asarray(time_value).item()
+                            )
 
             except Exception as e:
                 logger.error(
@@ -585,8 +593,11 @@ class ModelInfo:
             all_time_series.append(time_df)
 
         # ── union ───────────────────────────────────────────────────────────────
+        # ``copy=`` is deprecated in pandas 3.x (copy-on-write is now the
+        # default); passing it emits Pandas4Warning which bubbles up as a
+        # DeprecationWarning under our strict-warning filter.
         final_df = (
-            pd.concat(all_time_series, copy=False)
+            pd.concat(all_time_series)
             .set_index(["MODEL_STAGE", "STEP"])
             .sort_index()
         )
