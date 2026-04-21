@@ -4,7 +4,6 @@ import re
 from typing import TYPE_CHECKING
 from collections import defaultdict
 from typing import Optional, Dict, List, Sequence, Any
-import h5py
 import pandas as pd
 import logging
 
@@ -122,13 +121,16 @@ class ModelInfo:
             list: Sorted list of model stage names from all partitions.
         """
         model_stages = []
+        policy = self.dataset._format_policy
 
         # Use partition paths from the dictionary created by _get_results_partitions
-        for _, partition_path in self.dataset.results_partitions.items():
-            
-            with h5py.File(partition_path, 'r') as results:
+        for part_idx in self.dataset.results_partitions:
+            with self.dataset._pool.with_partition(part_idx) as results:
                 # Get model stages from the current partition file
-                partition_stages = [key for key in results.keys() if key.startswith("MODEL_STAGE")]
+                partition_stages = [
+                    key for key in results.keys()
+                    if policy.is_model_stage_group(key)
+                ]
                 model_stages.extend(partition_stages)
 
         # Remove duplicates by converting to a set, then back to a sorted list
@@ -164,14 +166,13 @@ class ModelInfo:
         model_stages = [model_stage] if model_stage else self.dataset.model_stages
 
         node_results_names: set[str] = set()
+        policy = self.dataset._format_policy
 
         # 2. Scan every partition for every requested stage
         for stage in model_stages:
-            for _, partition_path in self.dataset.results_partitions.items():
-                with h5py.File(partition_path, "r") as results:
-                    nodes_group = results.get(
-                        self.dataset.RESULTS_ON_NODES_PATH.format(model_stage=stage)
-                    )
+            for part_idx in self.dataset.results_partitions:
+                with self.dataset._pool.with_partition(part_idx) as results:
+                    nodes_group = results.get(policy.results_on_nodes_path(stage))
                     if nodes_group:
                         node_results_names.update(nodes_group.keys())
 
@@ -212,14 +213,13 @@ class ModelInfo:
         model_stages = [model_stage] if model_stage else self.dataset.model_stages
 
         element_results_names: set[str] = set()
+        policy = self.dataset._format_policy
 
         # 2. Scan every partition for every requested stage
         for stage in model_stages:
-            for _, partition_path in self.dataset.results_partitions.items():
-                with h5py.File(partition_path, "r") as results:
-                    ele_group = results.get(
-                        self.dataset.RESULTS_ON_ELEMENTS_PATH.format(model_stage=stage)
-                    )
+            for part_idx in self.dataset.results_partitions:
+                with self.dataset._pool.with_partition(part_idx) as results:
+                    ele_group = results.get(policy.results_on_elements_path(stage))
                     if ele_group:
                         element_results_names.update(ele_group.keys())
 
@@ -296,13 +296,12 @@ class ModelInfo:
                 continue
 
             scanned_stages.append(stage)
+            policy = self.dataset._format_policy
 
             # Walk all partitions, gather element type groups per result name
-            for _, partition_path in self.dataset.results_partitions.items():
-                with h5py.File(partition_path, "r") as results:
-                    base_group = results.get(
-                        self.dataset.RESULTS_ON_ELEMENTS_PATH.format(model_stage=stage)
-                    )
+            for part_idx in self.dataset.results_partitions:
+                with self.dataset._pool.with_partition(part_idx) as results:
+                    base_group = results.get(policy.results_on_elements_path(stage))
                     if base_group is None:
                         # This partition has no elements group for this stage
                         continue
@@ -402,11 +401,10 @@ class ModelInfo:
                 continue  # nothing to do for this stage
 
             # 3) Walk all partitions and harvest element type groups per result name
-            for _, partition_path in self.dataset.results_partitions.items():
-                with h5py.File(partition_path, "r") as results:
-                    base_group = results.get(
-                        self.dataset.RESULTS_ON_ELEMENTS_PATH.format(model_stage=stage)
-                    )
+            policy = self.dataset._format_policy
+            for part_idx in self.dataset.results_partitions:
+                with self.dataset._pool.with_partition(part_idx) as results:
+                    base_group = results.get(policy.results_on_elements_path(stage))
                     if base_group is None:
                         # This partition has no elements group for this stage; skip
                         continue
@@ -454,9 +452,9 @@ class ModelInfo:
 
         time_series_dict = {}  # Dictionary to store STEP -> TIME mapping
 
-        for part_number, partition_path in self.dataset.results_partitions.items():
+        for part_number in self.dataset.results_partitions:
             try:
-                with h5py.File(partition_path, 'r') as partition:
+                with self.dataset._pool.with_partition(part_number) as partition:
                     base_path = f"{model_stage}/RESULTS/ON_NODES/{results_name}/DATA"
                     data_group = partition.get(base_path)
 
@@ -501,9 +499,9 @@ class ModelInfo:
 
         time_series_dict = {}  # Dictionary to store STEP -> TIME mapping
 
-        for part_number, partition_path in self.dataset.results_partitions.items():
+        for part_number in self.dataset.results_partitions:
             try:
-                with h5py.File(partition_path, 'r') as partition:
+                with self.dataset._pool.with_partition(part_number) as partition:
                     base_path = f"{model_stage}/RESULTS/ON_ELEMENTS/{results_name}/{element_type}/DATA"
                     data_group = partition.get(base_path)
 
@@ -610,7 +608,7 @@ class ModelInfo:
         elem_types_dict: Dict[str, List[str]] = self.dataset.element_types.get(
             "element_types_dict", {}
         )
-        partitions = list(self.dataset.results_partitions.values())
+        partition_indices = list(self.dataset.results_partitions)
 
         steps_info: Dict[str, int] = {}
 
@@ -619,8 +617,8 @@ class ModelInfo:
 
             # 1) nodal results ------------------------------------------------
             for n_res in node_names:
-                for part_path in partitions:
-                    with h5py.File(part_path, "r") as f:
+                for part_idx in partition_indices:
+                    with self.dataset._pool.with_partition(part_idx) as f:
                         grp = f.get(f"{stage}/RESULTS/ON_NODES/{n_res}/DATA")
                         if grp is not None:
                             step_ids.update(self._to_step_int(k) for k in grp.keys())
@@ -631,8 +629,8 @@ class ModelInfo:
             if not step_ids:
                 for e_res in elem_names:
                     for e_type in elem_types_dict.get(e_res, []):
-                        for part_path in partitions:
-                            with h5py.File(part_path, "r") as f:
+                        for part_idx in partition_indices:
+                            with self.dataset._pool.with_partition(part_idx) as f:
                                 grp = f.get(
                                     f"{stage}/RESULTS/ON_ELEMENTS/{e_res}/{e_type}/DATA"
                                 )
