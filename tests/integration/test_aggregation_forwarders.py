@@ -67,6 +67,76 @@ def test_delta_u_unknown_reduce_raises(nodal_displacement):
 
 
 # ---------------------------------------------------------------------- #
+# drift
+# ---------------------------------------------------------------------- #
+def test_drift_forwarder_matches_engine_series(nodal_displacement):
+    nr = nodal_displacement
+    via_nr = nr.drift(top=1, bottom=2, component=1)
+    via_eng = nr._aggregation_engine.drift(nr, top=1, bottom=2, component=1)
+
+    assert isinstance(via_nr, pd.Series)
+    pd.testing.assert_series_equal(via_nr, via_eng)
+
+
+def test_drift_equals_delta_u_divided_by_dz(nodal_displacement):
+    """drift(t) = delta_u(t) / (z_top - z_bot)."""
+    nr = nodal_displacement
+    ni = nr.info.nodes_info
+    zcol = nr.info._resolve_column(ni, "z", required=True)
+    nid_col = nr.info._resolve_column(ni, "node_id", required=False)
+
+    def _z(nid: int) -> float:
+        if nid_col is not None:
+            return float(ni.loc[ni[nid_col].to_numpy() == nid].iloc[0][zcol])
+        return float(ni.loc[nid, zcol])
+
+    dz = _z(1) - _z(2)
+    if dz == 0.0:
+        pytest.skip("elasticFrame nodes 1 and 2 share z; pick different nodes if this ever changes.")
+
+    du = nr.delta_u(top=1, bottom=2, component=1)
+    dr = nr.drift(top=1, bottom=2, component=1)
+    pd.testing.assert_series_equal(dr, (du / dz).rename(dr.name))
+
+
+def test_drift_abs_max_reduce_matches_nanmax_of_series(nodal_displacement):
+    nr = nodal_displacement
+    s = nr.drift(top=1, bottom=2, component=1)
+    v = nr.drift(top=1, bottom=2, component=1, reduce="abs_max")
+    assert v == pytest.approx(float(np.nanmax(np.abs(s.to_numpy(dtype=float)))))
+
+
+def test_drift_zero_dz_raises(nodal_displacement):
+    """Two nodes at the same z should fail with the documented error."""
+    nr = nodal_displacement
+    ni = nr.info.nodes_info
+    zcol = nr.info._resolve_column(ni, "z", required=True)
+    nid_col = nr.info._resolve_column(ni, "node_id", required=False)
+
+    # find two distinct nodes sharing the same z
+    if nid_col is not None:
+        by_z = ni.groupby(zcol)[nid_col].apply(list)
+    else:
+        by_z = ni.groupby(zcol).apply(lambda s: list(s.index))
+    pair = None
+    for nids in by_z:
+        if len(nids) >= 2:
+            pair = (int(nids[0]), int(nids[1]))
+            break
+    if pair is None:
+        pytest.skip("No pair of nodes at identical z in elasticFrame fixture.")
+
+    with pytest.raises(ValueError, match="dz"):
+        nr.drift(top=pair[0], bottom=pair[1], component=1)
+
+
+def test_drift_unknown_reduce_raises(nodal_displacement):
+    nr = nodal_displacement
+    with pytest.raises(ValueError, match="Unknown reduce"):
+        nr.drift(top=1, bottom=2, component=1, reduce="nope")
+
+
+# ---------------------------------------------------------------------- #
 # Engine sanity
 # ---------------------------------------------------------------------- #
 def test_class_level_engine_is_shared_singleton(nodal_displacement):

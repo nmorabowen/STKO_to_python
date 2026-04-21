@@ -71,6 +71,7 @@ EXPECTED_PUBLIC_METHODS = (
 # (Phase 4.3.2). They must no longer raise NotImplementedError.
 IMPLEMENTED_METHODS = frozenset({
     "delta_u",
+    "drift",
 })
 
 STUB_METHODS = tuple(m for m in EXPECTED_PUBLIC_METHODS if m not in IMPLEMENTED_METHODS)

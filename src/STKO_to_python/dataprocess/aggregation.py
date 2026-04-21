@@ -138,10 +138,85 @@ class AggregationEngine:
         signed: bool = True,
         reduce: str = "series",
     ) -> pd.Series | float:
-        raise NotImplementedError(
-            "AggregationEngine.drift not implemented yet; "
-            "filled in Phase 4.3.2."
-        )
+        """
+        Drift between two nodes:
+
+            drift(t) = (u_top(t) - u_bottom(t)) / (z_top - z_bottom)
+
+        top, bottom:
+            - node id (int), or
+            - coordinates (x,y) or (x,y,z) resolved to nearest node.
+        """
+        import numpy as np
+
+        def _as_node_id(v: int | Sequence[float], *, name: str) -> int:
+            if isinstance(v, (int, np.integer)):
+                return int(v)
+
+            if not isinstance(v, (list, tuple, np.ndarray)):
+                raise TypeError(f"{name} must be a node id or coordinates (x,y) or (x,y,z).")
+
+            coords = tuple(float(x) for x in v)
+            if len(coords) not in (2, 3):
+                raise TypeError(f"{name} coordinates must have length 2 or 3. Got {len(coords)}.")
+
+            return int(results.info.nearest_node_id([coords])[0])
+
+        top_id = _as_node_id(top, name="top")
+        bot_id = _as_node_id(bottom, name="bottom")
+
+        # ---- z coords ----
+        if results.info.nodes_info is None:
+            raise ValueError("nodes_info is None. z-coordinates are required for drift().")
+        ni = results.info.nodes_info
+        zcol = results.info._resolve_column(ni, "z", required=True)
+        nid_col = results.info._resolve_column(ni, "node_id", required=False)
+
+        def _z_of(nid: int) -> float:
+            if nid_col is not None:
+                row = ni.loc[ni[nid_col].to_numpy() == nid]
+                if row.empty:
+                    raise ValueError(f"node_id={nid} not found in nodes_info.")
+                return float(row.iloc[0][zcol])
+            if nid not in ni.index:
+                raise ValueError(f"node_id={nid} not found in nodes_info index.")
+            return float(ni.loc[nid, zcol])
+
+        z_top = _z_of(top_id)
+        z_bot = _z_of(bot_id)
+        dz = float(z_top - z_bot)
+        if dz == 0.0:
+            raise ValueError("z_top == z_bottom → dz = 0. Cannot compute drift.")
+
+        # ---- fetch displacement for both nodes ----
+        s = results.fetch(result_name=result_name, component=component, node_ids=[top_id, bot_id])
+
+        # multi-stage -> require stage
+        if isinstance(s.index, pd.MultiIndex) and s.index.nlevels == 3:
+            if stage is None:
+                stages = tuple(sorted({str(x) for x in s.index.get_level_values(0)}))
+                raise ValueError(f"Multi-stage results detected. Provide stage=... Available: {stages}")
+            s = s.xs(str(stage), level=0)
+
+        if not (isinstance(s.index, pd.MultiIndex) and s.index.nlevels == 2):
+            raise ValueError("drift() expects index (node_id, step) after stage selection.")
+
+        u_top = s.xs(top_id, level=0).sort_index()
+        u_bot = s.xs(bot_id, level=0).sort_index()
+        u_top, u_bot = u_top.align(u_bot, join="inner")
+
+        du = u_top - u_bot
+        if not signed:
+            du = du.abs()
+
+        drift_series = du / dz
+        drift_series.name = f"drift({result_name}:{component})"
+
+        if reduce == "series":
+            return drift_series
+        if reduce == "abs_max":
+            return float(np.nanmax(np.abs(drift_series.to_numpy(dtype=float))))
+        raise ValueError(f"Unknown reduce='{reduce}'. Use 'series' or 'abs_max'.")
 
     def residual_drift(
         self,
