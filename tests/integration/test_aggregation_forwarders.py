@@ -752,6 +752,58 @@ def test_residual_interstory_profile_too_few_stories_raises(nodal_displacement):
 
 
 # ---------------------------------------------------------------------- #
+# residual_drift_envelope
+# ---------------------------------------------------------------------- #
+def test_residual_drift_envelope_forwarder_matches_engine(nodal_displacement):
+    nr = nodal_displacement
+    if not _distinct_z_levels_exist(nr):
+        pytest.skip("fixture has < 2 distinct z levels.")
+    via_nr = nr.residual_drift_envelope(
+        component=1, node_ids=[1, 2, 3, 4], dz_tol=1e-6,
+    )
+    via_eng = nr._aggregation_engine.residual_drift_envelope(
+        nr, component=1, node_ids=[1, 2, 3, 4], dz_tol=1e-6,
+    )
+    assert via_nr == via_eng
+
+
+def test_residual_drift_envelope_keys_and_invariants(nodal_displacement):
+    nr = nodal_displacement
+    if not _distinct_z_levels_exist(nr):
+        pytest.skip("fixture has < 2 distinct z levels.")
+    out = nr.residual_drift_envelope(
+        component=1, node_ids=[1, 2, 3, 4], dz_tol=1e-6,
+    )
+    assert set(out.keys()) == {
+        "max_abs_residual_story_drift",
+        "max_pos_residual_story_drift",
+        "max_neg_residual_story_drift",
+    }
+    # max_abs >= max(|max_pos|, |max_neg|) by construction
+    assert out["max_abs_residual_story_drift"] >= abs(out["max_pos_residual_story_drift"])
+    assert out["max_abs_residual_story_drift"] >= abs(out["max_neg_residual_story_drift"])
+
+
+def test_residual_drift_envelope_matches_profile_reduction(nodal_displacement):
+    """The envelope values equal the reductions over the profile."""
+    nr = nodal_displacement
+    if not _distinct_z_levels_exist(nr):
+        pytest.skip("fixture has < 2 distinct z levels.")
+    prof = nr.residual_interstory_drift_profile(
+        component=1, node_ids=[1, 2, 3, 4], dz_tol=1e-6,
+        signed=True, tail=1, agg="mean",
+    )
+    env = nr.residual_drift_envelope(
+        component=1, node_ids=[1, 2, 3, 4], dz_tol=1e-6,
+        tail=1, agg="mean",
+    )
+    r = prof["residual_drift"].to_numpy(dtype=float)
+    assert env["max_abs_residual_story_drift"] == pytest.approx(float(np.nanmax(np.abs(r))))
+    assert env["max_pos_residual_story_drift"] == pytest.approx(float(np.nanmax(r)))
+    assert env["max_neg_residual_story_drift"] == pytest.approx(float(np.nanmin(r)))
+
+
+# ---------------------------------------------------------------------- #
 # Engine sanity
 # ---------------------------------------------------------------------- #
 def test_class_level_engine_is_shared_singleton(nodal_displacement):

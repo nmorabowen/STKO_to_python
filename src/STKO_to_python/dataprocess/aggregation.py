@@ -689,10 +689,34 @@ class AggregationEngine:
         tail: int = 1,
         agg: str = "mean",
     ) -> dict[str, float]:
-        raise NotImplementedError(
-            "AggregationEngine.residual_drift_envelope not implemented yet; "
-            "filled in Phase 4.3.2."
+        """
+        Convenience summary metrics over the residual interstory drift
+        profile: max_abs, max_pos, max_neg.
+        """
+        import numpy as np
+
+        prof = self.residual_interstory_drift_profile(
+            results,
+            component=component,
+            selection_set_id=selection_set_id,
+            selection_set_name=selection_set_name,
+            node_ids=node_ids,
+            coordinates=coordinates,
+            result_name=result_name,
+            stage=stage,
+            dz_tol=dz_tol,
+            representative=representative,
+            signed=True,
+            tail=tail,
+            agg=agg,
         )
+
+        r = prof["residual_drift"].to_numpy(dtype=float)
+        return {
+            "max_abs_residual_story_drift": float(np.nanmax(np.abs(r))),
+            "max_pos_residual_story_drift": float(np.nanmax(r)),
+            "max_neg_residual_story_drift": float(np.nanmin(r)),
+        }
 
     # ------------------------------------------------------------------ #
     # Rotation / torsion / rocking

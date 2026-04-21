@@ -636,13 +636,8 @@ class NodalResults:
         tail: int = 1,
         agg: str = "mean",
     ) -> dict[str, float]:
-        """
-        Convenience summary metrics:
-          - max_abs_residual_story_drift
-          - max_pos_residual_story_drift
-          - max_neg_residual_story_drift
-        """
-        prof = self.residual_interstory_drift_profile(
+        return self._aggregation_engine.residual_drift_envelope(
+            self,
             component=component,
             selection_set_id=selection_set_id,
             selection_set_name=selection_set_name,
@@ -652,17 +647,9 @@ class NodalResults:
             stage=stage,
             dz_tol=dz_tol,
             representative=representative,
-            signed=True,
             tail=tail,
             agg=agg,
         )
-
-        r = prof["residual_drift"].to_numpy(dtype=float)
-        return {
-            "max_abs_residual_story_drift": float(np.nanmax(np.abs(r))),
-            "max_pos_residual_story_drift": float(np.nanmax(r)),
-            "max_neg_residual_story_drift": float(np.nanmin(r)),
-        }
 
     def base_rocking(
         self,
