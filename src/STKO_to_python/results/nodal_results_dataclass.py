@@ -12,6 +12,7 @@ import pandas as pd
 
 from .nodal_results_plotting import NodalResultsPlotter
 from .nodal_results_info import NodalResultsInfo
+from ..dataprocess.aggregation import AggregationEngine
 
 if TYPE_CHECKING:
     from ..plotting.plot_dataclasses import ModelPlotSettings
@@ -73,6 +74,12 @@ class NodalResults:
       - index: (node_id, step) OR (stage, node_id, step)
       - columns: MultiIndex (result, component) OR single-level
     """
+
+    # Shared stateless aggregator — engineering methods (drift, envelope,
+    # rocking, ...) forward to this instance. Class-level rather than
+    # per-instance so old pickles that predate Phase 4.3 still resolve
+    # the attribute after unpickling.
+    _aggregation_engine: AggregationEngine = AggregationEngine()
 
     def __init__(
         self,
@@ -415,56 +422,16 @@ class NodalResults:
         signed: bool = True,
         reduce: str = "series",  # "series" | "abs_max"
     ) -> pd.Series | float:
-        """
-        Relative displacement between two nodes:
-
-            du(t) = u_top(t) - u_bottom(t)
-
-        top, bottom:
-            - node id (int), or
-            - coordinates (x,y) or (x,y,z) resolved to nearest node.
-        """
-
-        def _as_node_id(v: int | Sequence[float], *, name: str) -> int:
-            if isinstance(v, (int, np.integer)):
-                return int(v)
-            if not isinstance(v, (list, tuple, np.ndarray)):
-                raise TypeError(f"{name} must be a node id or coordinates (x,y) or (x,y,z).")
-            coords = tuple(float(x) for x in v)
-            if len(coords) not in (2, 3):
-                raise TypeError(f"{name} coordinates must have length 2 or 3. Got {len(coords)}.")
-            return int(self.info.nearest_node_id([coords])[0])
-
-        top_id = _as_node_id(top, name="top")
-        bot_id = _as_node_id(bottom, name="bottom")
-
-        s = self.fetch(result_name=result_name, component=component, node_ids=[top_id, bot_id])
-
-        # multi-stage -> require stage
-        if isinstance(s.index, pd.MultiIndex) and s.index.nlevels == 3:
-            if stage is None:
-                stages = tuple(sorted({str(x) for x in s.index.get_level_values(0)}))
-                raise ValueError(f"Multi-stage results detected. Provide stage=... Available: {stages}")
-            s = s.xs(str(stage), level=0)
-
-        if not (isinstance(s.index, pd.MultiIndex) and s.index.nlevels == 2):
-            raise ValueError("delta_u() expects index (node_id, step) after stage selection.")
-
-        u_top = s.xs(top_id, level=0).sort_index()
-        u_bot = s.xs(bot_id, level=0).sort_index()
-        u_top, u_bot = u_top.align(u_bot, join="inner")
-
-        du = u_top - u_bot
-        if not signed:
-            du = du.abs()
-
-        du.name = f"delta_u({result_name}:{component})"
-
-        if reduce == "series":
-            return du
-        if reduce == "abs_max":
-            return float(np.nanmax(np.abs(du.to_numpy(dtype=float))))
-        raise ValueError(f"Unknown reduce='{reduce}'. Use 'series' or 'abs_max'.")
+        return self._aggregation_engine.delta_u(
+            self,
+            top=top,
+            bottom=bottom,
+            component=component,
+            result_name=result_name,
+            stage=stage,
+            signed=signed,
+            reduce=reduce,
+        )
 
     def drift(
         self,

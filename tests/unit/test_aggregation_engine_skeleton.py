@@ -67,6 +67,14 @@ EXPECTED_PUBLIC_METHODS = (
     "orbit",
 )
 
+# Methods that have been migrated from NodalResults into AggregationEngine
+# (Phase 4.3.2). They must no longer raise NotImplementedError.
+IMPLEMENTED_METHODS = frozenset({
+    "delta_u",
+})
+
+STUB_METHODS = tuple(m for m in EXPECTED_PUBLIC_METHODS if m not in IMPLEMENTED_METHODS)
+
 EXPECTED_PRIVATE_HELPERS = (
     "_resolve_story_nodes_by_z_tol",
 )
@@ -109,7 +117,7 @@ def _dummy_kwargs_for(method) -> dict:
     return kwargs
 
 
-@pytest.mark.parametrize("name", EXPECTED_PUBLIC_METHODS)
+@pytest.mark.parametrize("name", STUB_METHODS)
 def test_public_method_stub_raises_not_implemented(name):
     eng = AggregationEngine()
     method = getattr(eng, name)

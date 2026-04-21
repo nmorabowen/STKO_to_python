@@ -74,10 +74,57 @@ class AggregationEngine:
         signed: bool = True,
         reduce: str = "series",
     ) -> pd.Series | float:
-        raise NotImplementedError(
-            "AggregationEngine.delta_u not implemented yet; "
-            "filled in Phase 4.3.2."
-        )
+        """
+        Relative displacement between two nodes:
+
+            du(t) = u_top(t) - u_bottom(t)
+
+        top, bottom:
+            - node id (int), or
+            - coordinates (x,y) or (x,y,z) resolved to nearest node.
+        """
+        import numpy as np  # local import keeps module import cheap
+
+        def _as_node_id(v: int | Sequence[float], *, name: str) -> int:
+            if isinstance(v, (int, np.integer)):
+                return int(v)
+            if not isinstance(v, (list, tuple, np.ndarray)):
+                raise TypeError(f"{name} must be a node id or coordinates (x,y) or (x,y,z).")
+            coords = tuple(float(x) for x in v)
+            if len(coords) not in (2, 3):
+                raise TypeError(f"{name} coordinates must have length 2 or 3. Got {len(coords)}.")
+            return int(results.info.nearest_node_id([coords])[0])
+
+        top_id = _as_node_id(top, name="top")
+        bot_id = _as_node_id(bottom, name="bottom")
+
+        s = results.fetch(result_name=result_name, component=component, node_ids=[top_id, bot_id])
+
+        # multi-stage -> require stage
+        if isinstance(s.index, pd.MultiIndex) and s.index.nlevels == 3:
+            if stage is None:
+                stages = tuple(sorted({str(x) for x in s.index.get_level_values(0)}))
+                raise ValueError(f"Multi-stage results detected. Provide stage=... Available: {stages}")
+            s = s.xs(str(stage), level=0)
+
+        if not (isinstance(s.index, pd.MultiIndex) and s.index.nlevels == 2):
+            raise ValueError("delta_u() expects index (node_id, step) after stage selection.")
+
+        u_top = s.xs(top_id, level=0).sort_index()
+        u_bot = s.xs(bot_id, level=0).sort_index()
+        u_top, u_bot = u_top.align(u_bot, join="inner")
+
+        du = u_top - u_bot
+        if not signed:
+            du = du.abs()
+
+        du.name = f"delta_u({result_name}:{component})"
+
+        if reduce == "series":
+            return du
+        if reduce == "abs_max":
+            return float(np.nanmax(np.abs(du.to_numpy(dtype=float))))
+        raise ValueError(f"Unknown reduce='{reduce}'. Use 'series' or 'abs_max'.")
 
     def drift(
         self,
