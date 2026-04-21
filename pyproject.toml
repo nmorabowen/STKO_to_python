@@ -41,6 +41,13 @@ dependencies = [
 test = [
     "pytest>=7.4",
 ]
+# Installed with: pip install -e ".[bench]"
+# Enables pytest-benchmark suites under tests/bench/. Opt-in so regular
+# test runs don't pay the bench collection overhead. Introduced in
+# Phase 5.1.a.
+bench = [
+    "pytest-benchmark>=4.0",
+]
 
 [project.urls]
 "Homepage" = "https://github.com/nmorabowen/STKO_to_python"
@@ -67,6 +74,7 @@ addopts = [
 markers = [
     "fixture: tests that require the golden .mpco fixture (skipped if absent)",
     "slow: tests that take more than ~1s",
+    "bench: benchmark case (requires pytest-benchmark; lives under bench/)",
 ]
 filterwarnings = [
     "error::DeprecationWarning:STKO_to_python.*",
