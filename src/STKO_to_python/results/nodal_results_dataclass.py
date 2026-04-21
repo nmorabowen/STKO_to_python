@@ -937,53 +937,17 @@ class NodalResults:
         tail: int = 1,
         agg: str = "mean",  # "mean" | "median"
     ) -> float:
-        """
-        Residual drift ratio between two nodes.
-
-        Definition
-        ----------
-        Residual drift is evaluated at the end of the record.
-        To reduce end-of-record noise, you can average over the last `tail` steps.
-
-        Parameters
-        ----------
-        tail
-            Number of last steps to aggregate.
-            - tail=1 -> last step only
-            - tail>1 -> aggregate last `tail` drift samples
-        agg
-            Aggregation over the tail window: "mean" or "median"
-
-        Returns
-        -------
-        float
-            Residual drift ratio (dimensionless). Signed unless signed=False.
-        """
-        dr = self.drift(
+        return self._aggregation_engine.residual_drift(
+            self,
             top=top,
             bottom=bottom,
             component=component,
             result_name=result_name,
             stage=stage,
             signed=signed,
-            reduce="series",
+            tail=tail,
+            agg=agg,
         )
-
-        a = dr.to_numpy(dtype=float)
-        if a.size == 0:
-            raise ValueError("residual_drift(): empty drift series.")
-
-        tail_i = int(tail)
-        if tail_i < 1:
-            raise ValueError("tail must be >= 1.")
-        tail_i = min(tail_i, a.size)
-
-        w = a[-tail_i:]
-        if agg == "mean":
-            return float(np.nanmean(w))
-        if agg == "median":
-            return float(np.nanmedian(w))
-        raise ValueError("agg must be 'mean' or 'median'.")
 
     def residual_interstory_drift_profile(
         self,

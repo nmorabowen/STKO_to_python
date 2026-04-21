@@ -137,6 +137,52 @@ def test_drift_unknown_reduce_raises(nodal_displacement):
 
 
 # ---------------------------------------------------------------------- #
+# residual_drift
+# ---------------------------------------------------------------------- #
+def test_residual_drift_forwarder_matches_engine(nodal_displacement):
+    nr = nodal_displacement
+    via_nr = nr.residual_drift(top=1, bottom=2, component=1)
+    via_eng = nr._aggregation_engine.residual_drift(nr, top=1, bottom=2, component=1)
+    assert isinstance(via_nr, float)
+    assert via_nr == pytest.approx(via_eng)
+
+
+def test_residual_drift_tail_one_equals_last_drift_sample(nodal_displacement):
+    """With tail=1 the residual equals the last sample of drift(top, bottom)."""
+    nr = nodal_displacement
+    series = nr.drift(top=1, bottom=2, component=1)
+    r = nr.residual_drift(top=1, bottom=2, component=1, tail=1, agg="mean")
+    assert r == pytest.approx(float(series.iloc[-1]))
+
+
+def test_residual_drift_tail_median_matches_manual(nodal_displacement):
+    nr = nodal_displacement
+    series = nr.drift(top=1, bottom=2, component=1)
+    a = series.to_numpy(dtype=float)
+    tail = min(3, a.size)
+    r = nr.residual_drift(top=1, bottom=2, component=1, tail=tail, agg="median")
+    assert r == pytest.approx(float(np.nanmedian(a[-tail:])))
+
+
+def test_residual_drift_tail_saturates_to_series_length(nodal_displacement):
+    """Asking for a tail > series length is clipped silently to the whole series."""
+    nr = nodal_displacement
+    series = nr.drift(top=1, bottom=2, component=1)
+    a = series.to_numpy(dtype=float)
+    huge = a.size + 100
+    r = nr.residual_drift(top=1, bottom=2, component=1, tail=huge, agg="mean")
+    assert r == pytest.approx(float(np.nanmean(a)))
+
+
+def test_residual_drift_rejects_bad_tail_and_agg(nodal_displacement):
+    nr = nodal_displacement
+    with pytest.raises(ValueError, match="tail"):
+        nr.residual_drift(top=1, bottom=2, component=1, tail=0)
+    with pytest.raises(ValueError, match="agg"):
+        nr.residual_drift(top=1, bottom=2, component=1, agg="nope")
+
+
+# ---------------------------------------------------------------------- #
 # _resolve_story_nodes_by_z_tol
 # ---------------------------------------------------------------------- #
 def test_resolve_stories_forwarder_matches_engine(nodal_displacement):

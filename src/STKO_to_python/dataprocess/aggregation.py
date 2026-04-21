@@ -292,10 +292,39 @@ class AggregationEngine:
         tail: int = 1,
         agg: str = "mean",
     ) -> float:
-        raise NotImplementedError(
-            "AggregationEngine.residual_drift not implemented yet; "
-            "filled in Phase 4.3.2."
+        """
+        Residual drift ratio between two nodes, evaluated at the end of the
+        record. ``tail`` aggregates the last N drift samples to reduce
+        end-of-record noise; ``agg`` chooses mean/median across that window.
+        """
+        import numpy as np
+
+        dr = self.drift(
+            results,
+            top=top,
+            bottom=bottom,
+            component=component,
+            result_name=result_name,
+            stage=stage,
+            signed=signed,
+            reduce="series",
         )
+
+        a = dr.to_numpy(dtype=float)
+        if a.size == 0:
+            raise ValueError("residual_drift(): empty drift series.")
+
+        tail_i = int(tail)
+        if tail_i < 1:
+            raise ValueError("tail must be >= 1.")
+        tail_i = min(tail_i, a.size)
+
+        w = a[-tail_i:]
+        if agg == "mean":
+            return float(np.nanmean(w))
+        if agg == "median":
+            return float(np.nanmedian(w))
+        raise ValueError("agg must be 'mean' or 'median'.")
 
     # ------------------------------------------------------------------ #
     # Story profiles / envelopes
