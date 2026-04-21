@@ -12,6 +12,7 @@ from ..io.info import Info
 from ..io.partition_pool import Hdf5PartitionPool
 from ..io.format_policy import MpcoFormatPolicy
 from ..selection import SelectionSetResolver
+from ..query import ElementResultsQueryEngine, NodalResultsQueryEngine
 from .dataclasses import MetaData
 from ..plotting.plot_dataclasses import ModelPlotSettings
 
@@ -245,6 +246,22 @@ class MPCODataSet:
         # helpers; consumers will switch over in a later phase).
         self._selection_resolver = SelectionSetResolver(self.selection_set)
 
+        # Phase 2.8: query engines (side-by-side; managers remain the public
+        # entry point, the engines add caching and will own the read logic
+        # in a later phase).
+        self._nodal_query_engine = NodalResultsQueryEngine(
+            dataset=self,
+            pool=self._pool,
+            policy=self._format_policy,
+            resolver=self._selection_resolver,
+        )
+        self._element_query_engine = ElementResultsQueryEngine(
+            dataset=self,
+            pool=self._pool,
+            policy=self._format_policy,
+            resolver=self._selection_resolver,
+        )
+
         if self.verbose:
             self.print_summary()
         
@@ -376,6 +393,24 @@ class MPCODataSet:
         pool = getattr(self, "_pool", None)
         if pool is not None:
             pool.close_all()
+        # Drop query-engine caches too: they may hold DataFrames keyed on
+        # HDF5 reads that are now stale / unreachable.
+        for engine_attr in ("_nodal_query_engine", "_element_query_engine"):
+            engine = getattr(self, engine_attr, None)
+            if engine is not None:
+                engine.clear_caches()
         return None
+
+    def clear_result_caches(self) -> None:
+        """Drop all cached fetches from the nodal and element query engines.
+
+        Useful after explicit edits to the underlying ``.mpco`` file or
+        when the caller wants to reclaim memory between queries without
+        tearing down the whole dataset.
+        """
+        for engine_attr in ("_nodal_query_engine", "_element_query_engine"):
+            engine = getattr(self, engine_attr, None)
+            if engine is not None:
+                engine.clear_caches()
         
         

@@ -110,6 +110,39 @@ def test_elastic_frame_element_engine_parity_and_cache(elastic_frame_dir: Path):
     assert er2 is er1
 
 
+def test_elastic_frame_dataset_ships_both_engines(elastic_frame_dir: Path):
+    """Phase 2.8: both engines are constructed in ``__init__`` and wired
+    to the dataset's pool, policy, and resolver.
+    """
+    ds = MPCODataSet(str(elastic_frame_dir), "results", verbose=False)
+    assert isinstance(ds._nodal_query_engine, NodalResultsQueryEngine)
+    assert isinstance(ds._element_query_engine, ElementResultsQueryEngine)
+    # Quick fetch round-trip via the attached engines
+    nr = ds._nodal_query_engine.fetch(
+        results_name="DISPLACEMENT",
+        model_stage="MODEL_STAGE[1]",
+        node_ids=[1, 2, 3, 4],
+    )
+    assert nr.df.shape == (40, 3)
+    er = ds._element_query_engine.fetch(
+        "force", "5-ElasticBeam3d",
+        element_ids=[1, 2, 3], model_stage="MODEL_STAGE[1]",
+    )
+    assert er.df.shape == (30, 12)
+
+
+def test_clear_result_caches_drops_engine_entries(elastic_frame_dir: Path):
+    ds = MPCODataSet(str(elastic_frame_dir), "results", verbose=False)
+    ds._nodal_query_engine.fetch(
+        results_name="DISPLACEMENT",
+        model_stage="MODEL_STAGE[1]",
+        node_ids=[1, 2, 3, 4],
+    )
+    assert ds._nodal_query_engine.cached_result_count == 1
+    ds.clear_result_caches()
+    assert ds._nodal_query_engine.cached_result_count == 0
+
+
 # ---------------------------------------------------------------------- #
 # Multi-partition: QuadFrame (MP case)
 # ---------------------------------------------------------------------- #
