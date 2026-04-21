@@ -486,113 +486,18 @@ class NodalResults:
         dz_tol: float = 1e-3,
         representative: str = "min_id",  # "min_id" | "max_abs_peak"
     ) -> pd.DataFrame:
-        """
-        Interstory drift envelope (MAX and MIN signed) using z-tolerance clustering.
-
-        representative:
-        - "min_id": uses min node_id in each story (fast, deterministic)
-        - "max_abs_peak": chooses node in each story with largest abs peak response
-                        (robust if multiple nodes per floor)
-
-        Returns
-        -------
-        DataFrame indexed by (z_lower, z_upper) AND exposing them as columns with:
-            z_lower, z_upper,
-            lower_node, upper_node, dz,
-            max_drift, min_drift, max_abs_drift
-        """
-
-        stories = self._resolve_story_nodes_by_z_tol(
+        return self._aggregation_engine.interstory_drift_envelope(
+            self,
+            component=component,
             selection_set_id=selection_set_id,
             selection_set_name=selection_set_name,
             node_ids=node_ids,
             coordinates=coordinates,
+            result_name=result_name,
+            stage=stage,
             dz_tol=dz_tol,
+            representative=representative,
         )
-        if len(stories) < 2:
-            raise ValueError("Need at least 2 story levels after z clustering.")
-
-        # --------------------------------------------------
-        # Representative node selection
-        # --------------------------------------------------
-        def _pick_node(nodes: list[int]) -> int:
-            if representative == "min_id":
-                return int(min(nodes))
-
-            if representative == "max_abs_peak":
-                s = self.fetch(
-                    result_name=result_name,
-                    component=component,
-                    node_ids=nodes,
-                )
-                if isinstance(s.index, pd.MultiIndex) and s.index.nlevels == 3:
-                    if stage is None:
-                        stages = tuple(sorted({str(x) for x in s.index.get_level_values(0)}))
-                        raise ValueError(
-                            f"Multi-stage results detected. Provide stage=... "
-                            f"Available: {stages}"
-                        )
-                    s = s.xs(str(stage), level=0)
-
-                wide = s.unstack(level=-1)  # rows=node, cols=step
-                A = wide.to_numpy(dtype=float)
-                peaks = np.nanmax(np.abs(A), axis=1)
-                return int(wide.index.to_numpy(dtype=int)[int(np.nanargmax(peaks))])
-
-            raise ValueError(f"Unknown representative='{representative}'")
-
-        # --------------------------------------------------
-        # Build rows
-        # --------------------------------------------------
-        rows: list[dict[str, float]] = []
-        idx: list[tuple[float, float]] = []
-
-        for (z_lo, nodes_lo), (z_up, nodes_up) in zip(stories[:-1], stories[1:]):
-            dz = float(z_up - z_lo)
-            if dz == 0.0:
-                continue
-
-            n_lo = _pick_node(nodes_lo)
-            n_up = _pick_node(nodes_up)
-
-            dr = self.drift(
-                top=n_up,
-                bottom=n_lo,
-                component=component,
-                result_name=result_name,
-                stage=stage,
-                signed=True,
-                reduce="series",
-            )
-            arr = dr.to_numpy(dtype=float)
-
-            rows.append(
-                {
-                    "lower_node": int(n_lo),
-                    "upper_node": int(n_up),
-                    "dz": dz,
-                    "max_drift": float(np.nanmax(arr)),
-                    "min_drift": float(np.nanmin(arr)),
-                    "max_abs_drift": float(np.nanmax(np.abs(arr))),
-                }
-            )
-            idx.append((float(z_lo), float(z_up)))
-
-        if not rows:
-            raise ValueError("No valid story pairs were produced (check z-coordinates).")
-
-        # --------------------------------------------------
-        # Assemble DataFrame
-        # --------------------------------------------------
-        out = pd.DataFrame(
-            rows,
-            index=pd.MultiIndex.from_tuples(idx, names=("z_lower", "z_upper")),
-        )
-
-        # expose bounds as regular columns too
-        out = out.reset_index().set_index(["z_lower", "z_upper"], drop=False)
-
-        return out
 
     def story_pga_envelope(
         self,

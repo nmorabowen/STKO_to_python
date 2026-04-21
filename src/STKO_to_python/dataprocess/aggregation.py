@@ -344,10 +344,100 @@ class AggregationEngine:
         dz_tol: float = 1e-3,
         representative: str = "min_id",
     ) -> pd.DataFrame:
-        raise NotImplementedError(
-            "AggregationEngine.interstory_drift_envelope not implemented yet; "
-            "filled in Phase 4.3.2."
+        """
+        Interstory drift envelope (MAX and MIN signed) using z-tolerance
+        clustering. ``representative`` picks which node at each story
+        carries the drift — "min_id" for deterministic picks,
+        "max_abs_peak" to choose the node with the largest |response|.
+        """
+        import numpy as np
+
+        stories = self._resolve_story_nodes_by_z_tol(
+            results,
+            selection_set_id=selection_set_id,
+            selection_set_name=selection_set_name,
+            node_ids=node_ids,
+            coordinates=coordinates,
+            dz_tol=dz_tol,
         )
+        if len(stories) < 2:
+            raise ValueError("Need at least 2 story levels after z clustering.")
+
+        # Representative node selection
+        def _pick_node(nodes: list[int]) -> int:
+            if representative == "min_id":
+                return int(min(nodes))
+
+            if representative == "max_abs_peak":
+                s = results.fetch(
+                    result_name=result_name,
+                    component=component,
+                    node_ids=nodes,
+                )
+                if isinstance(s.index, pd.MultiIndex) and s.index.nlevels == 3:
+                    if stage is None:
+                        stages = tuple(sorted({str(x) for x in s.index.get_level_values(0)}))
+                        raise ValueError(
+                            f"Multi-stage results detected. Provide stage=... "
+                            f"Available: {stages}"
+                        )
+                    s = s.xs(str(stage), level=0)
+
+                wide = s.unstack(level=-1)
+                A = wide.to_numpy(dtype=float)
+                peaks = np.nanmax(np.abs(A), axis=1)
+                return int(wide.index.to_numpy(dtype=int)[int(np.nanargmax(peaks))])
+
+            raise ValueError(f"Unknown representative='{representative}'")
+
+        # Build rows
+        rows: list[dict[str, float]] = []
+        idx: list[tuple[float, float]] = []
+
+        for (z_lo, nodes_lo), (z_up, nodes_up) in zip(stories[:-1], stories[1:]):
+            dz = float(z_up - z_lo)
+            if dz == 0.0:
+                continue
+
+            n_lo = _pick_node(nodes_lo)
+            n_up = _pick_node(nodes_up)
+
+            dr = self.drift(
+                results,
+                top=n_up,
+                bottom=n_lo,
+                component=component,
+                result_name=result_name,
+                stage=stage,
+                signed=True,
+                reduce="series",
+            )
+            arr = dr.to_numpy(dtype=float)
+
+            rows.append(
+                {
+                    "lower_node": int(n_lo),
+                    "upper_node": int(n_up),
+                    "dz": dz,
+                    "max_drift": float(np.nanmax(arr)),
+                    "min_drift": float(np.nanmin(arr)),
+                    "max_abs_drift": float(np.nanmax(np.abs(arr))),
+                }
+            )
+            idx.append((float(z_lo), float(z_up)))
+
+        if not rows:
+            raise ValueError("No valid story pairs were produced (check z-coordinates).")
+
+        out = pd.DataFrame(
+            rows,
+            index=pd.MultiIndex.from_tuples(idx, names=("z_lower", "z_upper")),
+        )
+
+        # expose bounds as regular columns too
+        out = out.reset_index().set_index(["z_lower", "z_upper"], drop=False)
+
+        return out
 
     def interstory_drift_envelope_pd(
         self,

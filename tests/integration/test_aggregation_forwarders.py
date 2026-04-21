@@ -534,6 +534,96 @@ def test_asce_bad_reduce_time_raises(nodal_displacement):
 
 
 # ---------------------------------------------------------------------- #
+# interstory_drift_envelope
+# ---------------------------------------------------------------------- #
+def _distinct_z_levels_exist(nr) -> bool:
+    ni = nr.info.nodes_info
+    zcol = nr.info._resolve_column(ni, "z", required=True)
+    return ni[zcol].nunique() >= 2
+
+
+def test_interstory_drift_envelope_forwarder_matches_engine(nodal_displacement):
+    nr = nodal_displacement
+    if not _distinct_z_levels_exist(nr):
+        pytest.skip("fixture has < 2 distinct z levels.")
+    via_nr = nr.interstory_drift_envelope(
+        component=1,
+        node_ids=[1, 2, 3, 4],
+        dz_tol=1e-6,
+    )
+    via_eng = nr._aggregation_engine.interstory_drift_envelope(
+        nr,
+        component=1,
+        node_ids=[1, 2, 3, 4],
+        dz_tol=1e-6,
+    )
+    assert isinstance(via_nr, pd.DataFrame)
+    pd.testing.assert_frame_equal(via_nr, via_eng)
+
+
+def test_interstory_drift_envelope_columns_and_index(nodal_displacement):
+    nr = nodal_displacement
+    if not _distinct_z_levels_exist(nr):
+        pytest.skip("fixture has < 2 distinct z levels.")
+    out = nr.interstory_drift_envelope(
+        component=1,
+        node_ids=[1, 2, 3, 4],
+        dz_tol=1e-6,
+    )
+    assert out.index.names == ["z_lower", "z_upper"]
+    assert {
+        "z_lower", "z_upper",
+        "lower_node", "upper_node", "dz",
+        "max_drift", "min_drift", "max_abs_drift",
+    }.issubset(out.columns)
+    # envelope ordering: max >= min, max_abs >= 0
+    assert (out["max_drift"] >= out["min_drift"]).all()
+    assert (out["max_abs_drift"] >= 0).all()
+
+
+def test_interstory_drift_envelope_too_few_stories_raises(nodal_displacement):
+    """With a huge tolerance every node merges into one cluster."""
+    nr = nodal_displacement
+    with pytest.raises(ValueError, match="at least 2 story levels"):
+        nr.interstory_drift_envelope(
+            component=1,
+            node_ids=[1, 2, 3, 4],
+            dz_tol=1e9,
+        )
+
+
+def test_interstory_drift_envelope_max_abs_peak_representative(nodal_displacement):
+    """`representative='max_abs_peak'` uses a different per-story node picker;
+    run both representatives and verify the result schema matches."""
+    nr = nodal_displacement
+    if not _distinct_z_levels_exist(nr):
+        pytest.skip("fixture has < 2 distinct z levels.")
+    out = nr.interstory_drift_envelope(
+        component=1,
+        node_ids=[1, 2, 3, 4],
+        dz_tol=1e-6,
+        representative="max_abs_peak",
+    )
+    assert {"lower_node", "upper_node", "max_drift", "min_drift"}.issubset(out.columns)
+
+
+def test_interstory_drift_envelope_unknown_representative_raises(nodal_displacement):
+    """Unknown representative should raise once _pick_node is called.
+    Skip when the fixture's geometry clusters into a single story (no
+    inter-story pairs → _pick_node never fires)."""
+    nr = nodal_displacement
+    if not _distinct_z_levels_exist(nr):
+        pytest.skip("fixture has < 2 distinct z levels.")
+    with pytest.raises(ValueError, match="Unknown representative"):
+        nr.interstory_drift_envelope(
+            component=1,
+            node_ids=[1, 2, 3, 4],
+            dz_tol=1e-6,
+            representative="nope",
+        )
+
+
+# ---------------------------------------------------------------------- #
 # Engine sanity
 # ---------------------------------------------------------------------- #
 def test_class_level_engine_is_shared_singleton(nodal_displacement):
