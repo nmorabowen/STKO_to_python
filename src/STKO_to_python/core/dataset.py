@@ -11,6 +11,7 @@ from ..plotting.plot import Plot
 from ..io.info import Info
 from ..io.partition_pool import Hdf5PartitionPool
 from ..io.format_policy import MpcoFormatPolicy
+from ..selection import SelectionSetResolver
 from .dataclasses import MetaData
 from ..plotting.plot_dataclasses import ModelPlotSettings
 
@@ -239,7 +240,11 @@ class MPCODataSet:
         
         # Get the selection set mapping (This is the only place cdata is used)
         self.selection_set=self.cdata._extract_selection_set_ids()
-        
+
+        # Phase 2: centralized resolver (side-by-side with legacy per-manager
+        # helpers; consumers will switch over in a later phase).
+        self._selection_resolver = SelectionSetResolver(self.selection_set)
+
         if self.verbose:
             self.print_summary()
         
