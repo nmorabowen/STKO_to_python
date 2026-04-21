@@ -16,11 +16,13 @@ from STKO_to_python.io.format_policy import MpcoFormatPolicy
 
 
 def test_dataset_accepts_pool_size_parameter() -> None:
-    """Phase 1 adds ``pool_size`` as a keyword-only-safe kwarg with
-    a default of 0 (legacy open-per-call behavior)."""
+    """Phase 1 adds ``pool_size``; Phase 1.3 flips the default from 0 to
+    None. ``None`` means "performance-first auto" (min(16, n_partitions));
+    ``0`` is still valid and preserves legacy open-per-call behavior.
+    """
     sig = inspect.signature(MPCODataSet.__init__)
     assert "pool_size" in sig.parameters
-    assert sig.parameters["pool_size"].default == 0
+    assert sig.parameters["pool_size"].default is None
 
 
 def test_dataset_init_signature_backcompat() -> None:
@@ -34,7 +36,7 @@ def test_dataset_init_signature_backcompat() -> None:
         "file_extension": "*.mpco",
         "verbose": False,
         "plot_settings": None,
-        "pool_size": 0,
+        "pool_size": None,
     }
     for name, default in expected_defaults.items():
         assert name in sig.parameters, f"missing param {name!r}"

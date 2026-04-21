@@ -148,15 +148,20 @@ class MPCODataSet:
         file_extension='*.mpco',
         verbose=False,
         plot_settings: Optional[ModelPlotSettings] = None,
-        pool_size: int = 0,
+        pool_size: Optional[int] = None,
     ):
-        
+
         self.hdf5_directory = hdf5_directory
         self.recorder_name = recorder_name
         self.name=name
         self.file_extension = file_extension
         self.verbose = verbose
-        self._pool_size = int(pool_size)
+        # pool_size=None → performance-first default of min(16, n_partitions),
+        # applied in _create_object_attributes once the partition count is
+        # known. Users who need the legacy open-per-call behavior (e.g.
+        # another process is writing to the file and they want coherent
+        # reads on every query) pass pool_size=0 explicitly.
+        self._pool_size: Optional[int] = pool_size
 
         if verbose:
             logger.setLevel(logging.INFO)
@@ -195,12 +200,18 @@ class MPCODataSet:
         self.cdata_partitions=self.model_info._get_file_list_for_results_name(extension='cdata', verbose=False)
 
         # Build the partition pool now that we know the partition map.
-        # pool_size=0 preserves legacy open-per-call behavior; Phase 2
-        # will flip the default to min(16, n_partitions) once the query
-        # engines consume the pool.
+        # Default to min(16, n_partitions) for the performance-first
+        # baseline (refactor proposal §6). Every consumer (model_info,
+        # nodes, elements) now routes through the pool, so a pooled
+        # default is safe; pool_size=0 remains available for callers
+        # that want the legacy open-per-call semantics.
+        if self._pool_size is None:
+            effective_pool_size = min(16, len(self.results_partitions))
+        else:
+            effective_pool_size = int(self._pool_size)
         self._pool = Hdf5PartitionPool(
             self.results_partitions,
-            pool_size=self._pool_size,
+            pool_size=effective_pool_size,
         )
         
         # Extract the model stages information
