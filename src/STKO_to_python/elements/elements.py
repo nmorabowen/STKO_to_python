@@ -300,51 +300,6 @@ class Elements:
     # Element ID resolution (mirrors Nodes._resolve_node_ids)
     # ------------------------------------------------------------------ #
 
-    def _selection_set_name_for(self, sid: int) -> str:
-        """Best-effort extraction of selection set name."""
-        d = self.dataset.selection_set.get(int(sid), {})
-        if not isinstance(d, dict):
-            return ""
-        name = d.get("SET_NAME", d.get("name", d.get("Name", "")))
-        return "" if name is None else str(name)
-
-    def _selection_set_ids_from_names(
-        self, names: Sequence[str]
-    ) -> Tuple[int, ...]:
-        """Resolve selection set names -> IDs (case-insensitive)."""
-        if not names:
-            return ()
-
-        buckets: Dict[str, list[int]] = {}
-        for sid in self.dataset.selection_set.keys():
-            try:
-                sid_i = int(sid)
-            except Exception:
-                continue
-            nm = self._selection_set_name_for(sid_i).strip().lower()
-            if nm:
-                buckets.setdefault(nm, []).append(sid_i)
-
-        resolved: list[int] = []
-        for raw in names:
-            key = str(raw).strip().lower()
-            if not key:
-                continue
-            hits = buckets.get(key, [])
-            if len(hits) == 0:
-                available = sorted(buckets.keys())
-                preview = ", ".join(available[:30])
-                raise ValueError(
-                    f"Selection set name not found: {raw!r}. "
-                    f"Available: {preview}"
-                )
-            if len(hits) > 1:
-                raise ValueError(
-                    f"Ambiguous selection set name {raw!r}: matches IDs {sorted(hits)}."
-                )
-            resolved.append(hits[0])
-        return tuple(resolved)
-
     def _resolve_element_ids(
         self,
         *,
@@ -357,7 +312,8 @@ class Elements:
         """
         Resolve element IDs from multiple sources (union semantics).
 
-        Mirrors the Nodes._resolve_node_ids() API.
+        Mirrors the Nodes._resolve_node_ids() API. Delegates to the
+        dataset-owned :class:`SelectionSetResolver`.
 
         Parameters
         ----------
@@ -370,55 +326,11 @@ class Elements:
         np.ndarray of int64
             Unique, sorted element IDs.
         """
-        gathered: list[np.ndarray] = []
-
-        # -- by name --
-        if selection_set_name is not None:
-            names = (
-                [selection_set_name]
-                if isinstance(selection_set_name, str)
-                else list(selection_set_name)
-            )
-            ids_from_names = self._selection_set_ids_from_names(names)
-            for sid in ids_from_names:
-                elems = self.dataset.selection_set.get(int(sid), {}).get("ELEMENTS")
-                if not elems:
-                    raise ValueError(
-                        f"Selection set {sid} empty or missing ELEMENTS."
-                    )
-                gathered.append(np.asarray(elems, dtype=np.int64))
-
-        # -- by id --
-        if selection_set_id is not None:
-            sel_ids = (
-                [selection_set_id]
-                if isinstance(selection_set_id, int)
-                else selection_set_id
-            )
-            for sid in sel_ids:
-                elems = self.dataset.selection_set.get(int(sid), {}).get("ELEMENTS")
-                if not elems:
-                    raise ValueError(
-                        f"Selection set {sid} empty or missing ELEMENTS."
-                    )
-                gathered.append(np.asarray(elems, dtype=np.int64))
-
-        # -- explicit --
-        if element_ids is not None:
-            if isinstance(element_ids, (int, np.integer)):
-                gathered.append(np.asarray([element_ids], dtype=np.int64))
-            else:
-                gathered.append(np.asarray(element_ids, dtype=np.int64))
-
-        if not gathered:
-            raise ValueError(
-                "Provide element_ids and/or selection_set_id and/or selection_set_name."
-            )
-
-        out = np.unique(np.concatenate(gathered))
-        if out.size == 0:
-            raise ValueError("Resolved element set is empty.")
-        return out
+        return self.dataset._selection_resolver.resolve_elements(
+            names=selection_set_name,
+            ids=selection_set_id,
+            explicit_ids=element_ids,
+        )
 
     # ------------------------------------------------------------------ #
     # Vectorized Z-level filtering
