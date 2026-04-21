@@ -4,7 +4,6 @@ import logging
 import re
 from typing import TYPE_CHECKING, Any, Dict, Optional, Sequence, Tuple, Union
 
-import h5py
 import numpy as np
 import pandas as pd
 
@@ -112,12 +111,11 @@ class Elements:
 
         # -- Collect element data from HDF5 partitions --
         chunks: list[pd.DataFrame] = []
+        policy = self.dataset._format_policy
 
-        for file_id, partition_path in self.dataset.results_partitions.items():
-            with h5py.File(partition_path, "r") as h5:
-                elem_group_path = self.dataset.MODEL_ELEMENTS_PATH.format(
-                    model_stage=stage0
-                )
+        for file_id in self.dataset.results_partitions:
+            with self.dataset._pool.with_partition(file_id) as h5:
+                elem_group_path = policy.model_elements_path(stage0)
                 element_group = h5.get(elem_group_path)
                 if element_group is None:
                     if verbose:
@@ -594,8 +592,8 @@ class Elements:
         """
         results_by_partition: dict[str, dict[str, list[str]]] = {}
 
-        for part_id, filepath in self.dataset.results_partitions.items():
-            with h5py.File(filepath, "r") as f:
+        for part_id in self.dataset.results_partitions:
+            with self.dataset._pool.with_partition(part_id) as f:
                 try:
                     partition_results: dict[str, list[str]] = {}
 
@@ -714,7 +712,6 @@ class Elements:
 
         # Group by partition for efficient HDF5 access
         for file_id, df_group in df_info.groupby("file_id"):
-            file_path = self.dataset.results_partitions[int(file_id)]
             idx_arr = df_group["element_idx"].to_numpy(dtype=np.int64)
             id_arr = df_group["element_id"].to_numpy(dtype=np.int64)
 
@@ -726,7 +723,7 @@ class Elements:
             inv = np.empty_like(sort_order)
             inv[sort_order] = np.arange(sort_order.size)
 
-            with h5py.File(file_path, "r") as f:
+            with self.dataset._pool.with_partition(int(file_id)) as f:
                 base_path = f"{model_stage}/RESULTS/ON_ELEMENTS/{results_name}"
                 if base_path not in f:
                     if verbose:

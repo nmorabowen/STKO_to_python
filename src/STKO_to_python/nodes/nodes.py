@@ -58,11 +58,12 @@ class Nodes:
         """
         dtype = self._node_dtype()
         stage0 = self.dataset.model_stages[0]
+        policy = self.dataset._format_policy
         chunks: list[np.ndarray] = []
 
-        for file_id, path in self.dataset.results_partitions.items():
-            with h5py.File(path, "r") as h5:
-                g = h5.get(self.dataset.MODEL_NODES_PATH.format(model_stage=stage0))
+        for file_id in self.dataset.results_partitions:
+            with self.dataset._pool.with_partition(file_id) as h5:
+                g = h5.get(policy.model_nodes_path(stage0))
                 if g is None:
                     continue
 
@@ -373,7 +374,7 @@ class Nodes:
         for st in stages:
             file_frames = []
             for fid, grp in file_groups.items():
-                with h5py.File(self.dataset.results_partitions[int(fid)], "r") as h5:
+                with self.dataset._pool.with_partition(int(fid)) as h5:
                     file_frames.append(
                         self._read_multi_results_all_steps(
                             h5=h5,
