@@ -804,6 +804,69 @@ def test_residual_drift_envelope_matches_profile_reduction(nodal_displacement):
 
 
 # ---------------------------------------------------------------------- #
+# interstory_drift_envelope_pd
+# ---------------------------------------------------------------------- #
+def test_interstory_drift_envelope_pd_forwarder_matches_engine(nodal_displacement):
+    nr = nodal_displacement
+    if not _distinct_z_levels_exist(nr):
+        pytest.skip("fixture has < 2 distinct z levels.")
+    via_nr = nr.interstory_drift_envelope_pd(
+        component=1, node_ids=[1, 2, 3, 4], dz_tol=1e-6,
+    )
+    via_eng = nr._aggregation_engine.interstory_drift_envelope_pd(
+        nr, component=1, node_ids=[1, 2, 3, 4], dz_tol=1e-6,
+    )
+    assert isinstance(via_nr, pd.DataFrame)
+    pd.testing.assert_frame_equal(via_nr, via_eng)
+
+
+def test_interstory_drift_envelope_pd_flat_columns_and_sort(nodal_displacement):
+    """Flat RangeIndex (no MultiIndex), z_lower sorted ascending."""
+    nr = nodal_displacement
+    if not _distinct_z_levels_exist(nr):
+        pytest.skip("fixture has < 2 distinct z levels.")
+    out = nr.interstory_drift_envelope_pd(
+        component=1, node_ids=[1, 2, 3, 4], dz_tol=1e-6,
+    )
+    assert isinstance(out.index, pd.RangeIndex)
+    assert {
+        "z_lower", "z_upper", "dz", "max_drift", "min_drift",
+        "max_abs_drift", "representative_drift", "lower_node", "upper_node",
+    } == set(out.columns)
+    zs = out["z_lower"].to_numpy()
+    assert (zs[:-1] <= zs[1:]).all()
+
+
+def test_interstory_drift_envelope_pd_representative_picks_correct_column(nodal_displacement):
+    """representative='max' picks max_drift; 'min' picks min_drift; 'max_abs' picks max_abs_drift."""
+    nr = nodal_displacement
+    if not _distinct_z_levels_exist(nr):
+        pytest.skip("fixture has < 2 distinct z levels.")
+    kwargs = dict(component=1, node_ids=[1, 2, 3, 4], dz_tol=1e-6)
+    out_max_abs = nr.interstory_drift_envelope_pd(representative="max_abs", **kwargs)
+    out_max = nr.interstory_drift_envelope_pd(representative="max", **kwargs)
+    out_min = nr.interstory_drift_envelope_pd(representative="min", **kwargs)
+    pd.testing.assert_series_equal(
+        out_max_abs["representative_drift"], out_max_abs["max_abs_drift"], check_names=False
+    )
+    pd.testing.assert_series_equal(
+        out_max["representative_drift"], out_max["max_drift"], check_names=False
+    )
+    pd.testing.assert_series_equal(
+        out_min["representative_drift"], out_min["min_drift"], check_names=False
+    )
+
+
+def test_interstory_drift_envelope_pd_unknown_representative_raises(nodal_displacement):
+    nr = nodal_displacement
+    with pytest.raises(ValueError, match="representative"):
+        nr.interstory_drift_envelope_pd(
+            component=1, node_ids=[1, 2, 3, 4], dz_tol=1e-6,
+            representative="nope",
+        )
+
+
+# ---------------------------------------------------------------------- #
 # Engine sanity
 # ---------------------------------------------------------------------- #
 def test_class_level_engine_is_shared_singleton(nodal_displacement):

@@ -453,9 +453,86 @@ class AggregationEngine:
         dz_tol: float = 1e-3,
         representative: str = "max_abs",
     ) -> pd.DataFrame:
-        raise NotImplementedError(
-            "AggregationEngine.interstory_drift_envelope_pd not implemented yet; "
-            "filled in Phase 4.3.2."
+        """
+        Interstory drift envelope using z-clustering, flattened into a
+        regular DataFrame (no MultiIndex) with a "representative_drift"
+        column chosen by ``representative`` — suitable for statistics or
+        histograms over stories.
+        """
+        import numpy as np
+
+        if representative not in ("max_abs", "max", "min"):
+            raise ValueError("representative must be 'max_abs', 'max', or 'min'.")
+
+        stories = self._resolve_story_nodes_by_z_tol(
+            results,
+            selection_set_name=selection_set_name,
+            selection_set_id=selection_set_id,
+            node_ids=node_ids,
+            coordinates=coordinates,
+            dz_tol=dz_tol,
+        )
+
+        if len(stories) < 2:
+            raise ValueError("Need at least two story levels.")
+
+        rows: list[dict[str, float | int]] = []
+
+        for (z_lo, nodes_lo), (z_up, nodes_up) in zip(stories[:-1], stories[1:]):
+            dz = float(z_up - z_lo)
+            if dz == 0.0:
+                continue
+
+            n_lo = int(min(nodes_lo))
+            n_up = int(min(nodes_up))
+
+            dr = self.drift(
+                results,
+                top=n_up,
+                bottom=n_lo,
+                component=component,
+                result_name=result_name,
+                stage=stage,
+                signed=True,
+                reduce="series",
+            )
+
+            arr = dr.to_numpy(dtype=float)
+            if arr.size == 0:
+                continue
+
+            dmax = float(np.nanmax(arr))
+            dmin = float(np.nanmin(arr))
+            dabs = float(np.nanmax(np.abs(arr)))
+
+            if representative == "max_abs":
+                rep = dabs
+            elif representative == "max":
+                rep = dmax
+            else:
+                rep = dmin
+
+            rows.append(
+                {
+                    "z_lower": float(z_lo),
+                    "z_upper": float(z_up),
+                    "dz": dz,
+                    "max_drift": dmax,
+                    "min_drift": dmin,
+                    "max_abs_drift": dabs,
+                    "representative_drift": rep,
+                    "lower_node": n_lo,
+                    "upper_node": n_up,
+                }
+            )
+
+        if not rows:
+            raise ValueError("No interstory drift data generated.")
+
+        return (
+            pd.DataFrame(rows)
+            .sort_values("z_lower")
+            .reset_index(drop=True)
         )
 
     def story_pga_envelope(
