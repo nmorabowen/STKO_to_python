@@ -748,129 +748,20 @@ class NodalResults:
         signed: bool = True,
         return_nodes: bool = False,
     ) -> tuple[pd.Series, pd.Series] | tuple[pd.Series, pd.Series, list[int]]:
-        """
-        Build an orbit pair (x(t), y(t)) from two components of the same result.
-
-        Parameters
-        ----------
-        reduce_nodes
-            - "none": returns MultiIndex series if multiple nodes are present (node_id, step)
-            - "mean"/"median": reduces across nodes at each step
-            - "max_abs": reduces across nodes by choosing the node with max abs at each step,
-                         independently for x and y (simple + robust, but note x and y can come from
-                         different controlling nodes per step)
-        """
-
-        provided = sum(x is not None for x in (node_ids, selection_set_id, selection_set_name, coordinates))
-        if provided != 1:
-            raise ValueError(
-                "orbit(): Provide exactly ONE of: node_ids, selection_set_id, selection_set_name, coordinates."
-            )
-
-        resolved_node_ids: list[int] | None = None
-
-        if coordinates is not None:
-            ids = self.info.nearest_node_id(coordinates, return_distance=False)
-            resolved_node_ids = [int(i) for i in ids]
-        else:
-            # leverage fetch()'s resolver for selection sets + node_ids,
-            # but we want the *resolved ids* to optionally return them.
-            gathered: list[np.ndarray] = []
-
-            if selection_set_id is not None:
-                ids = self.info.selection_set_node_ids(selection_set_id)
-                gathered.append(np.asarray(ids, dtype=np.int64))
-
-            if selection_set_name is not None:
-                ids = self.info.selection_set_node_ids_by_name(selection_set_name)
-                gathered.append(np.asarray(ids, dtype=np.int64))
-
-            if node_ids is not None:
-                if isinstance(node_ids, (int, np.integer)):
-                    gathered.append(np.asarray([int(node_ids)], dtype=np.int64))
-                else:
-                    arr = np.asarray(list(node_ids), dtype=np.int64)
-                    if arr.size == 0:
-                        raise ValueError("orbit(): node_ids is empty.")
-                    gathered.append(arr)
-
-            resolved_node_ids = sorted(set(np.unique(np.concatenate(gathered)).astype(int).tolist()))
-
-        if not resolved_node_ids:
-            raise ValueError("orbit(): resolved node set is empty.")
-
-        # fetch x and y
-        sx = self.fetch(result_name=result_name, component=x_component, node_ids=resolved_node_ids)
-        sy = self.fetch(result_name=result_name, component=y_component, node_ids=resolved_node_ids)
-
-        # stage selection if needed
-        def _select_stage(s: pd.Series) -> pd.Series:
-            if isinstance(s.index, pd.MultiIndex) and s.index.nlevels == 3:
-                if stage is None:
-                    stages = tuple(sorted({str(x) for x in s.index.get_level_values(0)}))
-                    raise ValueError(f"Multi-stage results detected. Provide stage=... Available: {stages}")
-                return s.xs(str(stage), level=0)
-            return s
-
-        sx = _select_stage(sx)
-        sy = _select_stage(sy)
-
-        if not (isinstance(sx.index, pd.MultiIndex) and sx.index.nlevels == 2):
-            raise ValueError("orbit(): expected index (node_id, step) after stage selection.")
-        if not (isinstance(sy.index, pd.MultiIndex) and sy.index.nlevels == 2):
-            raise ValueError("orbit(): expected index (node_id, step) after stage selection.")
-
-        # align (important if any missing steps)
-        sx, sy = sx.align(sy, join="inner")
-        if sx.size == 0:
-            raise ValueError("orbit(): no overlapping samples between x and y series after alignment.")
-
-        if not signed:
-            sx = sx.abs()
-            sy = sy.abs()
-
-        # reduce across nodes if requested
-        if reduce_nodes != "none":
-            wide_x = sx.unstack(level=-1)  # rows=node, cols=step
-            wide_y = sy.unstack(level=-1)
-
-            # union of steps (should already match from align, but keep safe)
-            steps = np.intersect1d(wide_x.columns.to_numpy(), wide_y.columns.to_numpy())
-            wide_x = wide_x.reindex(columns=steps)
-            wide_y = wide_y.reindex(columns=steps)
-
-            Ax = wide_x.to_numpy(dtype=float)
-            Ay = wide_y.to_numpy(dtype=float)
-
-            if reduce_nodes == "mean":
-                x = np.nanmean(Ax, axis=0)
-                y = np.nanmean(Ay, axis=0)
-            elif reduce_nodes == "median":
-                x = np.nanmedian(Ax, axis=0)
-                y = np.nanmedian(Ay, axis=0)
-            elif reduce_nodes == "max_abs":
-                ix = np.nanargmax(np.abs(Ax), axis=0)
-                iy = np.nanargmax(np.abs(Ay), axis=0)
-                j = np.arange(steps.size)
-                x = Ax[ix, j]
-                y = Ay[iy, j]
-            else:
-                raise ValueError("reduce_nodes must be one of: 'none', 'mean', 'median', 'max_abs'.")
-
-            sx_out = pd.Series(x, index=steps, name=f"{result_name}[{x_component}]")
-            sy_out = pd.Series(y, index=steps, name=f"{result_name}[{y_component}]")
-
-            if return_nodes:
-                return sx_out, sy_out, resolved_node_ids
-            return sx_out, sy_out
-
-        # no reduction: keep per-node indexing
-        sx.name = f"{result_name}[{x_component}]"
-        sy.name = f"{result_name}[{y_component}]"
-
-        if return_nodes:
-            return sx, sy, resolved_node_ids
-        return sx, sy
+        return self._aggregation_engine.orbit(
+            self,
+            result_name=result_name,
+            x_component=x_component,
+            y_component=y_component,
+            node_ids=node_ids,
+            selection_set_id=selection_set_id,
+            selection_set_name=selection_set_name,
+            coordinates=coordinates,
+            stage=stage,
+            reduce_nodes=reduce_nodes,
+            signed=signed,
+            return_nodes=return_nodes,
+        )
 
     # ------------------------------------------------------------------ #
     # Dynamic attribute access

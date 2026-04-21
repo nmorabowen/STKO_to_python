@@ -867,6 +867,82 @@ def test_interstory_drift_envelope_pd_unknown_representative_raises(nodal_displa
 
 
 # ---------------------------------------------------------------------- #
+# orbit
+# ---------------------------------------------------------------------- #
+def test_orbit_forwarder_matches_engine_single_node(nodal_displacement):
+    nr = nodal_displacement
+    via_nr = nr.orbit(node_ids=1, x_component=1, y_component=2)
+    via_eng = nr._aggregation_engine.orbit(nr, node_ids=1, x_component=1, y_component=2)
+    assert isinstance(via_nr, tuple) and len(via_nr) == 2
+    pd.testing.assert_series_equal(via_nr[0], via_eng[0])
+    pd.testing.assert_series_equal(via_nr[1], via_eng[1])
+
+
+def test_orbit_return_nodes_adds_ids_tuple(nodal_displacement):
+    nr = nodal_displacement
+    out = nr.orbit(node_ids=[1, 2], x_component=1, y_component=2, return_nodes=True)
+    assert isinstance(out, tuple) and len(out) == 3
+    sx, sy, ids = out
+    assert isinstance(sx, pd.Series)
+    assert isinstance(sy, pd.Series)
+    assert sorted(ids) == [1, 2]
+
+
+def test_orbit_series_names_encode_components(nodal_displacement):
+    nr = nodal_displacement
+    sx, sy = nr.orbit(node_ids=1, x_component=1, y_component=2)
+    assert sx.name == "DISPLACEMENT[1]"
+    assert sy.name == "DISPLACEMENT[2]"
+
+
+def test_orbit_reduce_nodes_mean_matches_pandas_groupby(nodal_displacement):
+    """reduce_nodes='mean' collapses per-step across nodes equals groupby on step."""
+    nr = nodal_displacement
+    # Raw two-node result (MultiIndex node_id, step) then manual mean per step
+    raw_sx, raw_sy = nr.orbit(node_ids=[1, 2], x_component=1, y_component=2)
+    expected_x = raw_sx.groupby(level=-1).mean()
+    expected_y = raw_sy.groupby(level=-1).mean()
+
+    sx, sy = nr.orbit(
+        node_ids=[1, 2], x_component=1, y_component=2, reduce_nodes="mean",
+    )
+    pd.testing.assert_series_equal(
+        sx.reset_index(drop=True),
+        expected_x.reset_index(drop=True),
+        check_names=False,
+    )
+    pd.testing.assert_series_equal(
+        sy.reset_index(drop=True),
+        expected_y.reset_index(drop=True),
+        check_names=False,
+    )
+
+
+def test_orbit_requires_exactly_one_selector(nodal_displacement):
+    nr = nodal_displacement
+    with pytest.raises(ValueError, match="exactly ONE"):
+        nr.orbit(node_ids=1, selection_set_id=1)
+    with pytest.raises(ValueError, match="exactly ONE"):
+        nr.orbit()  # no selector
+
+
+def test_orbit_unknown_reduce_nodes_raises(nodal_displacement):
+    nr = nodal_displacement
+    with pytest.raises(ValueError, match="reduce_nodes"):
+        nr.orbit(node_ids=[1, 2], reduce_nodes="nope")
+
+
+def test_orbit_signed_false_abs(nodal_displacement):
+    nr = nodal_displacement
+    sx_signed, sy_signed = nr.orbit(node_ids=1, x_component=1, y_component=2)
+    sx_abs, sy_abs = nr.orbit(
+        node_ids=1, x_component=1, y_component=2, signed=False,
+    )
+    pd.testing.assert_series_equal(sx_abs, sx_signed.abs().rename(sx_abs.name))
+    pd.testing.assert_series_equal(sy_abs, sy_signed.abs().rename(sy_abs.name))
+
+
+# ---------------------------------------------------------------------- #
 # Engine sanity
 # ---------------------------------------------------------------------- #
 def test_class_level_engine_is_shared_singleton(nodal_displacement):

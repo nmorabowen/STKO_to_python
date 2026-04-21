@@ -81,6 +81,7 @@ IMPLEMENTED_METHODS = frozenset({
     "residual_interstory_drift_profile",
     "residual_drift_envelope",
     "interstory_drift_envelope_pd",
+    "orbit",
 })
 
 STUB_METHODS = tuple(m for m in EXPECTED_PUBLIC_METHODS if m not in IMPLEMENTED_METHODS)
@@ -114,26 +115,6 @@ def test_method_first_param_is_results(name):
 # ---------------------------------------------------------------------- #
 # Stubs raise NotImplementedError (Phase 4.3.1)
 # ---------------------------------------------------------------------- #
-def _dummy_kwargs_for(method) -> dict:
-    """Build a kwargs dict filling every required keyword-only parameter
-    with ``None``. Optional parameters keep their defaults. ``results``
-    is always supplied; ``self`` is bound."""
-    sig = inspect.signature(method)
-    kwargs = {}
-    for p in sig.parameters.values():
-        if p.kind is inspect.Parameter.KEYWORD_ONLY and p.default is inspect.Parameter.empty:
-            kwargs[p.name] = None
-    kwargs["results"] = None
-    return kwargs
-
-
-@pytest.mark.parametrize("name", STUB_METHODS)
-def test_public_method_stub_raises_not_implemented(name):
-    eng = AggregationEngine()
-    method = getattr(eng, name)
-    with pytest.raises(NotImplementedError):
-        method(**_dummy_kwargs_for(method))
-
-
-# _resolve_story_nodes_by_z_tol moved out of skeleton state in Phase 4.3.2.c;
-# behavior is covered by tests/integration/test_aggregation_forwarders.py.
+# All AggregationEngine methods have been implemented in Phase 4.3.2
+# (see IMPLEMENTED_METHODS above). Behavior is covered by
+# tests/integration/test_aggregation_forwarders.py.

@@ -1327,10 +1327,115 @@ class AggregationEngine:
         signed: bool = True,
         return_nodes: bool = False,
     ) -> tuple[pd.Series, pd.Series] | tuple[pd.Series, pd.Series, list[int]]:
-        raise NotImplementedError(
-            "AggregationEngine.orbit not implemented yet; "
-            "filled in Phase 4.3.2."
-        )
+        """
+        Build an orbit pair (x(t), y(t)) from two components of the same
+        result. ``reduce_nodes`` controls how multiple selected nodes
+        collapse into a single (x, y) pair per step.
+        """
+        import numpy as np
+
+        provided = sum(x is not None for x in (node_ids, selection_set_id, selection_set_name, coordinates))
+        if provided != 1:
+            raise ValueError(
+                "orbit(): Provide exactly ONE of: node_ids, selection_set_id, selection_set_name, coordinates."
+            )
+
+        resolved_node_ids: list[int] | None = None
+
+        if coordinates is not None:
+            ids = results.info.nearest_node_id(coordinates, return_distance=False)
+            resolved_node_ids = [int(i) for i in ids]
+        else:
+            gathered: list[np.ndarray] = []
+
+            if selection_set_id is not None:
+                ids = results.info.selection_set_node_ids(selection_set_id)
+                gathered.append(np.asarray(ids, dtype=np.int64))
+
+            if selection_set_name is not None:
+                ids = results.info.selection_set_node_ids_by_name(selection_set_name)
+                gathered.append(np.asarray(ids, dtype=np.int64))
+
+            if node_ids is not None:
+                if isinstance(node_ids, (int, np.integer)):
+                    gathered.append(np.asarray([int(node_ids)], dtype=np.int64))
+                else:
+                    arr = np.asarray(list(node_ids), dtype=np.int64)
+                    if arr.size == 0:
+                        raise ValueError("orbit(): node_ids is empty.")
+                    gathered.append(arr)
+
+            resolved_node_ids = sorted(set(np.unique(np.concatenate(gathered)).astype(int).tolist()))
+
+        if not resolved_node_ids:
+            raise ValueError("orbit(): resolved node set is empty.")
+
+        sx = results.fetch(result_name=result_name, component=x_component, node_ids=resolved_node_ids)
+        sy = results.fetch(result_name=result_name, component=y_component, node_ids=resolved_node_ids)
+
+        def _select_stage(s: pd.Series) -> pd.Series:
+            if isinstance(s.index, pd.MultiIndex) and s.index.nlevels == 3:
+                if stage is None:
+                    stages = tuple(sorted({str(x) for x in s.index.get_level_values(0)}))
+                    raise ValueError(f"Multi-stage results detected. Provide stage=... Available: {stages}")
+                return s.xs(str(stage), level=0)
+            return s
+
+        sx = _select_stage(sx)
+        sy = _select_stage(sy)
+
+        if not (isinstance(sx.index, pd.MultiIndex) and sx.index.nlevels == 2):
+            raise ValueError("orbit(): expected index (node_id, step) after stage selection.")
+        if not (isinstance(sy.index, pd.MultiIndex) and sy.index.nlevels == 2):
+            raise ValueError("orbit(): expected index (node_id, step) after stage selection.")
+
+        sx, sy = sx.align(sy, join="inner")
+        if sx.size == 0:
+            raise ValueError("orbit(): no overlapping samples between x and y series after alignment.")
+
+        if not signed:
+            sx = sx.abs()
+            sy = sy.abs()
+
+        if reduce_nodes != "none":
+            wide_x = sx.unstack(level=-1)
+            wide_y = sy.unstack(level=-1)
+
+            steps = np.intersect1d(wide_x.columns.to_numpy(), wide_y.columns.to_numpy())
+            wide_x = wide_x.reindex(columns=steps)
+            wide_y = wide_y.reindex(columns=steps)
+
+            Ax = wide_x.to_numpy(dtype=float)
+            Ay = wide_y.to_numpy(dtype=float)
+
+            if reduce_nodes == "mean":
+                x = np.nanmean(Ax, axis=0)
+                y = np.nanmean(Ay, axis=0)
+            elif reduce_nodes == "median":
+                x = np.nanmedian(Ax, axis=0)
+                y = np.nanmedian(Ay, axis=0)
+            elif reduce_nodes == "max_abs":
+                ix = np.nanargmax(np.abs(Ax), axis=0)
+                iy = np.nanargmax(np.abs(Ay), axis=0)
+                j = np.arange(steps.size)
+                x = Ax[ix, j]
+                y = Ay[iy, j]
+            else:
+                raise ValueError("reduce_nodes must be one of: 'none', 'mean', 'median', 'max_abs'.")
+
+            sx_out = pd.Series(x, index=steps, name=f"{result_name}[{x_component}]")
+            sy_out = pd.Series(y, index=steps, name=f"{result_name}[{y_component}]")
+
+            if return_nodes:
+                return sx_out, sy_out, resolved_node_ids
+            return sx_out, sy_out
+
+        sx.name = f"{result_name}[{x_component}]"
+        sy.name = f"{result_name}[{y_component}]"
+
+        if return_nodes:
+            return sx, sy, resolved_node_ids
+        return sx, sy
 
 
 __all__ = ["AggregationEngine"]
