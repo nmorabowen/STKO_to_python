@@ -5,6 +5,8 @@ from typing import Optional, Sequence, Tuple
 import numpy as np
 import pandas as pd
 
+from ..selection import SelectionSetResolver
+
 
 class NodalResultsInfo:
     """
@@ -241,27 +243,22 @@ class NodalResultsInfo:
                 out.append(sx)
         return tuple(out)
 
-    def _selection_set_name_for(self, sid: int) -> str:
-        """
-        Extract selection set name for a given selection_set_id.
+    def _build_resolver(self) -> SelectionSetResolver:
+        """Build a fresh resolver from ``self.selection_set``.
 
-        Your schema uses:
-            selection_set[id]["SET_NAME"] = "ControlPoint"
+        Cheap: selection sets are small and construction is O(nSets). We
+        avoid caching on the instance to keep ``__slots__`` stable (pickle
+        compat) and because callers touch selection helpers rarely.
         """
         if self.selection_set is None:
-            return ""
-        d = self.selection_set.get(int(sid), {})
-        if not isinstance(d, dict):
-            return ""
+            raise ValueError("selection_set is None. No selection sets available.")
+        return SelectionSetResolver(self.selection_set)
 
-        for k in ("SET_NAME", "set_name", "NAME", "name", "Name"):
-            v = d.get(k)
-            if v is None:
-                continue
-            s = str(v).strip()
-            if s:
-                return s
-        return ""
+    def _selection_set_name_for(self, sid: int) -> str:
+        """Extract selection set name for a given selection_set_id."""
+        if self.selection_set is None:
+            return ""
+        return self._build_resolver().name_for(sid)
 
     def selection_set_ids_from_names(
         self,
@@ -273,31 +270,16 @@ class NodalResultsInfo:
 
         Raises if a name is missing or ambiguous.
         """
-        if self.selection_set is None:
-            raise ValueError("selection_set is None. No selection sets available.")
-
         names = self._normalize_selection_names(selection_set_name)
         if not names:
             raise ValueError("selection_set_name is empty.")
-
-        buckets: dict[str, list[int]] = {}
-        for sid in self.selection_set.keys():
-            try:
-                sid_i = int(sid)
-            except Exception:
-                continue
-            nm = self._selection_set_name_for(sid_i)
-            key = nm.strip().lower()
-            if not key:
-                continue
-            buckets.setdefault(key, []).append(sid_i)
+        resolver = self._build_resolver()
 
         resolved: list[int] = []
         for raw in names:
-            q = str(raw).strip().lower()
-            hits = buckets.get(q, [])
+            hits = resolver.ids_for_name(raw)
             if len(hits) == 0:
-                available = sorted(buckets.keys())
+                available = resolver.normalized_names()
                 preview = ", ".join(available[:50]) + (" ..." if len(available) > 50 else "")
                 raise ValueError(
                     f"Selection set name not found: {raw!r}. "

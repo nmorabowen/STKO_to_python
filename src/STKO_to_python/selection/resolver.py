@@ -179,6 +179,13 @@ class SelectionSetResolver:
             return ()
         return tuple(self._by_name.get(key, ()))
 
+    def normalized_names(self) -> tuple[str, ...]:
+        """Return all known set names in normalized (lowercased, stripped) form.
+
+        Useful for building "Available: ..." suggestions on a miss.
+        """
+        return tuple(sorted(self._by_name.keys()))
+
     # ------------------------------------------------------------------ #
     # Internals
     # ------------------------------------------------------------------ #

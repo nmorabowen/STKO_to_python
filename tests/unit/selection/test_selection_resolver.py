@@ -207,3 +207,13 @@ def test_ids_for_name_handles_duplicates():
     assert sorted(r.ids_for_name("Roof_Nodes")) == [1, 4]
     assert r.ids_for_name("ControlPoint") == (3,)
     assert r.ids_for_name("no_such") == ()
+
+
+def test_normalized_names_returns_sorted_lowercased():
+    r = SelectionSetResolver(_fake_selection_set())
+    names = r.normalized_names()
+    # All lowercased, sorted, no empty strings
+    assert all(n == n.lower() and n.strip() for n in names)
+    assert list(names) == sorted(names)
+    assert "controlpoint" in names
+    assert "columns_l1" in names
