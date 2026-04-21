@@ -514,129 +514,20 @@ class NodalResults:
         g_value: float = 9810,
         reduce_nodes: str = "max_abs",  # "max_abs" | "max" | "min"
     ) -> pd.DataFrame:
-        """
-        Story acceleration envelope (max, min, pga) using z-tolerance clustering.
-
-        Clusters the provided nodes into story levels by z-coordinate using `dz_tol`,
-        then computes per-story extrema over time, reduced across nodes.
-
-        Parameters
-        ----------
-        reduce_nodes:
-            - "max_abs": story pga is max abs over nodes at story (typical)
-            - "max":     story peak = max over nodes then over time (positive)
-            - "min":     story peak = min over nodes then over time (negative)
-
-        Returns
-        -------
-        DataFrame indexed by story_z with columns:
-            n_nodes, max_acc, min_acc, pga,
-            ctrl_node_max, ctrl_node_min, ctrl_node_pga
-
-        Notes
-        -----
-        - Control nodes are chosen among the nodes that are actually present in the
-        results after filtering/stage selection (fixes the potential mismatch bug).
-        - `n_nodes` reports the number of nodes *requested* in that story cluster,
-        not necessarily the number available in the results (see `n_nodes_present`).
-        """
-
-        stories = self._resolve_story_nodes_by_z_tol(
+        return self._aggregation_engine.story_pga_envelope(
+            self,
+            component=component,
             selection_set_id=selection_set_id,
             selection_set_name=selection_set_name,
             node_ids=node_ids,
             coordinates=coordinates,
+            result_name=result_name,
+            stage=stage,
             dz_tol=dz_tol,
+            to_g=to_g,
+            g_value=g_value,
+            reduce_nodes=reduce_nodes,
         )
-
-        # union of all ids
-        all_ids: list[int] = sorted({int(nid) for _, nodes in stories for nid in nodes})
-        if not all_ids:
-            raise ValueError("No nodes resolved.")
-
-        s = self.fetch(result_name=result_name, component=component, node_ids=all_ids)
-
-        # multi-stage -> require stage
-        if isinstance(s.index, pd.MultiIndex) and s.index.nlevels == 3:
-            if stage is None:
-                stages = tuple(sorted({str(x) for x in s.index.get_level_values(0)}))
-                raise ValueError(f"Multi-stage results detected. Provide stage=... Available: {stages}")
-            s = s.xs(str(stage), level=0)
-
-        if not (isinstance(s.index, pd.MultiIndex) and s.index.nlevels == 2):
-            raise ValueError("story_pga_envelope() expects index (node_id, step) after stage selection.")
-
-        # wide: rows=node_id, cols=step
-        wide = s.unstack(level=-1)
-
-        # Preserve the true node ids and array view
-        node_index = wide.index.to_numpy(dtype=int)  # shape (n_nodes_present,)
-        A = wide.to_numpy(dtype=float)               # shape (n_nodes_present, n_steps)
-
-        if A.size == 0:
-            raise ValueError("story_pga_envelope(): empty results after fetch/stage selection.")
-
-        if to_g:
-            A = A / float(g_value)
-
-        # per-node peaks over time
-        max_node = np.nanmax(A, axis=1)          # (n_nodes_present,)
-        min_node = np.nanmin(A, axis=1)          # (n_nodes_present,)
-        pga_node = np.nanmax(np.abs(A), axis=1)  # (n_nodes_present,)
-
-        # map node_id -> row index in A
-        row_of = {int(n): i for i, n in enumerate(node_index)}
-
-        rows: list[dict[str, float | int]] = []
-        for z, nodes in stories:
-            requested_nodes = [int(n) for n in nodes]
-            ridx = np.asarray([row_of[n] for n in requested_nodes if n in row_of], dtype=int)
-
-            # If none of the story nodes exist in results, skip
-            if ridx.size == 0:
-                continue
-
-            present_nodes = node_index[ridx]  # node ids that are actually present for this story
-
-            arr_max = max_node[ridx]
-            arr_min = min_node[ridx]
-            arr_pga = pga_node[ridx]
-
-            # choose story-wide envelope values + controlling nodes among PRESENT nodes
-            i_max = int(np.nanargmax(arr_max))
-            i_min = int(np.nanargmin(arr_min))
-            i_pga = int(np.nanargmax(arr_pga))
-
-            # baseline story envelope
-            story_max = float(arr_max[i_max])
-            story_min = float(arr_min[i_min])
-            story_pga = float(arr_pga[i_pga])
-
-            # optional alternate "reduce_nodes" semantics
-            # (kept simple: story fields still report max/min/pga; reduce_nodes can choose
-            # which one you care about downstream. If you want it to change pga definition,
-            # uncomment below and define accordingly.)
-            if reduce_nodes not in ("max_abs", "max", "min"):
-                raise ValueError("reduce_nodes must be one of: 'max_abs', 'max', 'min'.")
-
-            rows.append(
-                {
-                    "story_z": float(z),
-                    "n_nodes": int(len(requested_nodes)),
-                    "n_nodes_present": int(ridx.size),
-                    "max_acc": story_max,
-                    "min_acc": story_min,
-                    "pga": story_pga,
-                    "ctrl_node_max": int(present_nodes[i_max]),
-                    "ctrl_node_min": int(present_nodes[i_min]),
-                    "ctrl_node_pga": int(present_nodes[i_pga]),
-                }
-            )
-
-        if not rows:
-            raise ValueError("No story rows produced. Check dz_tol and node selection.")
-
-        return pd.DataFrame(rows).set_index("story_z").sort_index()
 
     def roof_torsion(
         self,

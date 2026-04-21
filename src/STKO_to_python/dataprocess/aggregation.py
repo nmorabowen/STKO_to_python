@@ -474,10 +474,99 @@ class AggregationEngine:
         g_value: float = 9810,
         reduce_nodes: str = "max_abs",
     ) -> pd.DataFrame:
-        raise NotImplementedError(
-            "AggregationEngine.story_pga_envelope not implemented yet; "
-            "filled in Phase 4.3.2."
+        """
+        Story acceleration envelope (max, min, pga) using z-tolerance
+        clustering. Controlling nodes are chosen among the nodes that
+        are actually present in the results after filtering + stage
+        selection (so ``n_nodes_present`` can be smaller than
+        ``n_nodes``).
+        """
+        import numpy as np
+
+        stories = self._resolve_story_nodes_by_z_tol(
+            results,
+            selection_set_id=selection_set_id,
+            selection_set_name=selection_set_name,
+            node_ids=node_ids,
+            coordinates=coordinates,
+            dz_tol=dz_tol,
         )
+
+        all_ids: list[int] = sorted({int(nid) for _, nodes in stories for nid in nodes})
+        if not all_ids:
+            raise ValueError("No nodes resolved.")
+
+        s = results.fetch(result_name=result_name, component=component, node_ids=all_ids)
+
+        if isinstance(s.index, pd.MultiIndex) and s.index.nlevels == 3:
+            if stage is None:
+                stages = tuple(sorted({str(x) for x in s.index.get_level_values(0)}))
+                raise ValueError(f"Multi-stage results detected. Provide stage=... Available: {stages}")
+            s = s.xs(str(stage), level=0)
+
+        if not (isinstance(s.index, pd.MultiIndex) and s.index.nlevels == 2):
+            raise ValueError("story_pga_envelope() expects index (node_id, step) after stage selection.")
+
+        wide = s.unstack(level=-1)
+
+        node_index = wide.index.to_numpy(dtype=int)
+        A = wide.to_numpy(dtype=float)
+
+        if A.size == 0:
+            raise ValueError("story_pga_envelope(): empty results after fetch/stage selection.")
+
+        if to_g:
+            A = A / float(g_value)
+
+        max_node = np.nanmax(A, axis=1)
+        min_node = np.nanmin(A, axis=1)
+        pga_node = np.nanmax(np.abs(A), axis=1)
+
+        row_of = {int(n): i for i, n in enumerate(node_index)}
+
+        rows: list[dict[str, float | int]] = []
+        for z, nodes in stories:
+            requested_nodes = [int(n) for n in nodes]
+            ridx = np.asarray([row_of[n] for n in requested_nodes if n in row_of], dtype=int)
+
+            if ridx.size == 0:
+                continue
+
+            present_nodes = node_index[ridx]
+
+            arr_max = max_node[ridx]
+            arr_min = min_node[ridx]
+            arr_pga = pga_node[ridx]
+
+            i_max = int(np.nanargmax(arr_max))
+            i_min = int(np.nanargmin(arr_min))
+            i_pga = int(np.nanargmax(arr_pga))
+
+            story_max = float(arr_max[i_max])
+            story_min = float(arr_min[i_min])
+            story_pga = float(arr_pga[i_pga])
+
+            if reduce_nodes not in ("max_abs", "max", "min"):
+                raise ValueError("reduce_nodes must be one of: 'max_abs', 'max', 'min'.")
+
+            rows.append(
+                {
+                    "story_z": float(z),
+                    "n_nodes": int(len(requested_nodes)),
+                    "n_nodes_present": int(ridx.size),
+                    "max_acc": story_max,
+                    "min_acc": story_min,
+                    "pga": story_pga,
+                    "ctrl_node_max": int(present_nodes[i_max]),
+                    "ctrl_node_min": int(present_nodes[i_min]),
+                    "ctrl_node_pga": int(present_nodes[i_pga]),
+                }
+            )
+
+        if not rows:
+            raise ValueError("No story rows produced. Check dz_tol and node selection.")
+
+        return pd.DataFrame(rows).set_index("story_z").sort_index()
 
     def residual_interstory_drift_profile(
         self,

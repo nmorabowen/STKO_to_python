@@ -624,6 +624,76 @@ def test_interstory_drift_envelope_unknown_representative_raises(nodal_displacem
 
 
 # ---------------------------------------------------------------------- #
+# story_pga_envelope
+# ---------------------------------------------------------------------- #
+def test_story_pga_envelope_forwarder_matches_engine(nodal_displacement):
+    """result_name is pinned to DISPLACEMENT (what the fixture exposes);
+    the envelope logic is identical to what it would do for ACCELERATION."""
+    nr = nodal_displacement
+    via_nr = nr.story_pga_envelope(
+        component=1,
+        node_ids=[1, 2, 3, 4],
+        result_name="DISPLACEMENT",
+        dz_tol=1e-6,
+    )
+    via_eng = nr._aggregation_engine.story_pga_envelope(
+        nr,
+        component=1,
+        node_ids=[1, 2, 3, 4],
+        result_name="DISPLACEMENT",
+        dz_tol=1e-6,
+    )
+    assert isinstance(via_nr, pd.DataFrame)
+    pd.testing.assert_frame_equal(via_nr, via_eng)
+
+
+def test_story_pga_envelope_columns_and_ordering(nodal_displacement):
+    nr = nodal_displacement
+    out = nr.story_pga_envelope(
+        component=1,
+        node_ids=[1, 2, 3, 4],
+        result_name="DISPLACEMENT",
+        dz_tol=1e-6,
+    )
+    assert out.index.name == "story_z"
+    assert {
+        "n_nodes", "n_nodes_present", "max_acc", "min_acc", "pga",
+        "ctrl_node_max", "ctrl_node_min", "ctrl_node_pga",
+    }.issubset(out.columns)
+    # story_z sorted ascending
+    zs = out.index.to_numpy()
+    assert (zs[:-1] <= zs[1:]).all()
+    # envelope ordering + pga non-negative
+    assert (out["max_acc"] >= out["min_acc"]).all()
+    assert (out["pga"] >= 0).all()
+
+
+def test_story_pga_envelope_to_g_divides(nodal_displacement):
+    """to_g=True scales results by 1/g_value."""
+    nr = nodal_displacement
+    out_raw = nr.story_pga_envelope(
+        component=1, node_ids=[1, 2, 3, 4], result_name="DISPLACEMENT",
+        dz_tol=1e-6,
+    )
+    out_g = nr.story_pga_envelope(
+        component=1, node_ids=[1, 2, 3, 4], result_name="DISPLACEMENT",
+        dz_tol=1e-6, to_g=True, g_value=2.0,
+    )
+    pd.testing.assert_series_equal(
+        out_g["pga"], out_raw["pga"] / 2.0, check_names=False,
+    )
+
+
+def test_story_pga_envelope_unknown_reduce_nodes_raises(nodal_displacement):
+    nr = nodal_displacement
+    with pytest.raises(ValueError, match="reduce_nodes"):
+        nr.story_pga_envelope(
+            component=1, node_ids=[1, 2, 3, 4], result_name="DISPLACEMENT",
+            dz_tol=1e-6, reduce_nodes="nope",
+        )
+
+
+# ---------------------------------------------------------------------- #
 # Engine sanity
 # ---------------------------------------------------------------------- #
 def test_class_level_engine_is_shared_singleton(nodal_displacement):
