@@ -73,6 +73,7 @@ IMPLEMENTED_METHODS = frozenset({
     "delta_u",
     "drift",
     "residual_drift",
+    "roof_torsion",
 })
 
 STUB_METHODS = tuple(m for m in EXPECTED_PUBLIC_METHODS if m not in IMPLEMENTED_METHODS)

@@ -247,6 +247,80 @@ def test_resolve_stories_requires_exactly_one_selector(nodal_displacement):
 
 
 # ---------------------------------------------------------------------- #
+# roof_torsion
+# ---------------------------------------------------------------------- #
+def _two_nodes_with_distinct_xy(nr) -> tuple[int, int]:
+    """Pick any two node ids from nodes_info that have different (x, y)."""
+    ni = nr.info.nodes_info
+    xcol = nr.info._resolve_column(ni, "x", required=True)
+    ycol = nr.info._resolve_column(ni, "y", required=True)
+    nid_col = nr.info._resolve_column(ni, "node_id", required=False)
+
+    if nid_col is not None:
+        rows = list(zip(ni[nid_col], ni[xcol], ni[ycol]))
+    else:
+        rows = list(zip(ni.index, ni[xcol], ni[ycol]))
+
+    for i, (ni_a, xa, ya) in enumerate(rows):
+        for ni_b, xb, yb in rows[i + 1:]:
+            if (float(xa), float(ya)) != (float(xb), float(yb)):
+                return int(ni_a), int(ni_b)
+    pytest.skip("No pair of nodes with distinct (x, y) in fixture.")
+
+
+def test_roof_torsion_forwarder_matches_engine(nodal_displacement):
+    nr = nodal_displacement
+    a, b = _two_nodes_with_distinct_xy(nr)
+    via_nr = nr.roof_torsion(node_a_id=a, node_b_id=b)
+    via_eng = nr._aggregation_engine.roof_torsion(nr, node_a_id=a, node_b_id=b)
+    assert isinstance(via_nr, pd.Series)
+    pd.testing.assert_series_equal(via_nr, via_eng)
+
+
+def test_roof_torsion_same_node_raises(nodal_displacement):
+    nr = nodal_displacement
+    with pytest.raises(ValueError, match="same node id"):
+        nr.roof_torsion(node_a_id=1, node_b_id=1)
+
+
+def test_roof_torsion_requires_exactly_one_id_or_coord(nodal_displacement):
+    nr = nodal_displacement
+    with pytest.raises(ValueError, match="exactly one"):
+        nr.roof_torsion(node_a_id=1)  # missing node_b
+
+
+def test_roof_torsion_abs_max_matches_nanmax(nodal_displacement):
+    nr = nodal_displacement
+    a, b = _two_nodes_with_distinct_xy(nr)
+    s = nr.roof_torsion(node_a_id=a, node_b_id=b, reduce="series")
+    v = nr.roof_torsion(node_a_id=a, node_b_id=b, reduce="abs_max")
+    assert v == pytest.approx(float(np.nanmax(np.abs(s.to_numpy(dtype=float)))))
+
+
+def test_roof_torsion_return_residual_tuple_and_columns(nodal_displacement):
+    nr = nodal_displacement
+    a, b = _two_nodes_with_distinct_xy(nr)
+    out, debug = nr.roof_torsion(node_a_id=a, node_b_id=b, return_residual=True)
+    assert isinstance(out, pd.Series)
+    assert isinstance(debug, pd.DataFrame)
+    assert {"du", "dv", "du_rot", "dv_rot", "ru", "rv"}.issubset(debug.columns)
+
+
+def test_roof_torsion_return_quality_adds_rigidity_columns(nodal_displacement):
+    nr = nodal_displacement
+    a, b = _two_nodes_with_distinct_xy(nr)
+    _, debug = nr.roof_torsion(node_a_id=a, node_b_id=b, return_quality=True)
+    assert {"rel_norm", "res_norm", "rigidity_ratio"}.issubset(debug.columns)
+
+
+def test_roof_torsion_unknown_reduce_raises(nodal_displacement):
+    nr = nodal_displacement
+    a, b = _two_nodes_with_distinct_xy(nr)
+    with pytest.raises(ValueError, match="reduce must be"):
+        nr.roof_torsion(node_a_id=a, node_b_id=b, reduce="nope")
+
+
+# ---------------------------------------------------------------------- #
 # Engine sanity
 # ---------------------------------------------------------------------- #
 def test_class_level_engine_is_shared_singleton(nodal_displacement):

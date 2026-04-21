@@ -457,10 +457,170 @@ class AggregationEngine:
         | float
         | tuple[pd.Series | float, pd.DataFrame]
     ):
-        raise NotImplementedError(
-            "AggregationEngine.roof_torsion not implemented yet; "
-            "filled in Phase 4.3.2."
-        )
+        """
+        Roof torsion (rotation about z) estimated from 2 roof nodes A, B.
+
+        Uses small-rotation relation:
+            theta(t) = ([du, dv] · [-dy, dx]) / (dx^2 + dy^2)
+        """
+        import numpy as np
+
+        # ----------------------------
+        # Resolve node ids
+        # ----------------------------
+        def _resolve_one(nid: int | None, coord: Sequence[float] | None, label: str) -> int:
+            provided = (nid is not None) + (coord is not None)
+            if provided != 1:
+                raise ValueError(f"{label}: provide exactly one of {label}_id or {label}_coord.")
+
+            if nid is not None:
+                return int(nid)
+
+            assert coord is not None
+            if not isinstance(coord, (list, tuple, np.ndarray)):
+                raise TypeError(f"{label}_coord must be a sequence like (x,y) or (x,y,z).")
+            pt = tuple(float(v) for v in coord)
+            if len(pt) not in (2, 3):
+                raise TypeError(f"{label}_coord must have length 2 or 3 (got {len(pt)}).")
+
+            return int(results.info.nearest_node_id([pt], return_distance=False)[0])
+
+        a_id = _resolve_one(node_a_id, node_a_coord, "node_a")
+        b_id = _resolve_one(node_b_id, node_b_coord, "node_b")
+
+        if a_id == b_id:
+            raise ValueError("node_a and node_b resolved to the same node id; cannot compute torsion.")
+
+        # ----------------------------
+        # Baseline plan geometry (dx, dy)
+        # ----------------------------
+        if results.info.nodes_info is None:
+            raise ValueError("nodes_info is required (must contain x,y) for roof_torsion().")
+
+        ni = results.info.nodes_info
+        xcol = results.info._resolve_column(ni, "x", required=True)
+        ycol = results.info._resolve_column(ni, "y", required=True)
+        nid_col = results.info._resolve_column(ni, "node_id", required=False)
+
+        def _xy_of(nid: int) -> tuple[float, float]:
+            if nid_col is not None:
+                row = ni.loc[ni[nid_col].to_numpy() == nid]
+                if row.empty:
+                    raise ValueError(f"node_id={nid} not found in nodes_info.")
+                return float(row.iloc[0][xcol]), float(row.iloc[0][ycol])
+            if nid not in ni.index:
+                raise ValueError(f"node_id={nid} not found in nodes_info index.")
+            return float(ni.loc[nid, xcol]), float(ni.loc[nid, ycol])
+
+        xa, ya = _xy_of(a_id)
+        xb, yb = _xy_of(b_id)
+
+        dx = float(xb - xa)
+        dy = float(yb - ya)
+        L2 = dx * dx + dy * dy
+        if L2 == 0.0:
+            raise ValueError("Reference nodes have identical (x,y) → baseline length is zero.")
+
+        # p = (-dy, dx)
+        px = -dy
+        py = dx
+
+        # ----------------------------
+        # Fetch Ux, Uy for both nodes
+        # ----------------------------
+        ux = results.fetch(result_name=result_name, component=ux_component, node_ids=[a_id, b_id])
+        uy = results.fetch(result_name=result_name, component=uy_component, node_ids=[a_id, b_id])
+
+        def _select_stage(s: pd.Series | pd.DataFrame):
+            if isinstance(s.index, pd.MultiIndex) and s.index.nlevels == 3:
+                if stage is None:
+                    stages = tuple(sorted({str(x) for x in s.index.get_level_values(0)}))
+                    raise ValueError(f"Multi-stage results detected. Provide stage=... Available: {stages}")
+                return s.xs(str(stage), level=0)
+            return s
+
+        ux = _select_stage(ux)
+        uy = _select_stage(uy)
+
+        if not (isinstance(ux.index, pd.MultiIndex) and ux.index.nlevels == 2):
+            raise ValueError("roof_torsion(): expected index (node_id, step) after stage selection.")
+
+        ux_a = ux.xs(a_id, level=0).sort_index()
+        ux_b = ux.xs(b_id, level=0).sort_index()
+        uy_a = uy.xs(a_id, level=0).sort_index()
+        uy_b = uy.xs(b_id, level=0).sort_index()
+
+        ux_a, ux_b = ux_a.align(ux_b, join="inner")
+        uy_a, uy_b = uy_a.align(uy_b, join="inner")
+
+        du = (ux_b - ux_a).to_numpy(dtype=float)
+        dv = (uy_b - uy_a).to_numpy(dtype=float)
+
+        # ----------------------------
+        # Projection (theta)
+        # ----------------------------
+        theta = (du * px + dv * py) / L2
+        if not signed:
+            theta = np.abs(theta)
+
+        theta_s = pd.Series(theta, index=ux_a.index, name="roof_torsion_theta_rad")
+
+        # ----------------------------
+        # Optional residual + quality
+        # ----------------------------
+        debug: pd.DataFrame | None = None
+        if return_residual or return_quality:
+            du_rot = theta * px
+            dv_rot = theta * py
+            ru = du - du_rot
+            rv = dv - dv_rot
+
+            debug_dict: dict[str, np.ndarray] = {
+                "du": du,
+                "dv": dv,
+                "du_rot": du_rot,
+                "dv_rot": dv_rot,
+                "ru": ru,
+                "rv": rv,
+            }
+
+            if return_quality:
+                rel_norm = np.sqrt(du * du + dv * dv)
+                res_norm = np.sqrt(ru * ru + rv * rv)
+                rigidity_ratio = np.divide(
+                    res_norm,
+                    rel_norm,
+                    out=np.full_like(res_norm, np.nan, dtype=float),
+                    where=rel_norm > 0.0,
+                )
+                debug_dict.update(
+                    {
+                        "rel_norm": rel_norm,
+                        "res_norm": res_norm,
+                        "rigidity_ratio": rigidity_ratio,
+                    }
+                )
+
+            debug = pd.DataFrame(debug_dict, index=ux_a.index)
+
+        # ----------------------------
+        # Reduction
+        # ----------------------------
+        if reduce == "series":
+            theta_out: pd.Series | float = theta_s
+        elif reduce == "abs_max":
+            theta_out = float(np.nanmax(np.abs(theta_s.to_numpy(dtype=float))))
+        elif reduce == "max":
+            theta_out = float(np.nanmax(theta_s.to_numpy(dtype=float)))
+        elif reduce == "min":
+            theta_out = float(np.nanmin(theta_s.to_numpy(dtype=float)))
+        else:
+            raise ValueError("reduce must be one of: 'series', 'abs_max', 'max', 'min'.")
+
+        if debug is not None:
+            return theta_out, debug
+
+        return theta_out
 
     def base_rocking(
         self,
