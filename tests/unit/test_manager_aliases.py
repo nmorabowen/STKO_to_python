@@ -47,3 +47,36 @@ def test_top_level_names_still_work():
     from STKO_to_python.elements.elements import ElementManager
     assert Nodes is NodeManager
     assert Elements is ElementManager
+
+
+# ---------------------------------------------------------------------- #
+# Layer 3 readers (Phase 3.2)
+# ---------------------------------------------------------------------- #
+def test_model_info_reader_is_importable():
+    from STKO_to_python.model.model_info import ModelInfoReader
+    assert ModelInfoReader.__name__ == "ModelInfoReader"
+
+
+def test_legacy_model_info_is_alias():
+    from STKO_to_python.model.model_info import ModelInfo, ModelInfoReader
+    assert ModelInfo is ModelInfoReader
+
+
+def test_model_info_reader_package_import():
+    from STKO_to_python.model import ModelInfo, ModelInfoReader
+    assert ModelInfo is ModelInfoReader
+
+
+def test_cdata_reader_is_importable():
+    from STKO_to_python.model.cdata import CDataReader
+    assert CDataReader.__name__ == "CDataReader"
+
+
+def test_legacy_cdata_is_alias():
+    from STKO_to_python.model.cdata import CData, CDataReader
+    assert CData is CDataReader
+
+
+def test_cdata_reader_package_import():
+    from STKO_to_python.model import CData, CDataReader
+    assert CData is CDataReader

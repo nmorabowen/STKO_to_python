@@ -13,8 +13,15 @@ logger = logging.getLogger(__name__)
 if TYPE_CHECKING:
     from ..core.dataset import MPCODataSet
 
-class ModelInfo:
+class ModelInfoReader:
     """
+    Canonical Layer 3 reader for MPCO model metadata.
+
+    Loads once on construction (via the ``MPCODataSet`` friend
+    relationship), then exposes read-only views. The legacy name
+    ``ModelInfo`` is preserved as an alias at the bottom of this module.
+    New code should prefer ``ModelInfoReader``.
+
     This class has a "friend" relationship with MPCODataSet, which is allowed
     to access protected methods.
     """
@@ -751,17 +758,11 @@ class ModelInfo:
             return int(match.group(1))
 
         raise ValueError(f"Un-recognisable STEP key: {step_key!r}")
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
+
+
+# Back-compat alias — see class docstring.
+ModelInfo = ModelInfoReader
+
     
     
     

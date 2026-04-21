@@ -11,8 +11,13 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class CData:
-    
+class CDataReader:
+    """Canonical Layer 3 reader for MPCO ``.cdata`` sidecar files.
+
+    The legacy name ``CData`` is preserved as an alias at the bottom of
+    this module; new code should prefer ``CDataReader``.
+    """
+
     def __init__(self, dataset:'MPCODataSet'):
         self.dataset = dataset
     
@@ -155,6 +160,10 @@ class CData:
         print('Available selection sets:')
         for key in selection_sets.keys():
             print(f'Set id:{key} - Set name: {selection_sets[key]["SET_NAME"]}')
+
+
+# Back-compat alias — see class docstring.
+CData = CDataReader
 
 
 
