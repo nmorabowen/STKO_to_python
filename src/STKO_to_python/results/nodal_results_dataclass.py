@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Dict, Optional, Sequence, Tuple, Union
 from pathlib import Path
 import gzip
+import logging
 import pickle
 
 import numpy as np
@@ -16,6 +17,9 @@ from ..dataprocess.aggregation import AggregationEngine
 
 if TYPE_CHECKING:
     from ..plotting.plot_dataclasses import ModelPlotSettings
+
+
+logger = logging.getLogger(__name__)
 
 
 class _ResultView:
@@ -134,15 +138,51 @@ class NodalResults:
     # Pickle support
     # ------------------------------------------------------------------ #
 
+    # Fields persisted by __getstate__ and restored by __setstate__.
+    # _views is NOT persisted (always rebuilt from df). _aggregation_engine
+    # lives on the class, never in instance state.
+    _PICKLE_FIELDS: tuple[str, ...] = (
+        "df",
+        "time",
+        "name",
+        "info",
+        "plot_settings",
+    )
+
     def __getstate__(self) -> dict[str, Any]:
         state = self.__dict__.copy()
         state["_views"] = None
         return state
 
     def __setstate__(self, state: dict[str, Any]) -> None:
-        self.__dict__.update(state)
+        """
+        Restore from a pickle dict. Tolerant of:
+          - extra keys from older layouts (silently dropped with a DEBUG log)
+          - missing keys (the corresponding attribute stays unset; callers
+            see an AttributeError at access time rather than a cryptic
+            unpickling failure)
+          - the absence of _aggregation_engine (it is a class attribute
+            and is always available, regardless of what's in the dict)
+        """
+        known = set(self._PICKLE_FIELDS)
+        # _views intentionally accepted but discarded — rebuilt below.
+        accepted_transient = {"_views"}
+
+        for key, value in state.items():
+            if key in known:
+                self.__dict__[key] = value
+            elif key in accepted_transient:
+                continue
+            else:
+                logger.debug(
+                    "NodalResults.__setstate__: dropping unknown pickle key %r",
+                    key,
+                )
+
+        # _views is never persisted — always rebuild against the loaded df.
         self._views = {}
-        self._build_views()
+        if "df" in self.__dict__:
+            self._build_views()
 
     def save_pickle(
         self,
