@@ -634,10 +634,155 @@ class AggregationEngine:
         reduce: str = "series",
         det_tol: float = 1e-12,
     ) -> pd.DataFrame | dict[str, float]:
-        raise NotImplementedError(
-            "AggregationEngine.base_rocking not implemented yet; "
-            "filled in Phase 4.3.2."
+        """
+        Estimate base rocking angles from Uz at 3 base nodes.
+
+        Model (small rotations):
+            w(x,y) = w0 + theta_x*y - theta_y*x
+
+        When the 3 resolved points are collinear or duplicated (geometry
+        matrix singular), returns a no-rocking fallback where theta_x,
+        theta_y, theta_mag are all zero and ``is_singular=True``. w0 is
+        still computed as the mean Uz across the 3 nodes.
+        """
+        import numpy as np
+
+        if len(node_coords_xy) != 3:
+            raise ValueError("node_coords_xy must contain exactly 3 (x,y) points.")
+
+        # --------------------------------------------------
+        # Resolve node ids (nearest at given z)
+        # --------------------------------------------------
+        pts = [(float(x), float(y), float(z_coord)) for x, y in node_coords_xy]
+        node_ids = results.info.nearest_node_id(pts, return_distance=False)
+        n1, n2, n3 = map(int, node_ids)
+
+        # --------------------------------------------------
+        # Fetch Uz for those 3 nodes (also used for fallback)
+        # --------------------------------------------------
+        uz = results.fetch(result_name=result_name, component=uz_component, node_ids=[n1, n2, n3])
+
+        # stage selection
+        if isinstance(uz.index, pd.MultiIndex) and uz.index.nlevels == 3:
+            if stage is None:
+                stages = tuple(sorted({str(x) for x in uz.index.get_level_values(0)}))
+                raise ValueError(f"Multi-stage results detected. Provide stage=... Available: {stages}")
+            uz = uz.xs(str(stage), level=0)
+
+        if not (isinstance(uz.index, pd.MultiIndex) and uz.index.nlevels == 2):
+            raise ValueError("base_rocking(): expected index (node_id, step) after stage selection.")
+
+        # wide: rows=node, cols=step
+        W = uz.unstack(level=-1).loc[[n1, n2, n3]]
+        w_steps = W.to_numpy(dtype=float)  # (3, nsteps)
+
+        # --------------------------------------------------
+        # Get plan coords for resolved nodes
+        # --------------------------------------------------
+        if results.info.nodes_info is None:
+            raise ValueError("nodes_info is required (must contain x,y) for base_rocking().")
+
+        ni = results.info.nodes_info
+        xcol = results.info._resolve_column(ni, "x", required=True)
+        ycol = results.info._resolve_column(ni, "y", required=True)
+        nid_col = results.info._resolve_column(ni, "node_id", required=False)
+
+        def _xy_of(nid: int) -> tuple[float, float]:
+            if nid_col is not None:
+                row = ni.loc[ni[nid_col].to_numpy() == nid]
+                if row.empty:
+                    raise ValueError(f"node_id={nid} not found in nodes_info.")
+                return float(row.iloc[0][xcol]), float(row.iloc[0][ycol])
+            if nid not in ni.index:
+                raise ValueError(f"node_id={nid} not found in nodes_info index.")
+            return float(ni.loc[nid, xcol]), float(ni.loc[nid, ycol])
+
+        x1, y1 = _xy_of(n1)
+        x2, y2 = _xy_of(n2)
+        x3, y3 = _xy_of(n3)
+
+        # --------------------------------------------------
+        # Geometry matrix A and singularity check
+        # w = w0 + theta_x*y - theta_y*x  => [1, y, -x] [w0, theta_x, theta_y]^T
+        # --------------------------------------------------
+        A = np.array(
+            [
+                [1.0, y1, -x1],
+                [1.0, y2, -x2],
+                [1.0, y3, -x3],
+            ],
+            dtype=float,
         )
+
+        duplicate = (len({n1, n2, n3}) < 3)
+        det = float(np.linalg.det(A))
+        singular = duplicate or (abs(det) < float(det_tol))
+
+        # --------------------------------------------------
+        # Fallback: singular geometry -> assume no rocking
+        # --------------------------------------------------
+        if singular:
+            w0 = np.nanmean(w_steps, axis=0)
+
+            out = pd.DataFrame(
+                {
+                    "w0": w0,
+                    "theta_x_rad": np.zeros_like(w0),
+                    "theta_y_rad": np.zeros_like(w0),
+                    "theta_mag_rad": np.zeros_like(w0),
+                    "is_singular": np.ones_like(w0, dtype=bool),
+                },
+                index=W.columns,
+            )
+
+            if reduce == "series":
+                return out
+
+            if reduce == "abs_max":
+                return {
+                    "theta_x_abs_max": 0.0,
+                    "theta_y_abs_max": 0.0,
+                    "theta_mag_abs_max": 0.0,
+                }
+
+            raise ValueError("reduce must be 'series' or 'abs_max'.")
+
+        # --------------------------------------------------
+        # Solve for each step: p = Ainv @ w
+        # p = [w0, theta_x, theta_y]
+        # --------------------------------------------------
+        Ainv = np.linalg.inv(A)
+        p_steps = Ainv @ w_steps
+
+        out = pd.DataFrame(
+            {
+                "w0": p_steps[0, :],
+                "theta_x_rad": p_steps[1, :],
+                "theta_y_rad": p_steps[2, :],
+            },
+            index=W.columns,
+        )
+
+        out["theta_mag_rad"] = np.sqrt(
+            out["theta_x_rad"].to_numpy(dtype=float) ** 2
+            + out["theta_y_rad"].to_numpy(dtype=float) ** 2
+        )
+        out["is_singular"] = False
+
+        if reduce == "series":
+            return out
+
+        if reduce == "abs_max":
+            tx = out["theta_x_rad"].to_numpy(dtype=float)
+            ty = out["theta_y_rad"].to_numpy(dtype=float)
+            tm = out["theta_mag_rad"].to_numpy(dtype=float)
+            return {
+                "theta_x_abs_max": float(np.nanmax(np.abs(tx))),
+                "theta_y_abs_max": float(np.nanmax(np.abs(ty))),
+                "theta_mag_abs_max": float(np.nanmax(np.abs(tm))),
+            }
+
+        raise ValueError("reduce must be 'series' or 'abs_max'.")
 
     def asce_torsional_irregularity(
         self,

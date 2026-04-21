@@ -321,6 +321,91 @@ def test_roof_torsion_unknown_reduce_raises(nodal_displacement):
 
 
 # ---------------------------------------------------------------------- #
+# base_rocking
+# ---------------------------------------------------------------------- #
+def _three_base_points(nr) -> tuple[list[tuple[float, float]], float]:
+    """Return ([(x,y)] * 3, z_coord). Uses nodes_info to pick any three
+    distinct-(x,y) base nodes at the minimum-z level; if none exist with
+    distinct (x,y), returns three points from the fixture (possibly
+    collinear — still useful for exercising the singular fallback)."""
+    ni = nr.info.nodes_info
+    xcol = nr.info._resolve_column(ni, "x", required=True)
+    ycol = nr.info._resolve_column(ni, "y", required=True)
+    zcol = nr.info._resolve_column(ni, "z", required=True)
+
+    rows = list(zip(ni[xcol], ni[ycol], ni[zcol]))
+    z_min = float(min(r[2] for r in rows))
+    base = [(float(x), float(y)) for x, y, z in rows if z == z_min]
+    if len(base) >= 3:
+        return base[:3], z_min
+    # fall back to any three nodes' xy (collinear → singular path)
+    return [(float(x), float(y)) for x, y, _ in rows[:3]], z_min
+
+
+def test_base_rocking_forwarder_matches_engine(nodal_displacement):
+    nr = nodal_displacement
+    pts, z = _three_base_points(nr)
+    via_nr = nr.base_rocking(node_coords_xy=pts, z_coord=z, uz_component=3)
+    via_eng = nr._aggregation_engine.base_rocking(
+        nr, node_coords_xy=pts, z_coord=z, uz_component=3
+    )
+    # Either both dicts (abs_max) or both DataFrames (series). Default is series.
+    assert isinstance(via_nr, pd.DataFrame)
+    pd.testing.assert_frame_equal(via_nr, via_eng)
+
+
+def test_base_rocking_output_columns(nodal_displacement):
+    nr = nodal_displacement
+    pts, z = _three_base_points(nr)
+    out = nr.base_rocking(node_coords_xy=pts, z_coord=z, uz_component=3)
+    assert {"w0", "theta_x_rad", "theta_y_rad", "theta_mag_rad", "is_singular"}.issubset(
+        out.columns
+    )
+
+
+def test_base_rocking_requires_three_points(nodal_displacement):
+    nr = nodal_displacement
+    with pytest.raises(ValueError, match="exactly 3"):
+        nr.base_rocking(node_coords_xy=[(0.0, 0.0), (1.0, 0.0)], z_coord=0.0)
+
+
+def test_base_rocking_singular_geometry_fallback(nodal_displacement):
+    """Three duplicate points → singular geometry → zero-rocking fallback,
+    is_singular=True, no exception raised."""
+    nr = nodal_displacement
+    ni = nr.info.nodes_info
+    xcol = nr.info._resolve_column(ni, "x", required=True)
+    ycol = nr.info._resolve_column(ni, "y", required=True)
+    zcol = nr.info._resolve_column(ni, "z", required=True)
+    # any node's coords, repeated
+    row0 = ni.iloc[0]
+    pt = (float(row0[xcol]), float(row0[ycol]))
+    z = float(row0[zcol])
+    out = nr.base_rocking(node_coords_xy=[pt, pt, pt], z_coord=z, uz_component=3)
+    assert isinstance(out, pd.DataFrame)
+    assert bool(out["is_singular"].iloc[0]) is True
+    assert (out["theta_x_rad"] == 0.0).all()
+    assert (out["theta_y_rad"] == 0.0).all()
+
+
+def test_base_rocking_abs_max_reduce_shape(nodal_displacement):
+    nr = nodal_displacement
+    pts, z = _three_base_points(nr)
+    out = nr.base_rocking(
+        node_coords_xy=pts, z_coord=z, uz_component=3, reduce="abs_max"
+    )
+    assert isinstance(out, dict)
+    assert set(out.keys()) == {"theta_x_abs_max", "theta_y_abs_max", "theta_mag_abs_max"}
+
+
+def test_base_rocking_unknown_reduce_raises(nodal_displacement):
+    nr = nodal_displacement
+    pts, z = _three_base_points(nr)
+    with pytest.raises(ValueError, match="reduce must be"):
+        nr.base_rocking(node_coords_xy=pts, z_coord=z, uz_component=3, reduce="nope")
+
+
+# ---------------------------------------------------------------------- #
 # Engine sanity
 # ---------------------------------------------------------------------- #
 def test_class_level_engine_is_shared_singleton(nodal_displacement):
