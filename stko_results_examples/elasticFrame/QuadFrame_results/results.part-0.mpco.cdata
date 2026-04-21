@@ -1,0 +1,806 @@
+#Begin LOCAL AXES definitions.
+#elem_id q.w q.x q.y q.z (quaternion components)
+*LOCAL_AXES
+13 1 0 0 0
+14 1 0 0 0
+15 1 0 0 0
+16 1 0 0 0
+17 1 0 0 0
+18 1 0 0 0
+19 1 0 0 0
+20 1 0 0 0
+21 1 0 0 0
+22 1 0 0 0
+23 1 0 0 0
+24 1 0 0 0
+25 1 0 0 0
+26 0 0.707107 0 0.707107
+27 0 0.707107 0 0.707107
+28 0 0.707107 0 0.707107
+29 0 0.707107 0 0.707107
+30 0 0.707107 0 0.707107
+31 0 0.707107 0 0.707107
+32 0 0.707107 0 0.707107
+33 0 0.707107 0 0.707107
+34 0 0.707107 0 0.707107
+35 0 0.707107 0 0.707107
+36 0 0.707107 0 0.707107
+37 0 0.707107 0 0.707107
+38 0 0.707107 0 0.707107
+39 0 0.707107 0 0.707107
+40 0 0.707107 0 0.707107
+41 0 0.707107 0 0.707107
+42 0 0.707107 0 0.707107
+43 0 0.707107 0 0.707107
+44 0 0.707107 0 0.707107
+45 0 0.707107 0 0.707107
+46 0 0.707107 0 0.707107
+47 0 0.707107 0 0.707107
+48 0 0.707107 0 0.707107
+49 0 0.707107 0 0.707107
+50 0 0.707107 0 0.707107
+64 0 0 0 1
+65 0 0 0 1
+66 0 0 0 1
+67 0 0 0 1
+68 0 0 0 1
+69 0 0 0 1
+70 0 0 0 1
+71 0 0 0 1
+72 0 0 0 1
+73 0 0 0 1
+74 0 0 0 1
+75 0 0 0 1
+113 0.707107 0.707107 0 0
+114 0.707107 0.707107 0 0
+115 0.707107 0.707107 0 0
+116 0.707107 0.707107 0 0
+117 0.707107 0.707107 0 0
+118 0.707107 0.707107 0 0
+119 0.707107 0.707107 0 0
+120 0.707107 0.707107 0 0
+121 0.707107 0.707107 0 0
+122 0.707107 0.707107 0 0
+123 0.707107 0.707107 0 0
+124 0.707107 0.707107 0 0
+125 0.707107 0.707107 0 0
+138 0.707107 0.707107 0 0
+139 0.707107 0.707107 0 0
+140 0.707107 0.707107 0 0
+141 0.707107 0.707107 0 0
+142 0.707107 0.707107 0 0
+143 0.707107 0.707107 0 0
+144 0.707107 0.707107 0 0
+145 0.707107 0.707107 0 0
+146 0.707107 0.707107 0 0
+147 0.707107 0.707107 0 0
+148 0.707107 0.707107 0 0
+149 0.707107 0.707107 0 0
+150 0.707107 0.707107 0 0
+163 0.707107 0.707107 0 0
+164 0.707107 0.707107 0 0
+165 0.707107 0.707107 0 0
+166 0.707107 0.707107 0 0
+167 0.707107 0.707107 0 0
+168 0.707107 0.707107 0 0
+169 0.707107 0.707107 0 0
+170 0.707107 0.707107 0 0
+171 0.707107 0.707107 0 0
+172 0.707107 0.707107 0 0
+173 0.707107 0.707107 0 0
+174 0.707107 0.707107 0 0
+175 0.707107 0.707107 0 0
+188 0.707107 0.707107 0 0
+189 0.707107 0.707107 0 0
+190 0.707107 0.707107 0 0
+191 0.707107 0.707107 0 0
+192 0.707107 0.707107 0 0
+193 0.707107 0.707107 0 0
+194 0.707107 0.707107 0 0
+195 0.707107 0.707107 0 0
+196 0.707107 0.707107 0 0
+197 0.707107 0.707107 0 0
+198 0.707107 0.707107 0 0
+199 0.707107 0.707107 0 0
+200 0.707107 0.707107 0 0
+213 0.707107 0.707107 0 0
+214 0.707107 0.707107 0 0
+215 0.707107 0.707107 0 0
+216 0.707107 0.707107 0 0
+217 0.707107 0.707107 0 0
+218 0.707107 0.707107 0 0
+219 0.707107 0.707107 0 0
+220 0.707107 0.707107 0 0
+221 0.707107 0.707107 0 0
+222 0.707107 0.707107 0 0
+223 0.707107 0.707107 0 0
+224 0.707107 0.707107 0 0
+225 0.707107 0.707107 0 0
+238 0.707107 0.707107 0 0
+239 0.707107 0.707107 0 0
+240 0.707107 0.707107 0 0
+241 0.707107 0.707107 0 0
+242 0.707107 0.707107 0 0
+243 0.707107 0.707107 0 0
+244 0.707107 0.707107 0 0
+245 0.707107 0.707107 0 0
+246 0.707107 0.707107 0 0
+247 0.707107 0.707107 0 0
+248 0.707107 0.707107 0 0
+249 0.707107 0.707107 0 0
+250 0.707107 0.707107 0 0
+263 0.707107 0.707107 0 0
+264 0.707107 0.707107 0 0
+265 0.707107 0.707107 0 0
+266 0.707107 0.707107 0 0
+267 0.707107 0.707107 0 0
+268 0.707107 0.707107 0 0
+269 0.707107 0.707107 0 0
+270 0.707107 0.707107 0 0
+271 0.707107 0.707107 0 0
+272 0.707107 0.707107 0 0
+273 0.707107 0.707107 0 0
+274 0.707107 0.707107 0 0
+275 0.707107 0.707107 0 0
+288 0.707107 0.707107 0 0
+289 0.707107 0.707107 0 0
+290 0.707107 0.707107 0 0
+291 0.707107 0.707107 0 0
+292 0.707107 0.707107 0 0
+293 0.707107 0.707107 0 0
+294 0.707107 0.707107 0 0
+295 0.707107 0.707107 0 0
+296 0.707107 0.707107 0 0
+297 0.707107 0.707107 0 0
+298 0.707107 0.707107 0 0
+299 0.707107 0.707107 0 0
+300 0.707107 0.707107 0 0
+314 0.707107 0.707107 0 0
+315 0.707107 0.707107 0 0
+316 0.707107 0.707107 0 0
+317 0.707107 0.707107 0 0
+318 0.707107 0.707107 0 0
+319 0.707107 0.707107 0 0
+320 0.707107 0.707107 0 0
+321 0.707107 0.707107 0 0
+322 0.707107 0.707107 0 0
+323 0.707107 0.707107 0 0
+324 0.707107 0.707107 0 0
+325 0.707107 0.707107 0 0
+339 0.707107 0.707107 0 0
+340 0.707107 0.707107 0 0
+341 0.707107 0.707107 0 0
+342 0.707107 0.707107 0 0
+343 0.707107 0.707107 0 0
+344 0.707107 0.707107 0 0
+345 0.707107 0.707107 0 0
+346 0.707107 0.707107 0 0
+347 0.707107 0.707107 0 0
+348 0.707107 0.707107 0 0
+349 0.707107 0.707107 0 0
+350 0.707107 0.707107 0 0
+364 0.707107 0.707107 0 0
+365 0.707107 0.707107 0 0
+366 0.707107 0.707107 0 0
+367 0.707107 0.707107 0 0
+368 0.707107 0.707107 0 0
+369 0.707107 0.707107 0 0
+370 0.707107 0.707107 0 0
+371 0.707107 0.707107 0 0
+372 0.707107 0.707107 0 0
+373 0.707107 0.707107 0 0
+374 0.707107 0.707107 0 0
+375 0.707107 0.707107 0 0
+389 0.707107 0.707107 0 0
+390 0.707107 0.707107 0 0
+391 0.707107 0.707107 0 0
+392 0.707107 0.707107 0 0
+393 0.707107 0.707107 0 0
+394 0.707107 0.707107 0 0
+395 0.707107 0.707107 0 0
+396 0.707107 0.707107 0 0
+397 0.707107 0.707107 0 0
+398 0.707107 0.707107 0 0
+399 0.707107 0.707107 0 0
+400 0.707107 0.707107 0 0
+414 0.707107 0.707107 0 0
+415 0.707107 0.707107 0 0
+416 0.707107 0.707107 0 0
+417 0.707107 0.707107 0 0
+418 0.707107 0.707107 0 0
+419 0.707107 0.707107 0 0
+420 0.707107 0.707107 0 0
+421 0.707107 0.707107 0 0
+422 0.707107 0.707107 0 0
+423 0.707107 0.707107 0 0
+424 0.707107 0.707107 0 0
+425 0.707107 0.707107 0 0
+439 0.707107 0.707107 0 0
+440 0.707107 0.707107 0 0
+441 0.707107 0.707107 0 0
+442 0.707107 0.707107 0 0
+443 0.707107 0.707107 0 0
+444 0.707107 0.707107 0 0
+445 0.707107 0.707107 0 0
+446 0.707107 0.707107 0 0
+447 0.707107 0.707107 0 0
+448 0.707107 0.707107 0 0
+449 0.707107 0.707107 0 0
+450 0.707107 0.707107 0 0
+464 0.707107 0.707107 0 0
+465 0.707107 0.707107 0 0
+466 0.707107 0.707107 0 0
+467 0.707107 0.707107 0 0
+468 0.707107 0.707107 0 0
+469 0.707107 0.707107 0 0
+470 0.707107 0.707107 0 0
+471 0.707107 0.707107 0 0
+472 0.707107 0.707107 0 0
+473 0.707107 0.707107 0 0
+474 0.707107 0.707107 0 0
+475 0.707107 0.707107 0 0
+489 0.707107 0.707107 0 0
+490 0.707107 0.707107 0 0
+491 0.707107 0.707107 0 0
+492 0.707107 0.707107 0 0
+493 0.707107 0.707107 0 0
+494 0.707107 0.707107 0 0
+495 0.707107 0.707107 0 0
+496 0.707107 0.707107 0 0
+497 0.707107 0.707107 0 0
+498 0.707107 0.707107 0 0
+499 0.707107 0.707107 0 0
+500 0.707107 0.707107 0 0
+514 0.707107 0.707107 0 0
+515 0.707107 0.707107 0 0
+516 0.707107 0.707107 0 0
+517 0.707107 0.707107 0 0
+518 0.707107 0.707107 0 0
+519 0.707107 0.707107 0 0
+520 0.707107 0.707107 0 0
+521 0.707107 0.707107 0 0
+522 0.707107 0.707107 0 0
+523 0.707107 0.707107 0 0
+524 0.707107 0.707107 0 0
+525 0.707107 0.707107 0 0
+539 0.707107 0.707107 0 0
+540 0.707107 0.707107 0 0
+541 0.707107 0.707107 0 0
+542 0.707107 0.707107 0 0
+543 0.707107 0.707107 0 0
+544 0.707107 0.707107 0 0
+545 0.707107 0.707107 0 0
+546 0.707107 0.707107 0 0
+547 0.707107 0.707107 0 0
+548 0.707107 0.707107 0 0
+549 0.707107 0.707107 0 0
+550 0.707107 0.707107 0 0
+564 0.707107 0.707107 0 0
+565 0.707107 0.707107 0 0
+566 0.707107 0.707107 0 0
+567 0.707107 0.707107 0 0
+568 0.707107 0.707107 0 0
+569 0.707107 0.707107 0 0
+570 0.707107 0.707107 0 0
+571 0.707107 0.707107 0 0
+572 0.707107 0.707107 0 0
+573 0.707107 0.707107 0 0
+574 0.707107 0.707107 0 0
+575 0.707107 0.707107 0 0
+589 0.707107 0.707107 0 0
+590 0.707107 0.707107 0 0
+591 0.707107 0.707107 0 0
+592 0.707107 0.707107 0 0
+593 0.707107 0.707107 0 0
+594 0.707107 0.707107 0 0
+595 0.707107 0.707107 0 0
+596 0.707107 0.707107 0 0
+597 0.707107 0.707107 0 0
+598 0.707107 0.707107 0 0
+599 0.707107 0.707107 0 0
+600 0.707107 0.707107 0 0
+614 0.707107 0.707107 0 0
+615 0.707107 0.707107 0 0
+616 0.707107 0.707107 0 0
+617 0.707107 0.707107 0 0
+618 0.707107 0.707107 0 0
+619 0.707107 0.707107 0 0
+620 0.707107 0.707107 0 0
+621 0.707107 0.707107 0 0
+622 0.707107 0.707107 0 0
+623 0.707107 0.707107 0 0
+624 0.707107 0.707107 0 0
+625 0.707107 0.707107 0 0
+639 0.707107 0.707107 0 0
+640 0.707107 0.707107 0 0
+641 0.707107 0.707107 0 0
+642 0.707107 0.707107 0 0
+643 0.707107 0.707107 0 0
+644 0.707107 0.707107 0 0
+645 0.707107 0.707107 0 0
+646 0.707107 0.707107 0 0
+647 0.707107 0.707107 0 0
+648 0.707107 0.707107 0 0
+649 0.707107 0.707107 0 0
+650 0.707107 0.707107 0 0
+664 0.707107 0.707107 0 0
+665 0.707107 0.707107 0 0
+666 0.707107 0.707107 0 0
+667 0.707107 0.707107 0 0
+668 0.707107 0.707107 0 0
+669 0.707107 0.707107 0 0
+670 0.707107 0.707107 0 0
+671 0.707107 0.707107 0 0
+672 0.707107 0.707107 0 0
+673 0.707107 0.707107 0 0
+674 0.707107 0.707107 0 0
+675 0.707107 0.707107 0 0
+689 0.707107 0.707107 0 0
+690 0.707107 0.707107 0 0
+691 0.707107 0.707107 0 0
+692 0.707107 0.707107 0 0
+693 0.707107 0.707107 0 0
+694 0.707107 0.707107 0 0
+695 0.707107 0.707107 0 0
+696 0.707107 0.707107 0 0
+697 0.707107 0.707107 0 0
+698 0.707107 0.707107 0 0
+699 0.707107 0.707107 0 0
+700 0.707107 0.707107 0 0
+714 0.707107 0.707107 0 0
+715 0.707107 0.707107 0 0
+716 0.707107 0.707107 0 0
+717 0.707107 0.707107 0 0
+718 0.707107 0.707107 0 0
+719 0.707107 0.707107 0 0
+720 0.707107 0.707107 0 0
+721 0.707107 0.707107 0 0
+722 0.707107 0.707107 0 0
+723 0.707107 0.707107 0 0
+724 0.707107 0.707107 0 0
+725 0.707107 0.707107 0 0
+
+#Begin SECTION OFFSET definitions.
+#elem_id yOffset zOffset (2D, in element local coordinate system)
+*SECTION_OFFSET
+
+#Begin BEAM PROFILE definitions.
+#For each profile the following data is provided:
+#PROFILE_ID
+#NPOINTS NTRIANGLES NEDGES NSWEEPS
+#points: DATASET(NPOINTS X [x y]), 1 point per line
+#triangles: DATASET(NTRIANGLES X [p1 p2 p3]) 1 triangle per line
+#edges: DATASET(NEDGES X [N  p1 p2 p3 ... pN]) 1 edge per line, with N=number of points in edge, P1,...,PN n points
+#sweeps: DATASET(NSWEEPS X [p1]) 1 id per line
+*BEAM_PROFILE
+1
+4 2 4 4
+-150 -200
+150 -200
+150 200
+-150 200
+0 1 2
+0 2 3
+2 0 1
+2 1 2
+2 2 3
+2 3 0
+0
+1
+2
+3
+
+#Begin BEAM PROFILE assignments.
+#For each element (only those with a profile assigned) the following data is provided:
+#ELEM_ID N_PROFILES PROF_ID_1 PROF_WEIGHT_1 ... PROF_ID_N PROF_WEIGHT_N
+#Where: #ELEM_ID = the id of the element
+#N_PROFILES = the number of profiles assigned to this element
+#PROF_ID_i = the i-th profile
+#PROF_WEIGHT_i = the i-th profile weight, normalized [0-1] to the element length
+*BEAM_PROFILE_ASSIGNMENT
+26 1 1 1
+27 1 1 1
+28 1 1 1
+29 1 1 1
+30 1 1 1
+31 1 1 1
+32 1 1 1
+33 1 1 1
+34 1 1 1
+35 1 1 1
+36 1 1 1
+37 1 1 1
+38 1 1 1
+39 1 1 1
+40 1 1 1
+41 1 1 1
+42 1 1 1
+43 1 1 1
+44 1 1 1
+45 1 1 1
+46 1 1 1
+47 1 1 1
+48 1 1 1
+49 1 1 1
+50 1 1 1
+64 1 1 1
+65 1 1 1
+66 1 1 1
+67 1 1 1
+68 1 1 1
+69 1 1 1
+70 1 1 1
+71 1 1 1
+72 1 1 1
+73 1 1 1
+74 1 1 1
+75 1 1 1
+
+#Begin ELEMENT INFO data.
+#For each element in the mesh (or a subset of them) the following data is provided:
+#ELEM_ID GEOM (LENGTH+)GEOMNAME SUBGEOM TYPE PPID (LENGTH+)PPNAME EPID (LENGTH+)EPNAME
+#Where: #ELEM_ID = the id of the element
+#GEOM = the parent geometry id (0 if none)
+#GEOMNAME = the parent geometry name
+#SUBGEOM = the 0-based index of the sub-geometry
+#TYPE = the type of the subgeometry
+*ELEMENT_INFO
+13 9 5 Merge 0 Edge 0 4 None 0 4 None
+14 9 5 Merge 0 Edge 0 4 None 0 4 None
+15 9 5 Merge 0 Edge 0 4 None 0 4 None
+16 9 5 Merge 0 Edge 0 4 None 0 4 None
+17 9 5 Merge 0 Edge 0 4 None 0 4 None
+18 9 5 Merge 0 Edge 0 4 None 0 4 None
+19 9 5 Merge 0 Edge 0 4 None 0 4 None
+20 9 5 Merge 0 Edge 0 4 None 0 4 None
+21 9 5 Merge 0 Edge 0 4 None 0 4 None
+22 9 5 Merge 0 Edge 0 4 None 0 4 None
+23 9 5 Merge 0 Edge 0 4 None 0 4 None
+24 9 5 Merge 0 Edge 0 4 None 0 4 None
+25 9 5 Merge 0 Edge 0 4 None 0 4 None
+26 9 5 Merge 1 Edge 1 7 elastic 2 14 elasticBeamCol
+27 9 5 Merge 1 Edge 1 7 elastic 2 14 elasticBeamCol
+28 9 5 Merge 1 Edge 1 7 elastic 2 14 elasticBeamCol
+29 9 5 Merge 1 Edge 1 7 elastic 2 14 elasticBeamCol
+30 9 5 Merge 1 Edge 1 7 elastic 2 14 elasticBeamCol
+31 9 5 Merge 1 Edge 1 7 elastic 2 14 elasticBeamCol
+32 9 5 Merge 1 Edge 1 7 elastic 2 14 elasticBeamCol
+33 9 5 Merge 1 Edge 1 7 elastic 2 14 elasticBeamCol
+34 9 5 Merge 1 Edge 1 7 elastic 2 14 elasticBeamCol
+35 9 5 Merge 1 Edge 1 7 elastic 2 14 elasticBeamCol
+36 9 5 Merge 1 Edge 1 7 elastic 2 14 elasticBeamCol
+37 9 5 Merge 1 Edge 1 7 elastic 2 14 elasticBeamCol
+38 9 5 Merge 1 Edge 1 7 elastic 2 14 elasticBeamCol
+39 9 5 Merge 1 Edge 1 7 elastic 2 14 elasticBeamCol
+40 9 5 Merge 1 Edge 1 7 elastic 2 14 elasticBeamCol
+41 9 5 Merge 1 Edge 1 7 elastic 2 14 elasticBeamCol
+42 9 5 Merge 1 Edge 1 7 elastic 2 14 elasticBeamCol
+43 9 5 Merge 1 Edge 1 7 elastic 2 14 elasticBeamCol
+44 9 5 Merge 1 Edge 1 7 elastic 2 14 elasticBeamCol
+45 9 5 Merge 1 Edge 1 7 elastic 2 14 elasticBeamCol
+46 9 5 Merge 1 Edge 1 7 elastic 2 14 elasticBeamCol
+47 9 5 Merge 1 Edge 1 7 elastic 2 14 elasticBeamCol
+48 9 5 Merge 1 Edge 1 7 elastic 2 14 elasticBeamCol
+49 9 5 Merge 1 Edge 1 7 elastic 2 14 elasticBeamCol
+50 9 5 Merge 1 Edge 1 7 elastic 2 14 elasticBeamCol
+64 9 5 Merge 2 Edge 1 7 elastic 2 14 elasticBeamCol
+65 9 5 Merge 2 Edge 1 7 elastic 2 14 elasticBeamCol
+66 9 5 Merge 2 Edge 1 7 elastic 2 14 elasticBeamCol
+67 9 5 Merge 2 Edge 1 7 elastic 2 14 elasticBeamCol
+68 9 5 Merge 2 Edge 1 7 elastic 2 14 elasticBeamCol
+69 9 5 Merge 2 Edge 1 7 elastic 2 14 elasticBeamCol
+70 9 5 Merge 2 Edge 1 7 elastic 2 14 elasticBeamCol
+71 9 5 Merge 2 Edge 1 7 elastic 2 14 elasticBeamCol
+72 9 5 Merge 2 Edge 1 7 elastic 2 14 elasticBeamCol
+73 9 5 Merge 2 Edge 1 7 elastic 2 14 elasticBeamCol
+74 9 5 Merge 2 Edge 1 7 elastic 2 14 elasticBeamCol
+75 9 5 Merge 2 Edge 1 7 elastic 2 14 elasticBeamCol
+113 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+114 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+115 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+116 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+117 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+118 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+119 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+120 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+121 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+122 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+123 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+124 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+125 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+138 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+139 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+140 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+141 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+142 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+143 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+144 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+145 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+146 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+147 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+148 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+149 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+150 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+163 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+164 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+165 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+166 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+167 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+168 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+169 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+170 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+171 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+172 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+173 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+174 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+175 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+188 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+189 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+190 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+191 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+192 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+193 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+194 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+195 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+196 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+197 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+198 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+199 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+200 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+213 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+214 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+215 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+216 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+217 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+218 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+219 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+220 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+221 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+222 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+223 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+224 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+225 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+238 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+239 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+240 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+241 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+242 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+243 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+244 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+245 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+246 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+247 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+248 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+249 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+250 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+263 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+264 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+265 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+266 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+267 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+268 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+269 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+270 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+271 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+272 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+273 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+274 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+275 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+288 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+289 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+290 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+291 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+292 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+293 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+294 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+295 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+296 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+297 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+298 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+299 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+300 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+314 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+315 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+316 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+317 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+318 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+319 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+320 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+321 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+322 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+323 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+324 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+325 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+339 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+340 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+341 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+342 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+343 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+344 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+345 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+346 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+347 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+348 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+349 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+350 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+364 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+365 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+366 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+367 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+368 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+369 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+370 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+371 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+372 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+373 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+374 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+375 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+389 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+390 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+391 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+392 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+393 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+394 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+395 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+396 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+397 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+398 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+399 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+400 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+414 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+415 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+416 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+417 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+418 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+419 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+420 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+421 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+422 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+423 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+424 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+425 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+439 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+440 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+441 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+442 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+443 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+444 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+445 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+446 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+447 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+448 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+449 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+450 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+464 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+465 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+466 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+467 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+468 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+469 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+470 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+471 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+472 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+473 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+474 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+475 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+489 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+490 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+491 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+492 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+493 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+494 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+495 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+496 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+497 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+498 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+499 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+500 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+514 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+515 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+516 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+517 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+518 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+519 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+520 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+521 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+522 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+523 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+524 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+525 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+539 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+540 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+541 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+542 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+543 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+544 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+545 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+546 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+547 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+548 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+549 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+550 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+564 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+565 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+566 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+567 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+568 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+569 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+570 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+571 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+572 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+573 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+574 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+575 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+589 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+590 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+591 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+592 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+593 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+594 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+595 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+596 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+597 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+598 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+599 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+600 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+614 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+615 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+616 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+617 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+618 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+619 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+620 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+621 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+622 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+623 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+624 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+625 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+639 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+640 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+641 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+642 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+643 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+644 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+645 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+646 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+647 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+648 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+649 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+650 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+664 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+665 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+666 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+667 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+668 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+669 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+670 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+671 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+672 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+673 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+674 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+675 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+689 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+690 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+691 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+692 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+693 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+694 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+695 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+696 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+697 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+698 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+699 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+700 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+714 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+715 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+716 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+717 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+718 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+719 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+720 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+721 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+722 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+723 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+724 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+725 9 5 Merge 0 Face 4 21 New physical property 4 2 Q4
+

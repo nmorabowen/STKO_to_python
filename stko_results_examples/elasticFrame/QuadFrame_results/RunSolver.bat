@@ -1,0 +1,1 @@
+"C:\Program Files\El Ladruno OpenSees\opensees_mp_ladruno.bat" ".\main.tcl" 2 & pause
