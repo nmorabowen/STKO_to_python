@@ -96,8 +96,24 @@ class MPCOResults:
         self.style: Optional[dict] = style
         self.name: Optional[str] = name
         self._station_index_cache: Optional[dict[str, int]] = None
-        
+
+        # Single MPCO_df instance shared by both accessors below. Phase 4.5
+        # introduced ``.df`` as the canonical accessor; ``.create_df`` is
+        # retained for backward compatibility with existing call sites.
         self.create_df = MPCO_df(self)
+
+    @property
+    def df(self) -> "MPCO_df":
+        """Canonical accessor for the MPCO-specific DataFrame extractors
+        (``drift_df``, ``pga_df``, ``torsion_df``, ``base_rocking_df``,
+        ``wide_to_long``, and their ``_long`` / ``_mod`` variants).
+
+        Same instance as ``self.create_df`` — ``.df`` is the preferred
+        spelling introduced in Phase 4.5 to match spec §8:
+        "Collapse MPCO_df into MPCOResults as a .df accessor." The older
+        ``.create_df`` attribute continues to work for back-compat.
+        """
+        return self.create_df
 
     # ------------------------------------------------------------------
     # IO
