@@ -143,6 +143,44 @@ def test_clear_result_caches_drops_engine_entries(elastic_frame_dir: Path):
     assert ds._nodal_query_engine.cached_result_count == 0
 
 
+def test_public_get_nodal_results_hits_engine_cache(elastic_frame_dir: Path):
+    """Phase 2 completion: calling ``Nodes.get_nodal_results`` directly
+    must route through the engine cache so repeat calls are free.
+    """
+    ds = MPCODataSet(str(elastic_frame_dir), "results", verbose=False)
+    nr1 = ds.nodes.get_nodal_results(
+        results_name="DISPLACEMENT",
+        model_stage="MODEL_STAGE[1]",
+        node_ids=[1, 2, 3, 4],
+    )
+    assert ds._nodal_query_engine.cached_result_count == 1
+    nr2 = ds.nodes.get_nodal_results(
+        results_name="DISPLACEMENT",
+        model_stage="MODEL_STAGE[1]",
+        node_ids=[1, 2, 3, 4],
+    )
+    assert nr2 is nr1
+    assert ds._nodal_query_engine.cached_result_count == 1
+
+
+def test_public_get_element_results_hits_engine_cache(elastic_frame_dir: Path):
+    ds = MPCODataSet(str(elastic_frame_dir), "results", verbose=False)
+    er1 = ds.elements.get_element_results(
+        results_name="force",
+        element_type="5-ElasticBeam3d",
+        element_ids=[1, 2, 3],
+        model_stage="MODEL_STAGE[1]",
+    )
+    assert ds._element_query_engine.cached_result_count == 1
+    er2 = ds.elements.get_element_results(
+        results_name="force",
+        element_type="5-ElasticBeam3d",
+        element_ids=[1, 2, 3],
+        model_stage="MODEL_STAGE[1]",
+    )
+    assert er2 is er1
+
+
 # ---------------------------------------------------------------------- #
 # Multi-partition: QuadFrame (MP case)
 # ---------------------------------------------------------------------- #

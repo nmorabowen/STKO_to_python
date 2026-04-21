@@ -267,7 +267,41 @@ class Nodes:
         selection_set_id: Union[int, Sequence[int], None] = None,
         selection_set_name: Union[str, Sequence[str], None] = None,
     ) -> "NodalResults":
+        """Route through the dataset-owned query engine so every call
+        benefits from the LRU cache. Thin wrapper; the actual read lives
+        in :meth:`_fetch_nodal_results_uncached`.
+        """
+        engine = getattr(self.dataset, "_nodal_query_engine", None)
+        if engine is not None:
+            return engine.fetch(
+                results_name=results_name,
+                model_stage=model_stage,
+                node_ids=node_ids,
+                selection_set_id=selection_set_id,
+                selection_set_name=selection_set_name,
+            )
+        # Fallback: engines may not yet be wired if this runs during
+        # ``__init__`` bootstrap.
+        return self._fetch_nodal_results_uncached(
+            results_name=results_name,
+            model_stage=model_stage,
+            node_ids=node_ids,
+            selection_set_id=selection_set_id,
+            selection_set_name=selection_set_name,
+        )
 
+    def _fetch_nodal_results_uncached(
+        self,
+        *,
+        results_name: Union[str, Sequence[str], None] = None,
+        model_stage: Union[str, Sequence[str], None] = None,
+        node_ids: Union[int, Sequence[int], Sequence[Sequence[int]], np.ndarray, None] = None,
+        selection_set_id: Union[int, Sequence[int], None] = None,
+        selection_set_name: Union[str, Sequence[str], None] = None,
+    ) -> "NodalResults":
+        """Uncached read path — used by the engine and by the public
+        ``get_nodal_results`` fallback when no engine is attached.
+        """
         stages = self._normalize_stages(model_stage, self.dataset.model_stages)
         results = self._normalize_results(results_name)
 

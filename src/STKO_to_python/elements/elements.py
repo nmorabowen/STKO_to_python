@@ -570,8 +570,42 @@ class Elements:
         model_stage: Optional[str] = None,
         verbose: bool = False,
     ) -> "ElementResults":
+        """Public entry point — routes through the dataset-owned query
+        engine so every call benefits from the LRU cache. Thin wrapper.
         """
-        Retrieve element results and return an ElementResults container.
+        engine = getattr(self.dataset, "_element_query_engine", None)
+        if engine is not None:
+            return engine.fetch(
+                results_name,
+                element_type,
+                element_ids=element_ids,
+                selection_set_id=selection_set_id,
+                selection_set_name=selection_set_name,
+                model_stage=model_stage,
+                verbose=verbose,
+            )
+        return self._fetch_element_results_uncached(
+            results_name=results_name,
+            element_type=element_type,
+            element_ids=element_ids,
+            selection_set_id=selection_set_id,
+            selection_set_name=selection_set_name,
+            model_stage=model_stage,
+            verbose=verbose,
+        )
+
+    def _fetch_element_results_uncached(
+        self,
+        *,
+        results_name: str,
+        element_type: str,
+        element_ids: Union[list[int], np.ndarray, None] = None,
+        selection_set_id: Union[int, Sequence[int], None] = None,
+        selection_set_name: Union[str, Sequence[str], None] = None,
+        model_stage: Optional[str] = None,
+        verbose: bool = False,
+    ) -> "ElementResults":
+        """Uncached read path for element results.
 
         Uses the unified _resolve_element_ids() API for element selection.
         Reads HDF5 with sorted fancy indexing for performance.

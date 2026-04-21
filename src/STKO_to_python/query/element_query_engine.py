@@ -77,7 +77,7 @@ class ElementResultsQueryEngine(BaseResultsQueryEngine):
             logger.debug("ElementResultsQueryEngine cache hit for key %r", cache_key)
             return cached  # type: ignore[return-value]
 
-        result = manager.get_element_results(
+        result = manager._fetch_element_results_uncached(
             results_name=results_name,
             element_type=element_type,
             element_ids=element_ids,

@@ -77,9 +77,10 @@ class NodalResultsQueryEngine(BaseResultsQueryEngine):
             logger.debug("NodalResultsQueryEngine cache hit for key %r", cache_key)
             return cached  # type: ignore[return-value]
 
-        # Delegate to the manager for the actual read — Phase 2.6 is a
-        # side-by-side scaffold; the read itself migrates here later.
-        result = manager.get_nodal_results(
+        # Call the manager's uncached read path. The public
+        # ``Nodes.get_nodal_results`` is a thin wrapper that routes back
+        # through this engine — calling it here would infinitely recurse.
+        result = manager._fetch_nodal_results_uncached(
             results_name=results_name,
             model_stage=model_stage,
             node_ids=node_ids,

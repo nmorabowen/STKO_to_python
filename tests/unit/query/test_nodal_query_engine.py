@@ -50,8 +50,8 @@ def test_fetch_delegates_to_manager_on_cold():
         selection_set={1: {"SET_NAME": "Roof", "NODES": {10, 11}, "ELEMENTS": set()}},
     )
     result = engine.fetch(selection_set_name="Roof", results_name="displacement")
-    manager.get_nodal_results.assert_called_once()
-    assert result is manager.get_nodal_results.return_value
+    manager._fetch_nodal_results_uncached.assert_called_once()
+    assert result is manager._fetch_nodal_results_uncached.return_value
 
 
 def test_fetch_cache_hit_avoids_manager_call():
@@ -61,7 +61,7 @@ def test_fetch_cache_hit_avoids_manager_call():
     )
     r1 = engine.fetch(selection_set_name="Roof", results_name="displacement")
     r2 = engine.fetch(selection_set_name="Roof", results_name="displacement")
-    assert manager.get_nodal_results.call_count == 1
+    assert manager._fetch_nodal_results_uncached.call_count == 1
     assert r1 is r2
 
 
@@ -75,7 +75,7 @@ def test_fetch_cache_miss_on_different_ids():
     )
     engine.fetch(selection_set_name="Roof", results_name="displacement")
     engine.fetch(selection_set_name="Floor", results_name="displacement")
-    assert manager.get_nodal_results.call_count == 2
+    assert manager._fetch_nodal_results_uncached.call_count == 2
 
 
 def test_fetch_cache_hit_across_equivalent_selection_inputs():
@@ -88,7 +88,7 @@ def test_fetch_cache_hit_across_equivalent_selection_inputs():
     )
     engine.fetch(selection_set_name="Roof", results_name="displacement")
     engine.fetch(node_ids=[10, 11], results_name="displacement")
-    assert manager.get_nodal_results.call_count == 1
+    assert manager._fetch_nodal_results_uncached.call_count == 1
 
 
 def test_fetch_cache_disabled_by_cache_size_zero():
@@ -98,7 +98,7 @@ def test_fetch_cache_disabled_by_cache_size_zero():
     )
     engine.fetch(selection_set_name="Roof", results_name="displacement")
     engine.fetch(selection_set_name="Roof", results_name="displacement")
-    assert manager.get_nodal_results.call_count == 2
+    assert manager._fetch_nodal_results_uncached.call_count == 2
 
 
 def test_build_cache_key_normalizes_ordering():
@@ -130,7 +130,7 @@ def test_fetch_routes_results_name_single_string():
         selection_set={1: {"SET_NAME": "Roof", "NODES": {10}, "ELEMENTS": set()}},
     )
     engine.fetch(selection_set_name="Roof", results_name="displacement")
-    kwargs = manager.get_nodal_results.call_args.kwargs
+    kwargs = manager._fetch_nodal_results_uncached.call_args.kwargs
     # Manager receives the unnormalized input (strings pass through); the
     # engine's job is caching, not signature massage.
     assert kwargs["results_name"] == "displacement"
