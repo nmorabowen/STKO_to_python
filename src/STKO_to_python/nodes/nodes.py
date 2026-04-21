@@ -15,6 +15,28 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _flatten_node_ids(
+    node_ids: Union[int, Sequence[Any], np.ndarray],
+) -> np.ndarray:
+    """Flatten scalar / 1-D / nested-sequence node IDs into a 1-D int64 array.
+
+    Preserves legacy behavior: ``[[1,2],[3]]`` is a valid input and yields
+    ``[1, 2, 3]``. A bare ``int`` becomes ``[int]``.
+    """
+    if isinstance(node_ids, (int, np.integer)):
+        return np.asarray([int(node_ids)], dtype=np.int64)
+    arr = np.asarray(node_ids, dtype=object)
+    if arr.dtype == object:
+        flat: list[int] = []
+        for x in node_ids:  # type: ignore[union-attr]
+            if isinstance(x, (list, tuple, np.ndarray)):
+                flat.extend(int(v) for v in x)
+            else:
+                flat.append(int(x))
+        return np.asarray(flat, dtype=np.int64)
+    return np.asarray(node_ids, dtype=np.int64)
+
+
 class Nodes:
     """
     High-performance MPCO nodal reader.
@@ -144,74 +166,6 @@ class Nodes:
             return (results,)
         return tuple(results)
 
-    @staticmethod
-    def _normalize_selection_names(
-        selection_set_name: Union[str, Sequence[str], None],
-    ) -> Tuple[str, ...]:
-        if selection_set_name is None:
-            return ()
-        if isinstance(selection_set_name, str):
-            return (selection_set_name,)
-        return tuple(selection_set_name)
-
-    def _selection_set_name_for(self, sid: int) -> str:
-        """
-        Best-effort extraction of selection set name from dataset.selection_set[sid].
-        Supports common key variants.
-        """
-        d = self.dataset.selection_set.get(int(sid), {})
-        if not isinstance(d, dict):
-            return ""
-        name = d.get("SET_NAME", d.get("name", d.get("Name", "")))
-        return "" if name is None else str(name)
-
-    def _selection_set_ids_from_names(self, names: Sequence[str]) -> Tuple[int, ...]:
-        """
-        Resolve selection set names -> IDs (case-insensitive match).
-
-        Raises if:
-          - a name matches nothing
-          - a name matches multiple IDs (ambiguous)
-        """
-        if not names:
-            return ()
-
-        # Build lookup: normalized name -> [ids]
-        buckets: Dict[str, list[int]] = {}
-        for sid in self.dataset.selection_set.keys():
-            try:
-                sid_i = int(sid)
-            except Exception:
-                continue
-            nm = self._selection_set_name_for(sid_i)
-            key = nm.strip().lower()
-            if not key:
-                continue
-            buckets.setdefault(key, []).append(sid_i)
-
-        resolved: list[int] = []
-        for raw in names:
-            key = str(raw).strip().lower()
-            if not key:
-                continue
-
-            hits = buckets.get(key, [])
-            if len(hits) == 0:
-                available = sorted(buckets.keys())
-                preview = ", ".join(available[:30]) + (" ..." if len(available) > 30 else "")
-                raise ValueError(
-                    f"Selection set name not found: {raw!r}. "
-                    f"Available (normalized) names include: {preview}"
-                )
-            if len(hits) > 1:
-                raise ValueError(
-                    f"Ambiguous selection set name {raw!r}: matches IDs {sorted(hits)}. "
-                    f"Use selection_set_id instead."
-                )
-            resolved.append(hits[0])
-
-        return tuple(resolved)
-
     def _resolve_node_ids(
         self,
         *,
@@ -219,48 +173,13 @@ class Nodes:
         selection_set_id: Union[int, Sequence[int], None],
         selection_set_name: Union[str, Sequence[str], None],
     ) -> np.ndarray:
-        gathered: list[np.ndarray] = []
-
-        # ---- selection_set_name -> selection_set_id(s)
-        name_list = self._normalize_selection_names(selection_set_name)
-        if name_list:
-            ids_from_names = self._selection_set_ids_from_names(name_list)
-            for sid in ids_from_names:
-                nodes = self.dataset.selection_set.get(int(sid), {}).get("NODES")
-                if not nodes:
-                    raise ValueError(f"Selection set {sid} empty or missing NODES.")
-                gathered.append(np.asarray(nodes, dtype=np.int64))
-
-        # ---- selection_set_id(s)
-        if selection_set_id is not None:
-            sel_ids = [selection_set_id] if isinstance(selection_set_id, int) else selection_set_id
-            for sid in sel_ids:
-                nodes = self.dataset.selection_set.get(int(sid), {}).get("NODES")
-                if not nodes:
-                    raise ValueError(f"Selection set {sid} empty or missing NODES.")
-                gathered.append(np.asarray(nodes, dtype=np.int64))
-
-        # ---- explicit node_ids
-        if node_ids is not None:
-            if isinstance(node_ids, (int, np.integer)):
-                gathered.append(np.asarray([node_ids], dtype=np.int64))
-            else:
-                arr = np.asarray(node_ids, dtype=object)
-                if arr.dtype == object:
-                    flat = []
-                    for x in node_ids:  # type: ignore
-                        flat.extend(x if isinstance(x, (list, tuple, np.ndarray)) else [x])
-                    gathered.append(np.asarray(flat, dtype=np.int64))
-                else:
-                    gathered.append(np.asarray(node_ids, dtype=np.int64))
-
-        if not gathered:
-            raise ValueError("Provide node_ids and/or selection_set_id and/or selection_set_name.")
-
-        out = np.unique(np.concatenate(gathered))
-        if out.size == 0:
-            raise ValueError("Resolved node set is empty.")
-        return out
+        resolver = self.dataset._selection_resolver
+        explicit = _flatten_node_ids(node_ids) if node_ids is not None else None
+        return resolver.resolve_nodes(
+            names=selection_set_name,
+            ids=selection_set_id,
+            explicit_ids=explicit,
+        )
 
     def _node_file_map(self, node_ids: np.ndarray) -> pd.DataFrame:
         df = self._ensure_node_index_df()
