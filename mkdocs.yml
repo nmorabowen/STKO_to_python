@@ -1,0 +1,93 @@
+site_name: STKO_to_python
+site_description: Python tools for parsing OpenSees MPCO (HDF5) recorder outputs produced by STKO.
+site_author: Nicolas Mora Bowen
+repo_url: https://github.com/nmorabowen/STKO_to_python
+repo_name: nmorabowen/STKO_to_python
+edit_uri: edit/main/docs/
+
+# MkDocs looks for markdown under docs/ by default.
+docs_dir: docs
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.indexes
+    - navigation.top
+    - search.highlight
+    - search.suggest
+    - content.code.copy
+    - content.code.annotate
+    - toc.follow
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [src]
+          options:
+            docstring_style: google
+            show_source: true
+            show_root_heading: true
+            show_root_full_path: false
+            show_signature_annotations: true
+            separate_signature: true
+            merge_init_into_class: true
+            members_order: source
+            filters: ["!^_"]  # hide private members by default
+            show_symbol_type_heading: true
+            show_symbol_type_toc: true
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+
+nav:
+  - Home: index.md
+  - Architecture: architecture.md
+  - Design spec (historical): architecture-refactor-proposal.md
+  - API reference:
+      - Overview: api/index.md
+      - MPCODataSet: api/mpco-dataset.md
+      - NodalResults: api/nodal-results.md
+      - AggregationEngine: api/aggregation-engine.md
+      - Query engines: api/query-engines.md
+      - Plotting: api/plotting.md
+      - MPCOResults: api/mpco-results.md
+  - Legacy class notes:
+      - MPCODataSet: MPCODataSet.md
+      - NodalResults: NodalResults.md
+      - ElementResults: ElementResults.md

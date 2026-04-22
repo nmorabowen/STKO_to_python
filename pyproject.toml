@@ -48,6 +48,14 @@ test = [
 bench = [
     "pytest-benchmark>=4.0",
 ]
+# Installed with: pip install -e ".[docs]"
+# Builds the documentation site via MkDocs + Material theme +
+# mkdocstrings (autodoc from docstrings). Introduced in Phase 5.2.c.
+docs = [
+    "mkdocs>=1.6",
+    "mkdocs-material>=9.5",
+    "mkdocstrings[python]>=0.25",
+]
 
 [project.urls]
 "Homepage" = "https://github.com/nmorabowen/STKO_to_python"
