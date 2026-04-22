@@ -8,13 +8,26 @@ figures via `NodalResultsPlotter`.
 
 ## Install
 
-```bash
-# From the repository root
-pip install -e .
+Grab the wheel from the [latest GitHub Release](https://github.com/nmorabowen/STKO_to_python/releases/latest)
+and install it with `pip`. No clone, no `git` required:
 
-# Optional extras
-pip install -e ".[test]"    # pytest
-pip install -e ".[bench]"   # pytest-benchmark for bench/
+```bash
+# Replace vX.Y.Z with the version from the Releases page.
+pip install https://github.com/nmorabowen/STKO_to_python/releases/download/vX.Y.Z/stko_to_python-X.Y.Z-py3-none-any.whl
+```
+
+Upgrading is the same command pointed at a newer release URL — each
+release is a distinct version, so `pip install --upgrade <url>` works
+naturally.
+
+### From a clone (contributors)
+
+```bash
+pip install -e .
+pip install -e ".[test]"       # pytest
+pip install -e ".[bench]"      # pytest-benchmark for bench/
+pip install -e ".[docs]"       # MkDocs + Material + mkdocstrings
+pip install -e ".[notebook]"   # Jupyter stack for examples/notebooks
 ```
 
 Python 3.11+.

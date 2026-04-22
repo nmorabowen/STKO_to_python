@@ -1,0 +1,60 @@
+name: Release
+
+# Triggers on tags of the form v1.2.3. Pushing a non-matching tag does
+# nothing. Intentional manual trigger: you tag when the release is
+# ready, the workflow builds the wheel + sdist and attaches them to
+# the GitHub Release for that tag.
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write  # needed to create/update the Release
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install build backend
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install build
+
+      - name: Verify tag matches pyproject version
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PYVER=$(python -c "import tomllib, pathlib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")
+          if [ "$TAG" != "$PYVER" ]; then
+            echo "Tag v$TAG does not match pyproject version $PYVER"
+            exit 1
+          fi
+          echo "Tag and pyproject version agree: $PYVER"
+
+      - name: Build wheel and sdist
+        run: python -m build
+
+      - name: Upload build artifacts (for inspection)
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/*
+
+      - name: Attach artifacts to the GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.whl
+            dist/*.tar.gz
+          generate_release_notes: true
+          fail_on_unmatched_files: true

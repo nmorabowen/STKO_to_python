@@ -4,13 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "STKO_to_python"
-version = "0.1.0"
+version = "1.0.0"
 description = "STKO tools for Python"
 readme = "README.md"
 authors = [
     {name = "Nicolas Mora Bowen", email = "nmorabowen@gmail.com"}
 ]
-license = {text = "MIT"}
+license = "MIT"
+license-files = ["LICENSE"]
 classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
@@ -26,8 +27,6 @@ dependencies = [
     "h5py",
     # matplotlib: plotting backend for Plot / NodalResultsPlotter
     "matplotlib",
-    # jupyter: examples/notebooks smoke-tested in CI
-    "jupyter",
     # tables: PyTables backend used by some pandas HDF paths
     "tables",
     # pandas: result DataFrames are the primary return type
@@ -37,6 +36,14 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Installed with: pip install -e ".[notebook]"
+# Jupyter stack for running the example notebooks. Not required for
+# library use — the core API is notebook-free. Moved out of required
+# deps so `pip install stko-to-python` doesn't pull ~50 transitive
+# packages that library consumers don't need.
+notebook = [
+    "jupyter",
+]
 # Installed with: pip install -e ".[test]"
 test = [
     "pytest>=7.4",
@@ -59,7 +66,9 @@ docs = [
 
 [project.urls]
 "Homepage" = "https://github.com/nmorabowen/STKO_to_python"
+"Documentation" = "https://nmorabowen.github.io/STKO_to_python/"
 "Bug Tracker" = "https://github.com/nmorabowen/STKO_to_python/issues"
+"Releases" = "https://github.com/nmorabowen/STKO_to_python/releases"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

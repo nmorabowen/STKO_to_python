@@ -10,11 +10,23 @@ produces publication figures via `NodalResultsPlotter`.
 
 ## Install
 
+The library ships as a wheel attached to each
+[GitHub Release](https://github.com/nmorabowen/STKO_to_python/releases).
+No clone, no `git` required:
+
+```bash
+# Replace vX.Y.Z with the version from the Releases page.
+pip install https://github.com/nmorabowen/STKO_to_python/releases/download/vX.Y.Z/stko_to_python-X.Y.Z-py3-none-any.whl
+```
+
+### From a clone (contributors)
+
 ```bash
 pip install -e .                 # core
 pip install -e ".[test]"         # pytest
 pip install -e ".[bench]"        # pytest-benchmark
 pip install -e ".[docs]"         # MkDocs + Material + mkdocstrings
+pip install -e ".[notebook]"     # Jupyter stack for examples
 ```
 
 Python 3.11+.

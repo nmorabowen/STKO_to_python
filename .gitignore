@@ -4,6 +4,8 @@ __pycache__/
 
 # Ignore Python packaging files
 *.egg-info/
+/dist/
+/build/
 src/STKO_to_python/examples/log.log
 log.log
 
