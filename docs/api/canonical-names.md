@@ -6,7 +6,7 @@ in a closed-form `localForce` bucket, `sigma11` in a continuum stress
 bucket. The canonical-name layer provides a stable vocabulary that works
 across all families.
 
-Source: [`STKO_to_python/elements/canonical.py`](../../src/STKO_to_python/elements/canonical.py)
+Source: [`STKO_to_python/elements/canonical.py`](https://github.com/nmorabowen/STKO_to_python/blob/main/src/STKO_to_python/elements/canonical.py)
 
 ---
 
