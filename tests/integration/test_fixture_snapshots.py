@@ -86,8 +86,9 @@ SNAPSHOTS = [
         "results_name": "section.force",
         "element_type": "203-ASDShellQ4",
         "n_cols": 32,
-        "n_ip": 0,  # shell connectivity carries no GP_X attribute
-        "gp_xi": None,
+        "n_ip": 4,                     # 2x2 Gauss-Legendre, from catalog
+        "gp_xi": None,                 # multi-D — gp_xi is line-element only
+        "gp_natural_shape": (4, 2),    # in-plane (ξ, η)
         "first3": ("Fxx_ip0", "Fyy_ip0", "Fxy_ip0"),
         "last3": ("Mxy_ip3", "Vxz_ip3", "Vyz_ip3"),
     },
@@ -99,8 +100,9 @@ SNAPSHOTS = [
         "results_name": "section.deformation",
         "element_type": "203-ASDShellQ4",
         "n_cols": 32,
-        "n_ip": 0,
+        "n_ip": 4,
         "gp_xi": None,
+        "gp_natural_shape": (4, 2),
         "first3": ("epsXX_ip0", "epsYY_ip0", "epsXY_ip0"),
         "last3": ("kappaXY_ip3", "gammaXZ_ip3", "gammaYZ_ip3"),
     },
@@ -139,8 +141,9 @@ SNAPSHOTS = [
         "results_name": "material.stress",
         "element_type": "56-Brick",
         "n_cols": 48,
-        "n_ip": 0,  # no GP_X on Brick connectivity
-        "gp_xi": None,
+        "n_ip": 8,                     # 2x2x2 Gauss-Legendre, from catalog
+        "gp_xi": None,                 # multi-D — gp_xi is line-element only
+        "gp_natural_shape": (8, 3),    # 3-D (ξ, η, ζ)
         "first3": ("sigma11_ip0", "sigma22_ip0", "sigma33_ip0"),
         "last3": ("sigma12_ip7", "sigma23_ip7", "sigma13_ip7"),
     },
@@ -258,6 +261,17 @@ def test_bucket_snapshot(snap, request, _ds_cache):
             rtol=1e-6,
             atol=1e-7,
             err_msg=f"{snap['id']}: gp_xi snapshot mismatch",
+        )
+
+    expected_nat_shape = snap.get("gp_natural_shape")
+    if expected_nat_shape is not None:
+        assert er.gp_natural is not None, (
+            f"{snap['id']}: expected gp_natural shape {expected_nat_shape}, "
+            f"got None"
+        )
+        assert er.gp_natural.shape == expected_nat_shape, (
+            f"{snap['id']}: gp_natural shape "
+            f"{er.gp_natural.shape} != {expected_nat_shape}"
         )
 
 
