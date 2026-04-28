@@ -88,6 +88,7 @@ nav:
       - Query engines: api/query-engines.md
       - Plotting: api/plotting.md
       - MPCOResults: api/mpco-results.md
+      - Canonical names: api/canonical-names.md
   - Usage guides:
       - MPCODataSet: MPCODataSet.md
       - NodalResults: NodalResults.md
