@@ -15,12 +15,14 @@ Sections:
     3.  ``at_ip()`` on Brick — per-IP stress slice.
     4.  ``physical_coords()`` on Brick — IP positions inside element bbox.
     5.  ``jacobian_dets()`` and element volume via quadrature.
-    6.  ``integrate_canonical("stress_11")`` — volume-integrated σ₁₁.
-    7.  Beam ``section.force`` — 2-IP line-station, gp_xi at ±1.
-    8.  Beam fiber section — ``section.fiber.stress``, 6 fibers × 2 IPs.
+    6.  ``integrate_canonical("stress_11")`` — volume-integrated sigma_11.
+    7.  Beam ``section.force`` — 2-IP line-station, gp_xi at +-1.
+    8.  Beam fiber section — ``section.fiber.stress``, 6 fibers x 2 IPs.
     9.  ``at_ip()`` on fiber result — all 6 fibers at one station.
    10.  Why ``integrate_canonical`` is not available for fiber buckets.
-   11.  ElementResults pickle round-trip.
+   11.  ``plot.diagram()`` — bending moment diagram along a beam element.
+   12.  ``plot.scatter()`` — Gauss-point stress scatter for a brick element.
+   13.  ElementResults pickle round-trip.
 
 Run with::
 
@@ -31,6 +33,10 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 import numpy as np
 
 from STKO_to_python import MPCODataSet
@@ -328,10 +334,67 @@ def section_10_fiber_integrate_raises(er: ElementResults) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 11. Pickle round-trip
+# 11. plot.diagram() — bending moment diagram along a beam element
 # ---------------------------------------------------------------------------
-def section_11_pickle(er_brick: ElementResults) -> None:
-    section("11. ElementResults pickle round-trip")
+def section_11_beam_diagram(er_sf: ElementResults) -> None:
+    section("11. plot.diagram() - bending moment diagram along a beam")
+
+    # er_sf is the section.force result (n_ip=2, gp_xi=[-1, +1]).
+    # diagram() requires gp_dim==1 and a canonical that maps to exactly n_ip cols.
+    eid = er_sf.element_ids[0]
+    step = 1
+
+    # Physical x-axis (requires element_node_coords)
+    ax, meta = er_sf.plot.diagram(
+        "bending_moment_z",
+        element_id=eid,
+        step=step,
+    )
+    print(f"diagram('bending_moment_z', element={eid}, step={step})")
+    print(f"  x (physical position): {meta['x']}")
+    print(f"  y (Mz values):         {meta['y']}")
+    print(f"  columns used:          {meta['columns']}")
+    plt.close("all")
+
+    # Natural xi axis (no node coords needed)
+    ax, meta = er_sf.plot.diagram(
+        "axial_force",
+        element_id=eid,
+        step=step,
+        x_in_natural=True,
+    )
+    print(f"\ndiagram('axial_force', x_in_natural=True)")
+    print(f"  xi values: {meta['x']}")
+    print(f"  P values:  {meta['y']}")
+    plt.close("all")
+
+
+# ---------------------------------------------------------------------------
+# 12. plot.scatter() — Gauss-point stress scatter for a brick element
+# ---------------------------------------------------------------------------
+def section_12_brick_scatter(er_brick: ElementResults) -> None:
+    section("12. plot.scatter() - stress_11 at Gauss points (x-z view)")
+
+    step = 1
+    ax, meta = er_brick.plot.scatter(
+        "stress_11",
+        step=step,
+        axes=("x", "z"),
+    )
+    print(f"scatter('stress_11', step={step}, axes=('x','z'))")
+    print(f"  x shape:      {meta['x'].shape}  ({er_brick.n_elements} elements x {er_brick.n_ip} IPs)")
+    print(f"  values shape: {meta['values'].shape}")
+    print(f"  values range: [{meta['values'].min():.3e}, {meta['values'].max():.3e}]")
+    # Add a colorbar to the figure for a complete publication-ready result:
+    #   ax.figure.colorbar(meta["scatter"], ax=ax, label="sigma_11")
+    plt.close("all")
+
+
+# ---------------------------------------------------------------------------
+# 13. Pickle round-trip
+# ---------------------------------------------------------------------------
+def section_13_pickle(er_brick: ElementResults) -> None:
+    section("13. ElementResults pickle round-trip")
 
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "brick.pkl"
@@ -369,11 +432,13 @@ def main() -> None:
     section_4_physical_coords(er_brick)
     section_5_volumes(er_brick)
     section_6_integrate_canonical(er_brick)
-    section_7_beam_section_force(ds, beam_ids)
+    er_beam = section_7_beam_section_force(ds, beam_ids)
     er_fiber = section_8_fiber_stress(ds, beam_ids)
     section_9_at_ip_fiber(er_fiber)
     section_10_fiber_integrate_raises(er_fiber)
-    section_11_pickle(er_brick)
+    section_11_beam_diagram(er_beam)
+    section_12_brick_scatter(er_brick)
+    section_13_pickle(er_brick)
 
     print()
     print("solid_mixed_example complete.")
