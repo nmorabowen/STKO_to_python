@@ -7,14 +7,17 @@ wrapper" from spec §8.
 """
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Optional, Sequence, Tuple, Union
 
+import numpy as np
 import matplotlib.pyplot as plt
 
 from .deformed_shape import plot_deformed_shape, plot_undeformed_shape
+from .mesh import plot_mesh, plot_mesh_with_contour
 
 if TYPE_CHECKING:
     from ..core.dataset import MPCODataSet
+    from ..elements.element_results import ElementResults
 
 
 class Plot:
@@ -159,6 +162,97 @@ class Plot:
             linewidth=linewidth,
             alpha=alpha,
             title=title,
+        )
+
+
+    # ------------------------------------------------------------------ #
+    # Mesh visualization ("show me the model")
+    # ------------------------------------------------------------------ #
+
+    def mesh(
+        self,
+        *,
+        model_stage: Optional[str] = None,
+        element_type: Optional[str] = None,
+        element_ids: Union[int, Sequence[int], np.ndarray, None] = None,
+        ax: Any = None,
+        edge_color: Any = "lightgray",
+        linewidth: float = 0.5,
+        alpha: float = 1.0,
+        title: Optional[str] = None,
+        **kwargs: Any,
+    ) -> Tuple[Any, dict]:
+        """Render element edges from the cached connectivity.
+
+        Useful as a "show me the model" backdrop before or under a
+        contour plot. Composes with
+        :meth:`ElementResultsPlotter.scatter` — call ``mesh()`` first,
+        then pass the returned ``ax`` to ``er.plot.scatter(..., ax=ax)``
+        so a single axes carries both the wireframe and the IP scatter.
+
+        See :func:`STKO_to_python.plotting.mesh.plot_mesh` for the full
+        parameter list.
+
+        Examples
+        --------
+        Compose mesh + contour into a single axes::
+
+            ax, _ = ds.plot.mesh(element_type="ASDShellQ4")
+            er = ds.elements.get_element_results(
+                results_name="section.force",
+                element_type="ASDShellQ4",
+            )
+            er.plot.scatter("bending_moment_xx", step=10, ax=ax)
+        """
+        return plot_mesh(
+            self._dataset,
+            model_stage=model_stage,
+            element_type=element_type,
+            element_ids=element_ids,
+            ax=ax,
+            edge_color=edge_color,
+            linewidth=linewidth,
+            alpha=alpha,
+            title=title,
+            **kwargs,
+        )
+
+    def mesh_with_contour(
+        self,
+        element_results: "ElementResults",
+        component_canonical: str,
+        *,
+        step: int,
+        model_stage: Optional[str] = None,
+        element_type: Optional[str] = None,
+        element_ids: Union[int, Sequence[int], np.ndarray, None] = None,
+        ax: Any = None,
+        edge_color: Any = "lightgray",
+        linewidth: float = 0.5,
+        alpha: float = 1.0,
+        axes: Tuple[str, str] = ("x", "y"),
+        title: Optional[str] = None,
+        **scatter_kwargs: Any,
+    ) -> Tuple[Any, dict]:
+        """Convenience wrapper: ``mesh()`` then ``er.plot.scatter()`` on the same axes.
+
+        See :func:`STKO_to_python.plotting.mesh.plot_mesh_with_contour`.
+        """
+        return plot_mesh_with_contour(
+            self._dataset,
+            element_results,
+            component_canonical,
+            step=step,
+            model_stage=model_stage,
+            element_type=element_type,
+            element_ids=element_ids,
+            ax=ax,
+            edge_color=edge_color,
+            linewidth=linewidth,
+            alpha=alpha,
+            axes=axes,
+            title=title,
+            **scatter_kwargs,
         )
 
 
