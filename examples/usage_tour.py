@@ -174,14 +174,14 @@ def section_7_fetch_element(ds: MPCODataSet) -> ElementResults:
 def section_8_element_broker(er: ElementResults) -> None:
     section("8. ElementResults broker API")
 
-    sub = er.fetch(component="val_3", element_ids=[1, 2])
-    print(f"fetch('val_3', [1,2]) -> Series length {len(sub)}")
+    sub = er.fetch(component="Pz_1", element_ids=[1, 2])
+    print(f"fetch('Pz_1', [1,2]) -> Series length {len(sub)}")
 
-    view = er.val_3[[1, 2]]
-    print(f"er.val_3[[1,2]]        -> type {type(view).__name__}")
+    view = er.Pz_1[[1, 2]]
+    print(f"er.Pz_1[[1,2]]        -> type {type(view).__name__}")
 
-    env = er.envelope(component="val_3")
-    print(f"envelope('val_3'):     {list(env.columns)}")
+    env = er.envelope(component="Pz_1")
+    print(f"envelope('Pz_1'):     {list(env.columns)}")
     print(env)
 
     snap_step = er.at_step(5)

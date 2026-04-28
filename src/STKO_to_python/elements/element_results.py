@@ -26,9 +26,15 @@ class _ElementResultView:
     """
     Lightweight proxy for a single value column in element results.
 
+    Column names are derived from the bucket's META/COMPONENTS — see
+    ``docs/mpco_format_conventions.md`` and ``io/meta_parser.py``.
+    Examples: ``Px_1`` for closed-form globalForce, ``N_2`` for
+    localForce, ``Mz_ip3`` for line-station section.force,
+    ``sigma11_f0_ip0`` for compressed fibers.
+
     Allows:
-        results.val_1                   -> all elements, all steps
-        results.val_1[element_ids]      -> filtered by element
+        results.<name>                  -> all elements, all steps
+        results.<name>[element_ids]     -> filtered by element
     """
 
     def __init__(self, parent: "ElementResults", col_name: str) -> None:
@@ -76,7 +82,12 @@ class ElementResults:
 
     Expected df shape:
       - index: (element_id, step)
-      - columns: val_1, val_2, ..., val_N  (component values)
+      - columns: real component names parsed from META/COMPONENTS
+        (e.g. ``Px_1, Py_1, ..., Mz_2`` for closed-form globalForce;
+        ``P_ip0, Mz_ip0, ..., T_ip4`` for line-station section.force;
+        ``sigma11_f0_ip0, ...`` for compressed fiber buckets).
+        Falls back to ``val_1, val_2, ..., val_N`` only when META is
+        absent.
 
     Attributes
     ----------
@@ -106,6 +117,7 @@ class ElementResults:
         element_type: Optional[str] = None,
         results_name: Optional[str] = None,
         model_stage: Optional[str] = None,
+        gp_xi: Optional[np.ndarray] = None,
     ) -> None:
         self.df = df
         self.time = time
@@ -114,6 +126,14 @@ class ElementResults:
         self.element_type = element_type or ""
         self.results_name = results_name or ""
         self.model_stage = model_stage or ""
+        # Natural-coordinate integration-point positions (ξ ∈ [-1, +1]).
+        # Length equals the number of integration points; ``None`` for
+        # closed-form buckets (no IPs) and for buckets whose connectivity
+        # dataset lacks a ``GP_X`` attribute.
+        # See docs/mpco_format_conventions.md §1, §7.
+        self.gp_xi: Optional[np.ndarray] = (
+            np.asarray(gp_xi, dtype=np.float64) if gp_xi is not None else None
+        )
 
         self._views: Dict[str, _ElementResultView] = {}
         self._build_views()
@@ -133,7 +153,7 @@ class ElementResults:
             self._views[col_str] = _ElementResultView(self, col_str)
 
     def __getattr__(self, name: str) -> Any:
-        """Allow attribute-style access to result columns (e.g., results.val_1)."""
+        """Allow attribute-style access to result columns (e.g., results.Mz_ip2)."""
         if name.startswith("_"):
             raise AttributeError(name)
         views = self.__dict__.get("_views", {})
@@ -175,6 +195,148 @@ class ElementResults:
     def empty(self) -> bool:
         return self.df.empty
 
+    @property
+    def n_ip(self) -> int:
+        """Number of integration points (0 for closed-form buckets)."""
+        return 0 if self.gp_xi is None else int(self.gp_xi.size)
+
+    # ------------------------------------------------------------------ #
+    # Canonical-name access                                              #
+    # ------------------------------------------------------------------ #
+
+    def list_canonicals(self) -> Tuple[str, ...]:
+        """Canonical-name vocabulary present in this result's columns.
+
+        Returns the engineering-friendly names (e.g. ``"axial_force"``,
+        ``"bending_moment_z"``) for which at least one matching column
+        exists. See :mod:`STKO_to_python.elements.canonical` for the
+        full mapping.
+        """
+        from .canonical import list_canonical_for_columns
+
+        return list_canonical_for_columns(self.df.columns)
+
+    def canonical_columns(self, name: str) -> Tuple[str, ...]:
+        """List the column names that match a canonical engineering name.
+
+        Parameters
+        ----------
+        name : str
+            E.g. ``"axial_force"``, ``"bending_moment_z"``,
+            ``"stress_11"``. See ``list_canonicals()`` for what's
+            available in this result, or ``available_canonicals()`` in
+            :mod:`STKO_to_python.elements.canonical` for the full map.
+
+        Returns
+        -------
+        tuple of str
+            Column names in their on-disk order. Empty tuple if no
+            columns match (e.g. asking for ``"axial_force"`` on a
+            shell ``section.force`` result).
+
+        Raises
+        ------
+        ValueError
+            If ``name`` is not a known canonical name.
+        """
+        from .canonical import match_canonical_columns
+
+        return tuple(match_canonical_columns(name, self.df.columns))
+
+    def canonical(self, name: str) -> pd.DataFrame:
+        """Return the DataFrame subset for a canonical engineering name.
+
+        Convenience wrapper around :meth:`canonical_columns`. Raises if
+        no columns match (catches typos and shells-asking-for-axial-
+        force-style misuse loudly).
+        """
+        cols = self.canonical_columns(name)
+        if not cols:
+            raise ValueError(
+                f"No columns matching canonical name {name!r} in this "
+                f"result. Present canonicals: {self.list_canonicals()}"
+            )
+        return self.df[list(cols)]
+
+    def physical_x(self, length: float) -> np.ndarray:
+        """Convert ``self.gp_xi`` (natural ξ ∈ [-1, +1]) to physical
+        positions along an element of the given ``length``.
+
+        Useful for plotting moment diagrams along beams in physical
+        coordinates. See ``utilities/coords.py``.
+
+        Parameters
+        ----------
+        length : float
+            Element length L (positive). Per docs §1, all elements that
+            share a connectivity bracket also share the same beam-
+            integration rule, but their physical lengths can differ —
+            so this method takes ``length`` per call.
+
+        Returns
+        -------
+        np.ndarray
+            Physical positions, length ``n_ip``.
+
+        Raises
+        ------
+        ValueError
+            If the bucket is closed-form (no IPs) or ``length`` is
+            non-positive.
+        """
+        if self.gp_xi is None:
+            raise ValueError(
+                "physical_x() is only valid for line-station / "
+                "gauss-level buckets. This result is closed-form "
+                "(no integration points)."
+            )
+        from ..utilities.coords import xi_natural_to_physical
+
+        return xi_natural_to_physical(self.gp_xi, length)
+
+    def at_ip(self, ip_idx: int) -> pd.DataFrame:
+        """Return the columns belonging to a single integration point.
+
+        Column names use the ``..._ip<gauss_id>`` suffix introduced by
+        the META parser; this method filters by that suffix.
+
+        Parameters
+        ----------
+        ip_idx : int
+            Sequential integration-point index, ``0..n_ip-1``.
+
+        Returns
+        -------
+        pd.DataFrame
+            Subset of ``self.df`` whose column names end with
+            ``_ip<ip_idx>``. Index is preserved (``element_id, step``).
+
+        Raises
+        ------
+        ValueError
+            If the bucket is closed-form (no IPs), if ``ip_idx`` is out
+            of range, or if no columns match the suffix.
+        """
+        if self.gp_xi is None:
+            raise ValueError(
+                "at_ip() is only valid for line-station / gauss-level "
+                "buckets. This result is closed-form (no integration "
+                "points)."
+            )
+        n = int(self.gp_xi.size)
+        if not (0 <= ip_idx < n):
+            raise ValueError(
+                f"ip_idx={ip_idx} out of range [0, {n})."
+            )
+        suffix = f"_ip{int(ip_idx)}"
+        cols = [c for c in self.df.columns if str(c).endswith(suffix)]
+        if not cols:
+            raise ValueError(
+                f"No columns matching '*{suffix}' in this result. "
+                f"Available columns: {list(self.df.columns)}"
+            )
+        return self.df[cols]
+
     # ------------------------------------------------------------------ #
     # Data access
     # ------------------------------------------------------------------ #
@@ -191,7 +353,8 @@ class ElementResults:
         Parameters
         ----------
         component : str or None
-            Column name (e.g. 'val_1'). If None, returns all columns.
+            Column name (e.g. ``'Mz_ip2'``, ``'Px_1'``). If None, returns
+            all columns.
         element_ids : int, list[int], or None
             Filter to specific elements. If None, returns all.
 
@@ -359,13 +522,15 @@ class ElementResults:
     # ------------------------------------------------------------------ #
 
     def __repr__(self) -> str:
+        ip_part = f", n_ip={self.n_ip}" if self.n_ip else ""
         return (
             f"ElementResults("
             f"results_name={self.results_name!r}, "
             f"element_type={self.element_type!r}, "
             f"n_elements={self.n_elements}, "
             f"n_steps={self.n_steps}, "
-            f"n_components={self.n_components})"
+            f"n_components={self.n_components}"
+            f"{ip_part})"
         )
 
     def __str__(self) -> str:

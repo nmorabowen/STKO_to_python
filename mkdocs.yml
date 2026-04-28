@@ -78,6 +78,7 @@ markdown_extensions:
 nav:
   - Home: index.md
   - Architecture: architecture.md
+  - MPCO format conventions: mpco_format_conventions.md
   - Design spec (historical): architecture-refactor-proposal.md
   - API reference:
       - Overview: api/index.md
