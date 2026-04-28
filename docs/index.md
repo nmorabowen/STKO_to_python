@@ -68,6 +68,9 @@ ds.plot.xy(
 
 ## Where to read next
 
+- **[Elements workflow guide](elements_guide.md)** — end-to-end
+  walkthrough of element results: discovery, selection sets,
+  integration-point access, canonical names, plotting, and pickling.
 - **[Architecture](architecture.md)** — the layered design, what lives
   where, pickle compatibility, and the per-phase refactor history.
 - **[API reference](api/index.md)** — class-by-class docs generated
