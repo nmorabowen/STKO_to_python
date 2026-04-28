@@ -118,6 +118,8 @@ class ElementResults:
         results_name: Optional[str] = None,
         model_stage: Optional[str] = None,
         gp_xi: Optional[np.ndarray] = None,
+        gp_natural: Optional[np.ndarray] = None,
+        gp_weights: Optional[np.ndarray] = None,
     ) -> None:
         self.df = df
         self.time = time
@@ -126,6 +128,31 @@ class ElementResults:
         self.element_type = element_type or ""
         self.results_name = results_name or ""
         self.model_stage = model_stage or ""
+
+        # Multi-dimensional natural-coord IP positions, shape
+        # ``(n_ip, dim)``: dim=1 for lines, 2 for shells / plane
+        # elements, 3 for solids. Populated from connectivity ``GP_X``
+        # (line elements) or from the static catalog at
+        # :mod:`STKO_to_python.utilities.gauss_points` (shells / solids).
+        # Always in natural / parent-element coordinates ∈ [-1, +1]^dim.
+        # ``None`` when no source is available.
+        self.gp_natural: Optional[np.ndarray] = (
+            np.asarray(gp_natural, dtype=np.float64)
+            if gp_natural is not None
+            else None
+        )
+
+        # Quadrature weights aligned to ``gp_natural`` (same first
+        # axis). Catalog-driven only — line-element custom rules don't
+        # write weights to the file. Use for numerical integration
+        # over the parent domain (``sum(value * weight * |J|)``) once a
+        # Jacobian is supplied for the physical element.
+        self.gp_weights: Optional[np.ndarray] = (
+            np.asarray(gp_weights, dtype=np.float64)
+            if gp_weights is not None
+            else None
+        )
+
         # Natural-coordinate integration-point positions (ξ ∈ [-1, +1]).
         # Length equals the number of integration points; ``None`` for
         # closed-form buckets (no IPs) and for buckets whose connectivity
@@ -197,8 +224,31 @@ class ElementResults:
 
     @property
     def n_ip(self) -> int:
-        """Number of integration points (0 for closed-form buckets)."""
-        return 0 if self.gp_xi is None else int(self.gp_xi.size)
+        """Number of integration points (0 for closed-form buckets).
+
+        Considers both the line-element ``gp_xi`` and the multi-D
+        ``gp_natural`` so the count is consistent for shells / solids
+        as well as beams.
+        """
+        if self.gp_natural is not None:
+            return int(self.gp_natural.shape[0])
+        if self.gp_xi is not None:
+            return int(self.gp_xi.size)
+        return 0
+
+    @property
+    def gp_dim(self) -> int:
+        """Parametric dimensionality of the integration scheme.
+
+        ``1`` for line elements, ``2`` for shells / plane elements,
+        ``3`` for solids. ``0`` for closed-form buckets and unknown
+        element classes.
+        """
+        if self.gp_natural is not None:
+            return int(self.gp_natural.shape[1])
+        if self.gp_xi is not None:
+            return 1
+        return 0
 
     # ------------------------------------------------------------------ #
     # Canonical-name access                                              #
@@ -317,13 +367,12 @@ class ElementResults:
             If the bucket is closed-form (no IPs), if ``ip_idx`` is out
             of range, or if no columns match the suffix.
         """
-        if self.gp_xi is None:
+        n = self.n_ip
+        if n == 0:
             raise ValueError(
-                "at_ip() is only valid for line-station / gauss-level "
-                "buckets. This result is closed-form (no integration "
-                "points)."
+                "at_ip() is only valid for buckets with integration "
+                "points. This result is closed-form (no IPs)."
             )
-        n = int(self.gp_xi.size)
         if not (0 <= ip_idx < n):
             raise ValueError(
                 f"ip_idx={ip_idx} out of range [0, {n})."

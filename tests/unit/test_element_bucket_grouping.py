@@ -37,7 +37,9 @@ def _chunk(cols):
     return (
         "bucket/" + "_".join(cols[:1]),
         list(cols),
-        None,
+        None,  # gp_xi
+        None,  # gp_natural
+        None,  # gp_weights
         pd.DataFrame(),
     )
 

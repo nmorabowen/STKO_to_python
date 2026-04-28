@@ -229,9 +229,56 @@ moments_at_midspan = sub["Mz_ip2"]
 
 Closed-form buckets (no integration points) have `er.gp_xi is None`,
 `er.n_ip == 0`, and calling `er.at_ip(...)` or `er.physical_x(...)`
-raises `ValueError`. Continuum classes like 8-IP brick `material.stress`
-also expose `n_ip == 0` for now (no `GP_X` on their connectivity);
-class-level catalog support is planned future work.
+raises `ValueError`.
+
+### Multi-dimensional integration points (shells & solids)
+
+For shells, plane elements, and 3-D solids the integration-point
+positions are *fixed by the element class* and not written to disk.
+The library carries a static catalog at
+[`utilities/gauss_points.py`](api/index.md) and exposes the resolved
+layout as a multi-dimensional array on `ElementResults`:
+
+```python
+# Brick continuum, 8 Gauss points
+er = ds.elements.get_element_results("material.stress", "56-Brick", element_ids=[100])
+er.n_ip            # 8
+er.gp_dim          # 3
+er.gp_natural      # shape (8, 3) — (ξ, η, ζ) at ±1/√3 per axis
+er.gp_weights      # shape (8,)   — all 1.0 for 2×2×2 Gauss-Legendre
+
+# Shell, 4 Gauss points
+er_shell = ds.elements.get_element_results("section.force", "203-ASDShellQ4", element_ids=[7])
+er_shell.gp_natural    # shape (4, 2)
+er_shell.gp_weights    # shape (4,)
+```
+
+`gp_xi` stays line-element-only — it's the 1-D ξ from connectivity
+``GP_X`` for force/disp-based beams. `gp_natural` is the multi-D
+generalization, also populated for line elements as a shape `(n_ip, 1)`
+view of `gp_xi`. `gp_weights` is catalog-driven only (line-element
+Lobatto / Legendre weights aren't written to MPCO, so it's `None`
+there).
+
+`at_ip(idx)` works on any bucket with integration points — line,
+plane, or solid. For numerical integration:
+
+```python
+# Volume integral of stress_11 over the parent cube (per element):
+# ∫ sigma11 dV ≈ Σ sigma11_ip * weight_ip * |J|
+# (|J| from element geometry — supplied by the user.)
+sigma_at_ips = er.canonical("stress_11").to_numpy()   # (n_steps*n_elem, 8)
+weighted = sigma_at_ips * er.gp_weights[None, :]
+```
+
+**Ordering convention.** Tensor-product schemes enumerate IPs with **ξ
+varying fastest, then η, then ζ**. If your model uses a non-default
+integration scheme or the OpenSees ordering happens to differ, override
+the catalog entry in `utilities/gauss_points.py`.
+
+**Unknown classes.** Element classes not in the catalog yield
+`gp_natural=None`. Adding an entry is a one-line change — see the
+catalog docstring for the convention.
 
 For the underlying convention details, see
 [mpco_format_conventions.md §1, §7](mpco_format_conventions.md). The

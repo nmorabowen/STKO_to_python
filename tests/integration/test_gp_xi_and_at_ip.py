@@ -165,12 +165,13 @@ def test_compressed_fiber_at_ip_returns_all_fibers_for_ip(solid_partition_dir: P
     assert all(c.startswith("sigma11_f") for c in sub.columns)
 
 
-def test_continuum_class_has_no_gp_xi_even_with_ips(solid_partition_dir: Path):
-    """Brick continuum has 8 Gauss IPs but no ``GP_X`` on its
-    connectivity (custom-rule attribute is force/disp-beam-only). The
-    bucket parses fine and shows named columns; ``gp_xi`` is ``None``
-    because we don't synthesize coordinates from a class-level catalog
-    yet (that's the B7 ResponseLayout work).
+def test_continuum_class_uses_catalog_gauss_points(solid_partition_dir: Path):
+    """Brick continuum has 8 Gauss IPs and no ``GP_X`` attribute on its
+    connectivity. The natural coordinates of those IPs are *fixed by
+    the element class* and come from the static catalog at
+    :mod:`STKO_to_python.utilities.gauss_points` (B7a). The 1-D ``gp_xi``
+    stays ``None`` (it's line-element-only); the multi-D ``gp_natural``
+    carries the (8, 3) array of (ξ, η, ζ) Gauss-Legendre points.
     """
     ds = MPCODataSet(str(solid_partition_dir), "Recorder", verbose=False)
     brick_ids = ds.elements_info["dataframe"].query(
@@ -183,11 +184,23 @@ def test_continuum_class_has_no_gp_xi_even_with_ips(solid_partition_dir: Path):
         model_stage="MODEL_STAGE[1]",
         element_ids=brick_ids,
     )
+    # 1-D ξ stays None (multi-D bucket).
     assert er.gp_xi is None
-    assert er.n_ip == 0
-    # at_ip is gated on gp_xi presence — even though columns have _ip suffixes
-    with pytest.raises(ValueError, match="closed-form"):
-        er.at_ip(0)
+    # 3-D natural coords from catalog.
+    assert er.n_ip == 8
+    assert er.gp_dim == 3
+    assert er.gp_natural is not None
+    assert er.gp_natural.shape == (8, 3)
+    # Standard 2x2x2 Gauss-Legendre points are at ±1/sqrt(3) per axis.
+    assert np.allclose(np.abs(er.gp_natural), 1.0 / np.sqrt(3.0))
+    # Weights are uniform 1.0 on a [-1,1]^3 cube → sum = 8.
+    assert er.gp_weights is not None
+    assert er.gp_weights.shape == (8,)
+    assert er.gp_weights.sum() == pytest.approx(8.0)
+    # at_ip now works for continuum gauss-level buckets too.
+    sub = er.at_ip(0)
+    assert sub.shape[1] == 6  # 6 stress components per Gauss point
+    assert all(c.endswith("_ip0") for c in sub.columns)
 
 
 # ----- pickle round-trip preserves gp_xi --------------------------------- #
