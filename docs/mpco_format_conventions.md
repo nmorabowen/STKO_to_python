@@ -346,5 +346,27 @@ Cost ~5 minutes; saved at least an hour of "why doesn't my parser work."
 | Continuum gauss | `stresses` / `strains` | (catalog lookup; not per-bucket) | per-GP, sequential | `GAUSS_IDS=[0..n-1]` |
 | Line-stations (beam-columns) | `section.force` | `MODEL/ELEMENTS/<bracket-2-field>/@GP_X` | per-IP `0.1.2.<comps>` | `GAUSS_IDS=[0..n_IP-1]` |
 | Nodal forces (closed-form beams) | `globalForce` / `localForce` | n/a (no IPs) | single block `0.<node-suffixed names>` | `GAUSS_IDS=[[-1]]` |
-| Fibers | `section.fiber.stress` | per-section | per-fiber within per-IP segments | (Phase 11c — not yet codified) |
-| Layers (layered shells) | `material.fiber.stress` (with shell keyword swap) | per-surface-IP | per-layer × per-sub-IP | (Phase 11c — not yet codified) |
+| Fibers (compressed) | `section.fiber.stress` (force/disp beam) | per-section | per-IP segment, ``MULTIPLICITY=[N,N,...]`` for N fibers | sequential |
+| Layered shells | `section.fiber.<quantity>` on ASDShellQ4/T3 | per-surface-IP | one segment per **(gauss × layer)**, with empty segments where a layer doesn't carry the quantity | repeated GAUSS_IDS, e.g. `[0,0,0,0,0, 1,1,1,1,1, ...]` for 4 IPs × 5 layers; unique values must form `0..n_unique-1` |
+
+### Layered-shell META — additional notes
+
+For ASDShellQ4 / ASDShellT3 with a layered section (concrete + steel
+reinforcement, etc.), the on-disk META carries one block per
+``(gauss_point × thickness_layer)`` pair. Three observed traits:
+
+- ``GAUSS_IDS`` is sorted but not unique — each in-plane Gauss
+  point repeats once per layer.
+- ``MULTIPLICITY`` can vary per block (e.g. `[1, 2, 1, 2, 1, ...]`):
+  some layers track one fiber, others two, etc. depending on the
+  material at that layer.
+- ``COMPONENTS`` includes empty segments (e.g. ``"0.1.2.3.4."``)
+  paired with ``NUM_COMPONENTS=0`` for layers that don't track the
+  recorded quantity.
+
+The library's parser handles all three: blocks are flattened to
+columns named ``<comp>_l<layer>_ip<gauss>`` (or
+``<comp>_f<fiber>_l<layer>_ip<gauss>`` if both fibers and layers
+appear), with empty blocks skipped. The geometric ``n_ip`` reported
+on ``ElementResults`` is the unique gauss-point count, matching the
+in-plane integration order.

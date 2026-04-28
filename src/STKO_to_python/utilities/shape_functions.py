@@ -253,6 +253,7 @@ def tet4_dN(nat: np.ndarray) -> np.ndarray:
 
 SHAPE_FUNCTIONS: Dict[str, Tuple[ShapeFn, ShapeFn, GeomKind]] = {
     "203-ASDShellQ4": (_asd_shell_q4_N, _asd_shell_q4_dN, "shell"),
+    "204-ASDShellT3": (tri3_N, tri3_dN, "shell"),
     "56-Brick":       (_brick_N, _brick_dN, "solid"),
     # Beam/disp-based-beam line elements use 2-node linear interpolation
     # for the geometric mapping (the integration scheme is independent;

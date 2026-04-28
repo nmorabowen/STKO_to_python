@@ -246,6 +246,10 @@ ELEMENT_IP_CATALOG: Dict[str, Dict[int, Tuple[np.ndarray, np.ndarray]]] = {
     "203-ASDShellQ4": {
         4: tensor_product_2d(2),  # standard 2×2 quadrature
     },
+    # --- Triangular shells (3-pt Gauss on the unit triangle) ---
+    "204-ASDShellT3": {
+        3: gauss_triangle(3),     # validated against Test_NLShell fixture
+    },
     # --- 3-D continuum solids ---
     "56-Brick": {
         8: tensor_product_3d(2),   # standard 2×2×2
