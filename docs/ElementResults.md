@@ -277,8 +277,37 @@ integration scheme or the OpenSees ordering happens to differ, override
 the catalog entry in `utilities/gauss_points.py`.
 
 **Unknown classes.** Element classes not in the catalog yield
-`gp_natural=None`. Adding an entry is a one-line change — see the
-catalog docstring for the convention.
+`gp_natural=None`. Adding an entry is a one-line change. The library
+ships with shape-function and Gauss-rule primitives for the most
+common parent domains:
+
+| Primitive | Domain | Use for |
+|---|---|---|
+| `gauss_legendre_1d` / `_line2_N` (internal) | bi-unit interval | beam line elements |
+| `tensor_product_2d` / shell shape functions | bi-unit square | quad shells / plane elements |
+| `tensor_product_3d` / brick shape functions | bi-unit cube | hex solids |
+| `gauss_triangle` / `tri3_N`, `tri3_dN` | unit triangle | triangular shells / plane (e.g. `ASDShellT3`) |
+| `gauss_tetrahedron` / `tet4_N`, `tet4_dN` | unit tetrahedron | linear tets (e.g. `FourNodeTetrahedron`) |
+
+To register a new element class observed in your fixtures:
+
+```python
+from STKO_to_python.utilities.gauss_points import (
+    ELEMENT_IP_CATALOG, gauss_triangle,
+)
+from STKO_to_python.utilities.shape_functions import (
+    SHAPE_FUNCTIONS, tri3_N, tri3_dN,
+)
+
+# Suppose your MPCO file has connectivity dataset
+# "204-ASDShellT3[<rule>:<cust>]" with 3 IPs per element.
+ELEMENT_IP_CATALOG["204-ASDShellT3"] = {3: gauss_triangle(3)}
+SHAPE_FUNCTIONS["204-ASDShellT3"] = (tri3_N, tri3_dN, "shell")
+```
+
+After this, `gp_natural`, `gp_weights`, `physical_coords()`,
+`jacobian_dets()`, and `integrate_canonical()` all work for that
+class without further changes.
 
 ### Physical coordinates and Jacobians
 
@@ -296,19 +325,31 @@ For solids the determinant is `|det(∂x/∂ξ)|` (volume measure); for
 shells it's `||∂x/∂ξ × ∂x/∂η||` (surface measure); for line elements
 it's `||∂x/∂ξ||` (line measure).
 
-**Numerical integration.** Multiply value × weight × `|J|` and sum
-over IPs to get a contribution to the integral over the physical
-element. For a brick `material.stress`:
+**Numerical integration.** The convenience method
+`integrate_canonical(name)` does the multiply-and-sum dance over IPs
+and returns a Series indexed by `(element_id, step)` — same shape as
+the rest of the data:
+
+```python
+# Volume integral of σ_11 over each brick element, per step
+s = er.integrate_canonical("stress_11")
+s.unstack("element_id").head()             # tidy step × element matrix
+
+# Same idiom on a shell — integrates over physical surface
+moments = er_shell.integrate_canonical("bending_moment_xx")
+```
+
+Internally the helper applies `value × gp_weights × |J|` over the
+integration points and asserts the canonical resolves to exactly
+`n_ip` columns. Closed-form buckets, missing node coords, unknown
+element classes, and compressed-fiber buckets raise with a pointer
+to manual integration. For full control:
 
 ```python
 cols = er.canonical_columns("stress_11")
 sigma_step = er.df.xs(100, level="step")[list(cols)].to_numpy()  # (n_e, n_ip)
 volume_int_per_elem = (sigma_step * er.gp_weights[None, :] * dets).sum(axis=1)
 ```
-
-For a shell `section.force`, the same pattern integrates a quantity
-over the physical surface. For a line element, over the physical
-length.
 
 **Inputs.** `physical_coords()` and `jacobian_dets()` rely on
 ``element_node_coords`` (populated automatically from the dataset's
