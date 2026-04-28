@@ -120,6 +120,8 @@ class ElementResults:
         gp_xi: Optional[np.ndarray] = None,
         gp_natural: Optional[np.ndarray] = None,
         gp_weights: Optional[np.ndarray] = None,
+        element_node_coords: Optional[np.ndarray] = None,
+        element_node_ids: Optional[np.ndarray] = None,
     ) -> None:
         self.df = df
         self.time = time
@@ -160,6 +162,23 @@ class ElementResults:
         # See docs/mpco_format_conventions.md §1, §7.
         self.gp_xi: Optional[np.ndarray] = (
             np.asarray(gp_xi, dtype=np.float64) if gp_xi is not None else None
+        )
+
+        # Per-element nodal coordinates and node IDs, ordered to match
+        # ``self.element_ids`` (sorted ascending). Shape
+        # ``(n_elements, n_nodes_per, 3)`` for coords; ``(n_elements,
+        # n_nodes_per)`` for IDs. Required by :meth:`physical_coords`
+        # and :meth:`jacobian_dets`. ``None`` for empty results or when
+        # the read path couldn't resolve node coordinates.
+        self.element_node_coords: Optional[np.ndarray] = (
+            np.asarray(element_node_coords, dtype=np.float64)
+            if element_node_coords is not None
+            else None
+        )
+        self.element_node_ids: Optional[np.ndarray] = (
+            np.asarray(element_node_ids, dtype=np.int64)
+            if element_node_ids is not None
+            else None
         )
 
         self._views: Dict[str, _ElementResultView] = {}
@@ -307,6 +326,90 @@ class ElementResults:
                 f"result. Present canonicals: {self.list_canonicals()}"
             )
         return self.df[list(cols)]
+
+    # ------------------------------------------------------------------ #
+    # Physical-coordinate mapping (B7b — shells / solids / lines)         #
+    # ------------------------------------------------------------------ #
+
+    def physical_coords(self) -> Optional[np.ndarray]:
+        """Physical (x, y, z) of each integration point in each element.
+
+        Maps ``gp_natural`` through the element-class shape function
+        catalog at :mod:`STKO_to_python.utilities.shape_functions`.
+
+        Returns
+        -------
+        np.ndarray, shape ``(n_elements, n_ip, 3)``, or ``None``
+            First axis aligned with ``self.element_ids``. ``None`` if
+            any of the following is missing: ``gp_natural``,
+            ``element_node_coords``, or a shape function for this
+            element class.
+
+        Examples
+        --------
+        Brick continuum, plot σ_11 contour at midspan ζ=0:
+
+        >>> phys = er.physical_coords()              # (n_e, 8, 3)
+        >>> sigma11 = er.canonical("stress_11").to_numpy()
+        >>> # ... pick a step, then scatter(phys[:, :, 0], phys[:, :, 1], c=sigma11)
+        """
+        if self.gp_natural is None or self.element_node_coords is None:
+            return None
+        from ..utilities.shape_functions import (
+            compute_physical_coords,
+            get_shape_functions,
+        )
+
+        base = self.element_type.split("[", 1)[0]
+        fns = get_shape_functions(base)
+        if fns is None:
+            return None
+        N_fn, _, _ = fns
+        return compute_physical_coords(
+            self.gp_natural, self.element_node_coords, N_fn
+        )
+
+    def jacobian_dets(self) -> Optional[np.ndarray]:
+        """Jacobian determinants at each IP for each element.
+
+        - Solids (3-D): ``|det(∂x/∂ξ)|`` — the volume measure.
+        - Shells (2-D in 3-D): ``||∂x/∂ξ × ∂x/∂η||`` — the surface
+          measure.
+        - Line elements: ``||∂x/∂ξ||`` — the line measure.
+
+        Multiplying ``value_at_ip * gp_weights * jacobian_dets`` gives a
+        contribution to the integral over the *physical* element.
+
+        Returns
+        -------
+        np.ndarray, shape ``(n_elements, n_ip)``, or ``None``
+            Same alignment + ``None`` conditions as
+            :meth:`physical_coords`.
+
+        Examples
+        --------
+        Volume-integrate σ_11 over each brick element at step 100:
+
+        >>> dets = er.jacobian_dets()                   # (n_e, n_ip)
+        >>> sigma11 = er.canonical("stress_11").xs(100, level="step").to_numpy()
+        >>> # sigma11 shape: (n_e, n_ip)
+        >>> per_elem = (sigma11 * er.gp_weights[None, :] * dets).sum(axis=1)
+        """
+        if self.gp_natural is None or self.element_node_coords is None:
+            return None
+        from ..utilities.shape_functions import (
+            compute_jacobian_dets,
+            get_shape_functions,
+        )
+
+        base = self.element_type.split("[", 1)[0]
+        fns = get_shape_functions(base)
+        if fns is None:
+            return None
+        _, dN_fn, geom_kind = fns
+        return compute_jacobian_dets(
+            self.gp_natural, self.element_node_coords, dN_fn, geom_kind
+        )
 
     def physical_x(self, length: float) -> np.ndarray:
         """Convert ``self.gp_xi`` (natural ξ ∈ [-1, +1]) to physical

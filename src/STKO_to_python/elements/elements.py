@@ -555,6 +555,73 @@ class ElementManager:
     # Core results reader
     # ------------------------------------------------------------------ #
 
+    def _build_element_node_coords(
+        self,
+        sorted_ids: Tuple[int, ...],
+        df_info: pd.DataFrame,
+    ) -> Tuple[Optional[np.ndarray], Optional[np.ndarray]]:
+        """Build (element_node_coords, element_node_ids) aligned to
+        ``sorted_ids`` (ascending element_id).
+
+        Returns ``(None, None)`` if the dataset has no node coordinate
+        table or the element index is missing — physical-coord
+        computations on the resulting :class:`ElementResults` will
+        return ``None``, but the named columns and IP layouts still
+        come through cleanly.
+
+        Shape:
+            element_node_coords : ``(n_elements, n_nodes_per, 3)``
+            element_node_ids    : ``(n_elements, n_nodes_per)``
+
+        Assumes ``num_nodes`` is uniform across the matched elements
+        (true within a single base class — different decorated brackets
+        of the same class still share node count).
+        """
+        if not sorted_ids:
+            return None, None
+        nodes_info = getattr(self.dataset, "nodes_info", None)
+        if not isinstance(nodes_info, dict):
+            return None, None
+        df_nodes = nodes_info.get("dataframe")
+        if df_nodes is None or df_nodes.empty:
+            return None, None
+
+        # Map node_id → row index in the coord array.
+        nids = df_nodes["node_id"].to_numpy(dtype=np.int64)
+        coords = df_nodes[["x", "y", "z"]].to_numpy(dtype=np.float64)
+        node_id_to_pos = {int(n): i for i, n in enumerate(nids)}
+
+        # Slice df_info to one row per element_id, in sorted order.
+        df_unique = df_info.drop_duplicates("element_id").set_index(
+            "element_id", drop=False
+        )
+        try:
+            df_sorted = df_unique.loc[list(sorted_ids)]
+        except KeyError:
+            return None, None
+
+        node_lists = df_sorted["node_list"].tolist()
+        if not node_lists:
+            return None, None
+        n_nodes_per = len(node_lists[0])
+        n_elems = len(node_lists)
+
+        out_ids = np.empty((n_elems, n_nodes_per), dtype=np.int64)
+        out_xyz = np.empty((n_elems, n_nodes_per, 3), dtype=np.float64)
+        for i, nl in enumerate(node_lists):
+            if len(nl) != n_nodes_per:
+                # Unexpected mixed node count — bail out rather than
+                # silently producing a ragged array.
+                return None, None
+            for j, nid in enumerate(nl):
+                out_ids[i, j] = int(nid)
+                pos = node_id_to_pos.get(int(nid))
+                if pos is None:
+                    out_xyz[i, j, :] = np.nan
+                else:
+                    out_xyz[i, j, :] = coords[pos]
+        return out_xyz, out_ids
+
     @staticmethod
     def _validate_homogeneous_layouts(
         collected,
@@ -1016,17 +1083,27 @@ class ElementManager:
 
         from .element_results import ElementResults
 
+        # Build per-element node-coordinate arrays for B7b physical-
+        # coordinate / Jacobian computations. Aligned with the sorted
+        # element_ids that the result df uses.
+        sorted_ids_tup = tuple(sorted(ids.tolist()))
+        elem_node_coords, elem_node_ids = self._build_element_node_coords(
+            sorted_ids_tup, df_info
+        )
+
         return ElementResults(
             df=result_df,
             time=time_arr,
             name=self.dataset.name,
-            element_ids=tuple(sorted(ids.tolist())),
+            element_ids=sorted_ids_tup,
             element_type=element_type,
             results_name=results_name,
             model_stage=model_stage,
             gp_xi=merged_gp_xi,
             gp_natural=merged_gp_natural,
             gp_weights=merged_gp_weights,
+            element_node_coords=elem_node_coords,
+            element_node_ids=elem_node_ids,
         )
 
     def get_element_results_by_selection_and_z(
