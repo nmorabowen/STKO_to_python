@@ -64,7 +64,10 @@ er = ds.elements.get_element_results(
 The core data is in `er.df` — a pandas DataFrame with:
 
 - **Index**: MultiIndex `(element_id, step)`
-- **Columns**: `val_1`, `val_2`, ..., `val_N` (one per result component)
+- **Columns**: real component names parsed from each bucket's
+  `META/COMPONENTS`. The shape depends on the bucket topology — see
+  [Column naming](#column-naming) below. Falls back to
+  `val_1, val_2, ..., val_N` only when META is absent.
 
 Additional attributes:
 
@@ -77,13 +80,31 @@ er.results_name    # str — HDF5 result group name (e.g. "globalForces")
 er.model_stage     # str — model stage this data comes from
 ```
 
+## Column naming
+
+Names come straight from each bucket's `META/COMPONENTS`. The four
+patterns the parser produces:
+
+| Bucket shape | Example | Names |
+|---|---|---|
+| Closed-form beam (`force`, `localForce`) | `5-ElasticBeam3d` | `Px_1, Py_1, ..., Mz_2` (global) or `N_1, Vy_1, ..., Mz_2` (local) |
+| Closed-form continuum (`force` on solid) | `56-Brick`, 8 nodes × 3 DOFs | `P1_1, P2_1, P3_1, ..., P3_8` |
+| Line-stations (`section.force`, `section.deformation`) | force-/disp-based beam, 5 IPs × 4 section comps | `P_ip0, Mz_ip0, My_ip0, T_ip0, ..., T_ip4` |
+| Gauss-level continuum (`material.stress`, `material.strain`) | `56-Brick`, 8 IPs × 6 stress comps | `sigma11_ip0, sigma22_ip0, ..., sigma13_ip7` |
+| Compressed fibers (`section.fiber.stress`) | `MULTIPLICITY > 1`, 6 fibers × 2 IPs | `sigma11_f0_ip0, sigma11_f1_ip0, ..., sigma11_f5_ip1` |
+
+See [`docs/mpco_format_conventions.md`](mpco_format_conventions.md) for
+the underlying META layout, and `STKO_to_python/io/meta_parser.py` for
+the parser that produces these names.
+
 ## Introspection
 
 ```python
 er.list_components()
-# ('val_1', 'val_2', 'val_3', 'val_4', 'val_5', 'val_6')
+# ('Px_1', 'Py_1', 'Pz_1', 'Mx_1', 'My_1', 'Mz_1',
+#  'Px_2', 'Py_2', 'Pz_2', 'Mx_2', 'My_2', 'Mz_2')
 
-er.n_components    # 6
+er.n_components    # 12
 er.n_elements      # 150
 er.n_steps         # 2000
 er.empty           # False
@@ -97,11 +118,11 @@ er.empty           # False
 # All components, all elements
 df = er.fetch()
 
-# Single component
-s = er.fetch("val_1")
+# Single component (e.g., axial force at IP 2)
+s = er.fetch("P_ip2")
 
 # Filter by element IDs
-s = er.fetch("val_1", element_ids=[100, 101])
+s = er.fetch("Mz_1", element_ids=[100, 101])
 
 # All components, filtered elements
 df = er.fetch(element_ids=[100, 101])
@@ -112,13 +133,13 @@ df = er.fetch(element_ids=[100, 101])
 Each column is available as an attribute via `_ElementResultView`:
 
 ```python
-# Equivalent to er.fetch("val_1")
-s = er.val_1.series
+# Equivalent to er.fetch("Mz_1")
+s = er.Mz_1.series
 
 # Filter by element IDs
-s = er.val_1[100]          # single element
-s = er.val_1[[100, 101]]   # multiple elements
-s = er.val_1[:]            # all elements
+s = er.Mz_1[100]           # single element
+s = er.Mz_1[[100, 101]]    # multiple elements
+s = er.Mz_1[:]             # all elements
 ```
 
 ## Envelope
@@ -129,13 +150,52 @@ Compute min/max over all time steps for each element:
 # All components
 env = er.envelope()
 # Returns DataFrame indexed by element_id:
-#   val_1_min, val_1_max, val_2_min, val_2_max, ...
+#   Px_1_min, Px_1_max, Py_1_min, Py_1_max, ...
 
 # Single component
-env = er.envelope(component="val_1")
+env = er.envelope(component="Mz_1")
 # Returns DataFrame indexed by element_id:
-#   val_1_min, val_1_max
+#   Mz_1_min, Mz_1_max
 ```
+
+## Integration-point coordinates
+
+Line-station and gauss-level buckets that have a `GP_X` attribute on
+their connectivity dataset (force/disp-based beam-columns) expose the
+integration-point positions as `er.gp_xi` — a 1-D numpy array in
+**natural coordinates** ξ ∈ [-1, +1].
+
+```python
+er = ds.elements.get_element_results("section.force", "64-DispBeamColumn3d", element_ids=[1])
+er.n_ip       # 5  (number of integration points)
+er.gp_xi      # array([-1., -0.65, 0., 0.65, 1.])  — Lobatto 5-pt
+```
+
+To convert to physical coordinates [0, L] for plotting:
+
+```python
+x = er.physical_x(beam_length=2.0)
+# array([0., 0.345, 1., 1.655, 2.])
+```
+
+Per-IP slicing:
+
+```python
+sub = er.at_ip(2)                  # only columns ending '_ip2'
+# columns: ['P_ip2', 'Mz_ip2', 'My_ip2', 'T_ip2']
+moments_at_midspan = sub["Mz_ip2"]
+```
+
+Closed-form buckets (no integration points) have `er.gp_xi is None`,
+`er.n_ip == 0`, and calling `er.at_ip(...)` or `er.physical_x(...)`
+raises `ValueError`. Continuum classes like 8-IP brick `material.stress`
+also expose `n_ip == 0` for now (no `GP_X` on their connectivity);
+class-level catalog support is planned future work.
+
+For the underlying convention details, see
+[mpco_format_conventions.md §1, §7](mpco_format_conventions.md). The
+natural↔physical conversion utilities live at
+[`utilities/coords.py`](api/index.md).
 
 ## Time Snapshots
 
@@ -143,7 +203,7 @@ env = er.envelope(component="val_1")
 
 ```python
 df_step = er.at_step(100)
-# Returns DataFrame indexed by element_id with columns val_1, val_2, ...
+# Returns DataFrame indexed by element_id with the named columns.
 ```
 
 ### By time value
@@ -250,19 +310,20 @@ print(er)
 #   Elements: 150, Steps: 2000, Components: 6
 
 print(er.list_components())
-# ('val_1', 'val_2', 'val_3', 'val_4', 'val_5', 'val_6')
+# ('Px_1', 'Py_1', 'Pz_1', 'Mx_1', 'My_1', 'Mz_1',
+#  'Px_2', 'Py_2', 'Pz_2', 'Mx_2', 'My_2', 'Mz_2')
 
 # --- Force envelope ---
 env = er.envelope()
 print(env.head())
-#             val_1_min  val_1_max  val_2_min  val_2_max  ...
+#             Px_1_min  Px_1_max  Py_1_min  Py_1_max  ...
 
 # --- Snapshot at t=5s ---
 snap = er.at_time(5.0)
 print(snap.head())
 
 # --- Time history for specific element ---
-s = er.val_1[42]
+s = er.Mz_1[42]
 print(s)
 
 # --- Export with time column ---
@@ -286,9 +347,13 @@ results_by_type = ds.elements.get_element_results_by_selection_and_z(
 
 for etype, er in results_by_type.items():
     print(f"\n{etype}: {er.n_elements} elements")
-    env = er.envelope(component="val_1")
-    print(f"  Max val_1: {env['val_1_max'].max():.2f}")
-    print(f"  Min val_1: {env['val_1_min'].min():.2f}")
+    # Pick any component name from list_components(). Example for shell
+    # globalForce: er.list_components() yields ('P1','P2',...,'P24'),
+    # one per node-DOF.
+    comp = er.list_components()[0]
+    env = er.envelope(component=comp)
+    print(f"  Max {comp}: {env[f'{comp}_max'].max():.2f}")
+    print(f"  Min {comp}: {env[f'{comp}_min'].min():.2f}")
 
     # Save each type separately
     er.save_pickle(f"forces_{etype.replace('/', '_')}.pkl.gz")
@@ -296,6 +361,7 @@ for etype, er in results_by_type.items():
 
 ## Notes
 
-- Column names (`val_1`, `val_2`, ...) are generic. The physical meaning depends on the element type and result name in your OpenSees model (e.g., for `globalForces` on shell elements, these might correspond to Nx, Ny, Nxy, Mx, My, Mxy).
+- Column names come from each bucket's `META/COMPONENTS`. They reflect the actual physical components recorded by OpenSees — `Px_1` (global X-force at element node 1), `Mz_ip3` (bending moment about local z at the 4th integration point), `sigma11_f0_ip0` (axial stress in the first fiber at the first IP), etc. See [Column naming](#column-naming) for the patterns and [`docs/mpco_format_conventions.md`](mpco_format_conventions.md) for the underlying format details.
+- Files written with older recorder versions that lack META fall back to `val_1, val_2, ..., val_N`. The parser raises `MpcoFormatError` if META is present but malformed (NUM_COLUMNS mismatch, non-sequential GAUSS_IDS, etc.) — see `STKO_to_python/io/meta_parser.py`.
 - The `element_type` parameter uses the base type (before the bracket), e.g. `"203-ASDShellQ4"` not `"203-ASDShellQ4[some_detail]"`.
 - `at_time()` uses the closest step to the requested time. If the exact time is not found, no error is raised — it picks the nearest available step.

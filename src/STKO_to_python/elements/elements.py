@@ -45,6 +45,12 @@ class ElementManager:
         ("element_idx", "i8"),
         ("file_id", "i8"),
         ("element_type", object),
+        # ``decorated_type`` is the 2-field connectivity bracket
+        # (e.g. "64-DispBeamColumn3d[1000:1]"). Required to disambiguate
+        # results buckets when a model contains multiple integration
+        # rules per element class — see docs/mpco_format_conventions.md
+        # §1, §4.
+        ("decorated_type", object),
         ("node_list", object),
         ("num_nodes", "i8"),
         ("centroid_x", "f8"),
@@ -167,6 +173,7 @@ class ElementManager:
                                 "element_idx": np.arange(n_elems, dtype=np.int64),
                                 "file_id": int(file_id),
                                 "element_type": etype,
+                                "decorated_type": dset_name,
                                 "node_list": node_lists,
                                 "num_nodes": n_nodes_per,
                                 "centroid_x": cx,
@@ -194,6 +201,7 @@ class ElementManager:
             arr["element_idx"] = df["element_idx"].to_numpy()
             arr["file_id"] = df["file_id"].to_numpy()
             arr["element_type"] = df["element_type"].to_numpy()
+            arr["decorated_type"] = df["decorated_type"].to_numpy()
             arr["node_list"] = df["node_list"].to_numpy()
             arr["num_nodes"] = df["num_nodes"].to_numpy()
             arr["centroid_x"] = df["centroid_x"].to_numpy()
@@ -207,6 +215,7 @@ class ElementManager:
                     "element_idx",
                     "file_id",
                     "element_type",
+                    "decorated_type",
                     "node_list",
                     "num_nodes",
                     "centroid_x",
@@ -547,6 +556,72 @@ class ElementManager:
     # ------------------------------------------------------------------ #
 
     @staticmethod
+    def _validate_homogeneous_layouts(
+        collected,
+        *,
+        results_name: str,
+        element_type: str,
+    ) -> None:
+        """Refuse silently mis-aligning the result frame when matched
+        buckets disagree on column layout.
+
+        ``collected`` is the list of accumulated chunks from the
+        per-partition / per-decorated-bracket read loop. Each entry's
+        second slot is the ``col_names`` list. Concatenating chunks
+        with different ``col_names`` would silently produce NaN-padded
+        rows under ``pd.concat``, so we refuse loudly and ask the
+        caller to query each decorated bracket separately. See
+        docs/mpco_format_conventions §4 (the ``customRuleIdx`` axis:
+        heterogeneous beam-integration rules in the same model spawn
+        multiple results buckets per element class).
+        """
+        unique_layouts = {tuple(entry[1]) for entry in collected}
+        if len(unique_layouts) <= 1:
+            return
+        from ..io.meta_parser import MpcoFormatError
+
+        sample = {entry[0]: list(entry[1]) for entry in collected}
+        raise MpcoFormatError(
+            f"Heterogeneous bucket layouts for "
+            f"results_name={results_name!r}, "
+            f"element_type={element_type!r}: "
+            f"{len(unique_layouts)} distinct column layouts across "
+            f"{len(collected)} buckets. "
+            f"This usually means the model has multiple integration "
+            f"rules per element class. Query each decorated bucket "
+            f"separately. Layouts encountered: {sample}"
+        )
+
+    @staticmethod
+    def _resolve_bucket_layout(
+        bucket_grp,
+        bucket_path: str,
+        *,
+        verbose: bool = False,
+    ):
+        """Parse META for a results bucket; return ``None`` if META is
+        absent or unreadable so the caller can fall back to the legacy
+        ``val_*`` placeholders.
+
+        Hard format violations (NUM_COLUMNS mismatch, GAUSS_IDS shape
+        wrong) raise ``MpcoFormatError`` per the fail-loud contract —
+        only "META not present" is silently downgraded to a fallback.
+        """
+        from ..io.meta_parser import MpcoFormatError, parse_bucket_meta
+
+        if "META" not in bucket_grp:
+            if verbose:
+                print(
+                    f"[Elements] No META at {bucket_path}; "
+                    f"falling back to val_* column names."
+                )
+            return None
+        try:
+            return parse_bucket_meta(bucket_grp, bucket_path=bucket_path)
+        except MpcoFormatError:
+            raise
+
+    @staticmethod
     def _sort_step_keys(keys: Sequence[str]) -> list[str]:
         """Sort HDF5 step keys numerically."""
         try:
@@ -658,21 +733,18 @@ class ElementManager:
                 f"[Elements] {len(df_info)} matching elements for '{element_type}'"
             )
 
-        collected: list[pd.DataFrame] = []
+        # Each entry: (results_bucket_path, col_names, gp_xi_or_None, df_chunk).
+        # Collected across partitions and connectivity brackets, then
+        # concatenated with a column-layout consistency check. ``gp_xi``
+        # is the natural-coordinate integration-point array read from
+        # the connectivity dataset's ``@GP_X`` attribute (only present
+        # for custom-rule beam-columns); ``None`` otherwise.
+        collected: list[
+            tuple[str, list[str], Optional[np.ndarray], pd.DataFrame]
+        ] = []
 
         # Group by partition for efficient HDF5 access
         for file_id, df_group in df_info.groupby("file_id"):
-            idx_arr = df_group["element_idx"].to_numpy(dtype=np.int64)
-            id_arr = df_group["element_id"].to_numpy(dtype=np.int64)
-
-            # Sort indices for efficient HDF5 fancy indexing
-            sort_order = np.argsort(idx_arr, kind="mergesort")
-            idx_sorted = idx_arr[sort_order]
-            id_sorted = id_arr[sort_order]
-            # Inverse to restore original order
-            inv = np.empty_like(sort_order)
-            inv[sort_order] = np.arange(sort_order.size)
-
             with self.dataset._pool.with_partition(int(file_id)) as f:
                 base_path = f"{model_stage}/RESULTS/ON_ELEMENTS/{results_name}"
                 if base_path not in f:
@@ -683,42 +755,148 @@ class ElementManager:
                     continue
 
                 candidates = list(f[base_path].keys())
-                matching = [n for n in candidates if n.startswith(base)]
 
-                if not matching:
-                    if verbose:
-                        print(
-                            f"[WARN] No match for '{base}' under '{base_path}'"
-                        )
-                    continue
+                # Group by *connectivity* decorated bracket (2-field —
+                # the element_idx values are positions within that
+                # specific MODEL/ELEMENTS/<bracket> dataset and only
+                # apply to results buckets sharing the same rule:cust
+                # prefix).
+                if "decorated_type" not in df_group.columns:
+                    raise RuntimeError(
+                        "element index missing 'decorated_type' column; "
+                        "rebuild the dataset to populate it."
+                    )
 
-                for decorated_type in matching:
-                    h5_data_path = f"{base_path}/{decorated_type}/DATA"
-                    if h5_data_path not in f:
+                for conn_decorated, sub_group in df_group.groupby(
+                    "decorated_type"
+                ):
+                    if not conn_decorated.endswith("]"):
+                        # Defensive: connectivity brackets always end in ']'.
                         if verbose:
-                            print(f"[WARN] Path not found: {h5_data_path}")
+                            print(
+                                f"[WARN] Unexpected decorated_type "
+                                f"{conn_decorated!r}; skipping."
+                            )
                         continue
 
-                    data_group = f[h5_data_path]
-                    step_names = self._sort_step_keys(data_group.keys())
-                    n_steps = len(step_names)
-                    n_elems = len(idx_sorted)
+                    # 3-field results bucket = 2-field connectivity
+                    # bracket with ']' replaced by ':' followed by the
+                    # response stream index, then ']'.
+                    bracket_prefix = conn_decorated[:-1] + ":"
+                    matching_results = [
+                        n
+                        for n in candidates
+                        if n.startswith(bracket_prefix) and n.endswith("]")
+                    ]
 
-                    # Read one step to determine shape
-                    sample = data_group[step_names[0]][idx_sorted[:1]]
-                    n_comp = sample.shape[1]
+                    if not matching_results:
+                        if verbose:
+                            print(
+                                f"[WARN] No results bucket for connectivity "
+                                f"bracket {conn_decorated!r} under "
+                                f"{base_path}"
+                            )
+                        continue
 
-                    # Pre-allocate and read all steps
-                    out = np.empty((n_steps * n_elems, n_comp), dtype=np.float64)
-                    for s, sname in enumerate(step_names):
-                        raw = data_group[sname][idx_sorted]
-                        out[s * n_elems : (s + 1) * n_elems, :] = raw[inv]
+                    # Read GP_X from the connectivity dataset (only
+                    # present on custom-rule beam-columns; None for
+                    # closed-form connectivities and continuum classes).
+                    # See docs/mpco_format_conventions §1.
+                    conn_path = (
+                        f"{model_stage}/MODEL/ELEMENTS/{conn_decorated}"
+                    )
+                    conn_grp = f.get(conn_path)
+                    gp_xi: Optional[np.ndarray] = None
+                    if conn_grp is not None and "GP_X" in conn_grp.attrs:
+                        gp_xi = (
+                            np.asarray(conn_grp.attrs["GP_X"])
+                            .flatten()
+                            .astype(np.float64)
+                        )
 
-                    col_names = [f"val_{i + 1}" for i in range(n_comp)]
-                    df_chunk = pd.DataFrame(out, columns=col_names)
-                    df_chunk["element_id"] = np.tile(id_arr, n_steps)
-                    df_chunk["step"] = np.repeat(np.arange(n_steps), n_elems)
-                    collected.append(df_chunk)
+                    # Pre-compute fancy-indexing arrays for this group
+                    # (element_idx is local to this connectivity bucket).
+                    idx_arr = sub_group["element_idx"].to_numpy(dtype=np.int64)
+                    id_arr = sub_group["element_id"].to_numpy(dtype=np.int64)
+                    sort_order = np.argsort(idx_arr, kind="mergesort")
+                    idx_sorted = idx_arr[sort_order]
+                    inv = np.empty_like(sort_order)
+                    inv[sort_order] = np.arange(sort_order.size)
+
+                    # If there are multiple response streams under the
+                    # same connectivity bracket (rare; ":1", ":2", ...),
+                    # take the first stream and warn — concatenating
+                    # them would silently duplicate (element_id, step)
+                    # rows. Users wanting other streams should query
+                    # the decorated_type explicitly.
+                    if len(matching_results) > 1:
+                        matching_results = sorted(matching_results)
+                        if verbose:
+                            print(
+                                f"[WARN] Multiple response streams under "
+                                f"{conn_decorated!r}: {matching_results}; "
+                                f"using {matching_results[0]!r}."
+                            )
+                        matching_results = matching_results[:1]
+
+                    for results_decorated in matching_results:
+                        bucket_path = f"{base_path}/{results_decorated}"
+                        h5_data_path = f"{bucket_path}/DATA"
+                        if h5_data_path not in f:
+                            if verbose:
+                                print(f"[WARN] Path not found: {h5_data_path}")
+                            continue
+
+                        bucket_grp = f[bucket_path]
+                        layout = self._resolve_bucket_layout(
+                            bucket_grp, bucket_path, verbose=verbose
+                        )
+
+                        data_group = f[h5_data_path]
+                        step_names = self._sort_step_keys(data_group.keys())
+                        n_steps = len(step_names)
+                        n_elems = len(idx_sorted)
+
+                        if layout is not None:
+                            n_comp = layout.num_columns
+                            col_names = list(layout.flat_columns)
+                        else:
+                            sample = data_group[step_names[0]][idx_sorted[:1]]
+                            n_comp = sample.shape[1]
+                            col_names = [f"val_{i + 1}" for i in range(n_comp)]
+
+                        out = np.empty(
+                            (n_steps * n_elems, n_comp), dtype=np.float64
+                        )
+                        for s, sname in enumerate(step_names):
+                            raw = data_group[sname][idx_sorted]
+                            if raw.shape[1] != n_comp:
+                                from ..io.meta_parser import MpcoFormatError
+
+                                raise MpcoFormatError(
+                                    f"{bucket_path}/DATA/{sname}: width "
+                                    f"{raw.shape[1]} disagrees with expected "
+                                    f"{n_comp} "
+                                    f"(from {'META' if layout else 'first step'})"
+                                )
+                            out[s * n_elems : (s + 1) * n_elems, :] = raw[inv]
+
+                        df_chunk = pd.DataFrame(out, columns=col_names)
+                        df_chunk["element_id"] = np.tile(id_arr, n_steps)
+                        df_chunk["step"] = np.repeat(
+                            np.arange(n_steps), n_elems
+                        )
+                        # GP_X is only meaningful for non-closed-form
+                        # buckets. For closed-form, drop it even if the
+                        # connectivity dataset happened to carry one.
+                        chunk_gp_xi = (
+                            gp_xi
+                            if (layout is not None and not layout.closed_form)
+                            else None
+                        )
+                        collected.append(
+                            (bucket_path, col_names, chunk_gp_xi, df_chunk)
+                        )
 
         if not collected:
             if verbose:
@@ -736,7 +914,41 @@ class ElementManager:
                 model_stage=model_stage,
             )
 
-        result_df = pd.concat(collected, ignore_index=True)
+        # Cross-bucket layout consistency check (refuses heterogeneous
+        # integration rules — see docs/mpco_format_conventions §4).
+        self._validate_homogeneous_layouts(
+            collected,
+            results_name=results_name,
+            element_type=element_type,
+        )
+
+        # Reconcile GP_X across chunks. All non-None gp_xi values must
+        # agree (same beam-integration rule → same natural coords);
+        # otherwise that's another flavor of heterogeneous integration
+        # and we already raised above. Pick the first non-None.
+        merged_gp_xi: Optional[np.ndarray] = None
+        for _, _, chunk_gp_xi, _ in collected:
+            if chunk_gp_xi is None:
+                continue
+            if merged_gp_xi is None:
+                merged_gp_xi = chunk_gp_xi
+            elif not np.allclose(
+                merged_gp_xi, chunk_gp_xi, rtol=0.0, atol=1e-12
+            ):
+                from ..io.meta_parser import MpcoFormatError
+
+                raise MpcoFormatError(
+                    f"GP_X disagrees across buckets for "
+                    f"results_name={results_name!r}, "
+                    f"element_type={element_type!r}: "
+                    f"{merged_gp_xi.tolist()} vs {chunk_gp_xi.tolist()}. "
+                    f"This means heterogeneous beam-integration rules; "
+                    f"query each decorated bucket separately."
+                )
+
+        result_df = pd.concat(
+            [df for _, _, _, df in collected], ignore_index=True
+        )
         result_df = result_df.set_index(["element_id", "step"]).sort_index()
 
         # Extract time array for the model stage
@@ -755,6 +967,7 @@ class ElementManager:
             element_type=element_type,
             results_name=results_name,
             model_stage=model_stage,
+            gp_xi=merged_gp_xi,
         )
 
     def get_element_results_by_selection_and_z(

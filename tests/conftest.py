@@ -22,6 +22,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 EXAMPLES_DIR = REPO_ROOT / "stko_results_examples"
 ELASTIC_FRAME_DIR = EXAMPLES_DIR / "elasticFrame" / "results"
 QUAD_FRAME_DIR = EXAMPLES_DIR / "elasticFrame" / "QuadFrame_results"
+SOLID_PARTITION_DIR = EXAMPLES_DIR / "solid_partition_example"
 
 
 @pytest.fixture(scope="session")
@@ -62,3 +63,21 @@ def quad_frame_dir() -> Path:
     if not (QUAD_FRAME_DIR / "results.part-0.mpco").exists():
         pytest.skip(f"QuadFrame MP example not available at {QUAD_FRAME_DIR}")
     return QUAD_FRAME_DIR
+
+
+@pytest.fixture(scope="session")
+def solid_partition_dir() -> Path:
+    """Two-partition fixture combining a Brick continuum and a
+    DispBeamColumn3d (with ``section.fiber.stress`` compressed META).
+
+    Exercises every META shape codified in
+    ``docs/mpco_format_conventions.md`` — closed-form (beam + brick),
+    line-stations (section.force/section.deformation), Gauss-level
+    continuum (material.stress/material.strain), and MULTIPLICITY > 1
+    fiber compression. Skips the test if the fixture is absent.
+    """
+    if not (SOLID_PARTITION_DIR / "Recorder.part-0.mpco").exists():
+        pytest.skip(
+            f"solid_partition_example not available at {SOLID_PARTITION_DIR}"
+        )
+    return SOLID_PARTITION_DIR
