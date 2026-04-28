@@ -16,6 +16,11 @@ Covers:
     7. Fetching an ``ElementResults`` view.
     8. The ElementResults broker API (envelope, at_step, to_dataframe).
     9. Selection sets as an alternative to explicit IDs.
+   10. Element discovery (get_available_element_results).
+   11. Canonical engineering names on ElementResults.
+   12. Integration-point extraction (at_ip, gp_xi, physical_x).
+   13. Dataset introspection print helpers.
+   14. Element result discovery workflow (full pattern).
 
 Run with::
 
@@ -225,6 +230,113 @@ def section_10_selection_sets(ds: MPCODataSet) -> None:
     print("    )")
 
 
+def section_11_element_discovery(ds: MPCODataSet) -> None:
+    section("11. Element discovery — get_available_element_results")
+
+    avail = ds.elements.get_available_element_results()
+    for part_id, mapping in avail.items():
+        for rname, decorated_types in mapping.items():
+            print(
+                f"partition {part_id!r}: result={rname!r}  "
+                f"types={decorated_types}"
+            )
+
+    # Filter to a specific base type
+    avail_beam = ds.elements.get_available_element_results(
+        element_type="5-ElasticBeam3d"
+    )
+    print(f"\nfiltered to 5-ElasticBeam3d: {avail_beam}")
+
+
+def section_12_canonical_names(ds: MPCODataSet) -> None:
+    section("12. Canonical engineering names")
+
+    er = ds.elements.get_element_results(
+        results_name="force",
+        element_type="5-ElasticBeam3d",
+        model_stage="MODEL_STAGE[1]",
+        element_ids=[1, 2, 3],
+    )
+
+    print(f"list_canonicals():  {er.list_canonicals()}")
+
+    for canon in er.list_canonicals():
+        cols = er.canonical_columns(canon)
+        print(f"  {canon!r:30s} -> {cols}")
+
+    # Full DataFrame for one canonical name
+    first_canon = er.list_canonicals()[0]
+    df = er.canonical(first_canon)
+    print(f"\ncanonical({first_canon!r}) shape: {df.shape}")
+
+    # Module-level helpers
+    from STKO_to_python.elements.canonical import (
+        available_canonicals,
+        shortname_of,
+    )
+    print(f"\navailable_canonicals() count: {len(available_canonicals())}")
+    print(f"shortname_of('Pz_1') = {shortname_of('Pz_1')!r}")
+    print(f"shortname_of('P_ip3') = {shortname_of('P_ip3')!r}")
+
+
+def section_13_integration_points(ds: MPCODataSet) -> None:
+    section("13. Integration-point access (gp_xi / at_ip)")
+
+    # Closed-form bucket — gp_xi is None
+    er_cf = ds.elements.get_element_results(
+        results_name="force",
+        element_type="5-ElasticBeam3d",
+        model_stage="MODEL_STAGE[1]",
+        element_ids=[1, 2, 3],
+    )
+    print(f"Closed-form:  gp_xi={er_cf.gp_xi}  n_ip={er_cf.n_ip}")
+    print("  (at_ip() raises ValueError for closed-form buckets)")
+
+    # Line-station bucket — gp_xi is populated if section.force exists
+    avail = ds.elements.get_available_element_results(
+        element_type="5-ElasticBeam3d"
+    )
+    all_results = [
+        r for mapping in avail.values() for r in mapping
+    ]
+    line_station_name = next(
+        (r for r in all_results if "section" in r), None
+    )
+
+    if line_station_name:
+        er_ls = ds.elements.get_element_results(
+            results_name=line_station_name,
+            element_type="5-ElasticBeam3d",
+            model_stage="MODEL_STAGE[1]",
+            element_ids=[1, 2, 3],
+        )
+        print(f"\nLine-station ({line_station_name!r}):")
+        print(f"  gp_xi={er_ls.gp_xi}  n_ip={er_ls.n_ip}")
+        if er_ls.n_ip:
+            sub = er_ls.at_ip(0)
+            print(f"  at_ip(0) columns: {list(sub.columns)}")
+            phys = er_ls.physical_x(length=3.0)
+            print(f"  physical_x(L=3.0): {phys}")
+    else:
+        print(
+            "\n(No line-station result in this fixture; "
+            "see test_gp_xi_and_at_ip.py for a full demo.)"
+        )
+
+
+def section_14_print_helpers(ds: MPCODataSet) -> None:
+    section("14. Dataset print helpers")
+    print("All print_* methods log at INFO level — enable with verbose=True")
+    print("or logging.basicConfig(level=logging.INFO).\n")
+    print("ds.print_summary()              -> stages + nodal + element overview")
+    print("ds.print_model_stages()         -> list of model stages")
+    print("ds.print_nodal_results()        -> available nodal result names")
+    print("ds.print_element_results()      -> available element result names")
+    print("ds.print_element_types()        -> result → decorated type mapping")
+    print("ds.print_unique_element_types() -> flat list of all decorated types")
+    print("ds.print_selection_set_info()   -> named selection sets from .cdata")
+
+
 # ---------------------------------------------------------------------- #
 # Entry point
 # ---------------------------------------------------------------------- #
@@ -242,6 +354,10 @@ def run(dataset_dir: Path, recorder: str) -> None:
     section_8_element_broker(er)
     section_9_pickle_element(er)
     section_10_selection_sets(ds)
+    section_11_element_discovery(ds)
+    section_12_canonical_names(ds)
+    section_13_integration_points(ds)
+    section_14_print_helpers(ds)
 
     print()
     print("Tour complete.")
