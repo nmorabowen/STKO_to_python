@@ -733,14 +733,26 @@ class ElementManager:
                 f"[Elements] {len(df_info)} matching elements for '{element_type}'"
             )
 
-        # Each entry: (results_bucket_path, col_names, gp_xi_or_None, df_chunk).
-        # Collected across partitions and connectivity brackets, then
-        # concatenated with a column-layout consistency check. ``gp_xi``
-        # is the natural-coordinate integration-point array read from
-        # the connectivity dataset's ``@GP_X`` attribute (only present
-        # for custom-rule beam-columns); ``None`` otherwise.
+        # Each entry:
+        #   (results_bucket_path, col_names, gp_xi, gp_natural,
+        #    gp_weights, df_chunk).
+        #
+        # ``gp_xi`` is the natural ξ from the connectivity ``@GP_X``
+        # attribute (1-D, custom-rule beams only). ``gp_natural`` is
+        # the multi-D natural-coord array (n_ip, dim) — for line
+        # elements this is ``gp_xi.reshape(-1, 1)``; for shells/solids
+        # it comes from the static catalog at
+        # ``utilities/gauss_points.py``. ``gp_weights`` is catalog-
+        # provided integration weights (None for line elements).
         collected: list[
-            tuple[str, list[str], Optional[np.ndarray], pd.DataFrame]
+            tuple[
+                str,
+                list[str],
+                Optional[np.ndarray],
+                Optional[np.ndarray],
+                Optional[np.ndarray],
+                pd.DataFrame,
+            ]
         ] = []
 
         # Group by partition for efficient HDF5 access
@@ -886,16 +898,55 @@ class ElementManager:
                         df_chunk["step"] = np.repeat(
                             np.arange(n_steps), n_elems
                         )
-                        # GP_X is only meaningful for non-closed-form
-                        # buckets. For closed-form, drop it even if the
-                        # connectivity dataset happened to carry one.
+                        # GP_X (1-D ξ) is only meaningful for non-closed-
+                        # form line buckets. For closed-form, drop it
+                        # even if the connectivity dataset happened to
+                        # carry one.
                         chunk_gp_xi = (
                             gp_xi
                             if (layout is not None and not layout.closed_form)
                             else None
                         )
+
+                        # Resolve the multi-D natural-coord layout. For
+                        # line elements with GP_X we get a 1×n_ip vector
+                        # which we promote to (n_ip, 1). For shells /
+                        # solids we consult the catalog by base class +
+                        # IP count. Closed-form buckets stay None.
+                        chunk_gp_natural: Optional[np.ndarray] = None
+                        chunk_gp_weights: Optional[np.ndarray] = None
+                        if layout is not None and not layout.closed_form:
+                            if chunk_gp_xi is not None:
+                                chunk_gp_natural = chunk_gp_xi.reshape(-1, 1)
+                                # Line-element custom rules: weights
+                                # are not in the file. Leave as None.
+                            else:
+                                # Look up catalog by the connectivity
+                                # bracket's base class (strip the
+                                # ``[rule:cust]`` suffix).
+                                from ..utilities.gauss_points import (
+                                    get_ip_layout,
+                                )
+
+                                conn_base = conn_decorated.split("[", 1)[0]
+                                cat = get_ip_layout(conn_base, layout.n_ip)
+                                if cat is not None:
+                                    chunk_gp_natural = np.asarray(
+                                        cat[0], dtype=np.float64
+                                    )
+                                    chunk_gp_weights = np.asarray(
+                                        cat[1], dtype=np.float64
+                                    )
+
                         collected.append(
-                            (bucket_path, col_names, chunk_gp_xi, df_chunk)
+                            (
+                                bucket_path,
+                                col_names,
+                                chunk_gp_xi,
+                                chunk_gp_natural,
+                                chunk_gp_weights,
+                                df_chunk,
+                            )
                         )
 
         if not collected:
@@ -922,32 +973,38 @@ class ElementManager:
             element_type=element_type,
         )
 
-        # Reconcile GP_X across chunks. All non-None gp_xi values must
-        # agree (same beam-integration rule → same natural coords);
-        # otherwise that's another flavor of heterogeneous integration
-        # and we already raised above. Pick the first non-None.
+        # Reconcile gp_xi / gp_natural / gp_weights across chunks.
+        # All non-None values for a given attribute must agree; if not,
+        # that's another flavor of heterogeneous integration (already
+        # caught by the layout check above unless someone changes the
+        # catalog out from under us). Pick the first non-None.
         merged_gp_xi: Optional[np.ndarray] = None
-        for _, _, chunk_gp_xi, _ in collected:
-            if chunk_gp_xi is None:
-                continue
-            if merged_gp_xi is None:
-                merged_gp_xi = chunk_gp_xi
-            elif not np.allclose(
-                merged_gp_xi, chunk_gp_xi, rtol=0.0, atol=1e-12
-            ):
-                from ..io.meta_parser import MpcoFormatError
+        merged_gp_natural: Optional[np.ndarray] = None
+        merged_gp_weights: Optional[np.ndarray] = None
+        for _, _, c_xi, c_nat, c_w, _ in collected:
+            if c_xi is not None:
+                if merged_gp_xi is None:
+                    merged_gp_xi = c_xi
+                elif not np.allclose(
+                    merged_gp_xi, c_xi, rtol=0.0, atol=1e-12
+                ):
+                    from ..io.meta_parser import MpcoFormatError
 
-                raise MpcoFormatError(
-                    f"GP_X disagrees across buckets for "
-                    f"results_name={results_name!r}, "
-                    f"element_type={element_type!r}: "
-                    f"{merged_gp_xi.tolist()} vs {chunk_gp_xi.tolist()}. "
-                    f"This means heterogeneous beam-integration rules; "
-                    f"query each decorated bucket separately."
-                )
+                    raise MpcoFormatError(
+                        f"GP_X disagrees across buckets for "
+                        f"results_name={results_name!r}, "
+                        f"element_type={element_type!r}: "
+                        f"{merged_gp_xi.tolist()} vs {c_xi.tolist()}. "
+                        f"This means heterogeneous beam-integration "
+                        f"rules; query each decorated bucket separately."
+                    )
+            if c_nat is not None and merged_gp_natural is None:
+                merged_gp_natural = c_nat
+            if c_w is not None and merged_gp_weights is None:
+                merged_gp_weights = c_w
 
         result_df = pd.concat(
-            [df for _, _, _, df in collected], ignore_index=True
+            [entry[5] for entry in collected], ignore_index=True
         )
         result_df = result_df.set_index(["element_id", "step"]).sort_index()
 
@@ -968,6 +1025,8 @@ class ElementManager:
             results_name=results_name,
             model_stage=model_stage,
             gp_xi=merged_gp_xi,
+            gp_natural=merged_gp_natural,
+            gp_weights=merged_gp_weights,
         )
 
     def get_element_results_by_selection_and_z(
