@@ -284,7 +284,7 @@ cols = er.canonical_columns("axial_force")
 axial = er.canonical("axial_force")     # DataFrame of those columns
 ```
 
-The full map lives in [`STKO_to_python/elements/canonical.py`](../src/STKO_to_python/elements/canonical.py)
+The full map lives in [`STKO_to_python/elements/canonical.py`](https://github.com/nmorabowen/STKO_to_python/blob/main/src/STKO_to_python/elements/canonical.py)
 and covers axial force, bending moments, torsion, shears, beam section
 deformations, shell resultants, continuum stresses/strains, damage,
 plasticity, and global-axis nodal forces.
@@ -506,4 +506,4 @@ er.save_pickle("base_section_force.pkl.gz")
 - [mpco_format_conventions.md](mpco_format_conventions.md) — on-disk format
 - [api/plotting.md](api/plotting.md) — plot facade details
 - [api/mpco-results.md](api/mpco-results.md) — multi-case aggregation
-- [`examples/usage_tour.py`](../examples/usage_tour.py) — runnable end-to-end tour
+- [`examples/usage_tour.py`](https://github.com/nmorabowen/STKO_to_python/blob/main/examples/usage_tour.py) — runnable end-to-end tour
