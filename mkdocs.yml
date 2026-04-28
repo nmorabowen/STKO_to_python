@@ -92,3 +92,4 @@ nav:
       - MPCODataSet: MPCODataSet.md
       - NodalResults: NodalResults.md
       - ElementResults: ElementResults.md
+      - Elements workflow: elements_guide.md
