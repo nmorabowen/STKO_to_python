@@ -271,6 +271,18 @@ class ElementResultsPlotter:
             elevation view.
         **scatter_kwargs
             Forwarded to ``ax.scatter`` (e.g. ``cmap``, ``s``).
+
+        Examples
+        --------
+        Compose with the dataset-level mesh outline so the IP scatter
+        sits on top of the model edges:
+
+        >>> ax, _ = ds.plot.mesh(element_type="203-ASDShellQ4")
+        >>> er.plot.scatter("membrane_xx", step=10, ax=ax)
+
+        Or use the bundled convenience:
+
+        >>> ds.plot.mesh_with_contour(er, "membrane_xx", step=10)
         """
         import matplotlib.pyplot as plt
 
