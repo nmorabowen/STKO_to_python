@@ -184,6 +184,12 @@ class ElementResults:
         self._views: Dict[str, _ElementResultView] = {}
         self._build_views()
 
+        # Plotting helper bound to this result. Imported lazily to
+        # keep the matplotlib dependency optional at import time.
+        from .element_results_plotting import ElementResultsPlotter
+
+        self.plot = ElementResultsPlotter(self)
+
     # ------------------------------------------------------------------ #
     # View construction
     # ------------------------------------------------------------------ #
@@ -707,6 +713,137 @@ class ElementResults:
             return pd.DataFrame()
         return self.df.xs(step, level="step")
 
+    # ------------------------------------------------------------------ #
+    # Per-element time-series statistics                                  #
+    # ------------------------------------------------------------------ #
+
+    def peak_abs(
+        self,
+        component: Optional[str] = None,
+    ) -> pd.DataFrame:
+        """Per-element absolute peak value across all time steps.
+
+        For each element, return ``max(|value|)`` over the entire step
+        history. Useful for envelope-style post-processing (e.g.
+        peak shear demand per beam).
+
+        Parameters
+        ----------
+        component : str or None
+            Restrict to one column. If ``None``, every column gets a
+            ``<col>_peak_abs`` entry.
+
+        Returns
+        -------
+        pd.DataFrame
+            Indexed by ``element_id``. Columns: ``<col>_peak_abs``.
+        """
+        df = self.df if component is None else self.df[[component]]
+        if df.empty:
+            return pd.DataFrame()
+        grouped = df.abs().groupby("element_id")
+        return grouped.max().add_suffix("_peak_abs").sort_index()
+
+    def time_of_peak(
+        self,
+        component: str,
+        *,
+        abs: bool = True,
+    ) -> pd.Series:
+        """Per-element step index at which a component peaks.
+
+        Parameters
+        ----------
+        component : str
+            Required — peak time is single-component by definition.
+        abs : bool, default True
+            If ``True``, find the step where ``|value|`` peaks (most
+            useful for cyclic / dynamic loading). If ``False``, find
+            the step where the *signed* value is maximal (useful for
+            monotonic pushover-style analyses).
+
+        Returns
+        -------
+        pd.Series
+            Indexed by ``element_id``, values are step indices (int).
+        """
+        if component not in self.df.columns:
+            raise ValueError(
+                f"Component {component!r} not in this result. "
+                f"Available: {self.list_components()}"
+            )
+        ser = self.df[component].abs() if abs else self.df[component]
+        # idxmax returns the (element_id, step) tuple of the max-row;
+        # we want just the step level.
+        idx_max = ser.groupby("element_id").idxmax()
+        # idx_max is a Series indexed by element_id, values are tuples.
+        steps = pd.Series(
+            [int(t[1]) for t in idx_max.to_numpy()],
+            index=idx_max.index,
+            name=f"{component}_argmax",
+        )
+        return steps.sort_index()
+
+    def cumulative_envelope(
+        self,
+        component: Optional[str] = None,
+    ) -> pd.DataFrame:
+        """Running min/max envelope per element over the step axis.
+
+        Like :meth:`envelope` but instead of one ``(min, max)`` pair
+        per element, returns the running envelope at every step —
+        useful for monotonic-load analyses where you want to see when
+        each element first reached its peak.
+
+        Returns
+        -------
+        pd.DataFrame
+            MultiIndex ``(element_id, step)`` matching ``self.df``,
+            with columns ``<col>_running_min`` and ``<col>_running_max``
+            for each input column.
+        """
+        df = self.df if component is None else self.df[[component]]
+        if df.empty:
+            return pd.DataFrame()
+        # Ensure deterministic step ordering before cumulative ops.
+        df = df.sort_index(level=["element_id", "step"])
+        grouped = df.groupby(level="element_id")
+        running_max = grouped.cummax().add_suffix("_running_max")
+        running_min = grouped.cummin().add_suffix("_running_min")
+        return pd.concat([running_min, running_max], axis=1)
+
+    def summary(self) -> pd.DataFrame:
+        """One-row-per-element summary of useful per-element statistics.
+
+        Combines: signed peak (max), trough (min), absolute peak,
+        residual (last step value), and mean — across the full step
+        history, for every component column.
+
+        Returns
+        -------
+        pd.DataFrame
+            Indexed by ``element_id``. For each input column ``<col>``,
+            five output columns: ``<col>_max``, ``<col>_min``,
+            ``<col>_peak_abs``, ``<col>_residual``, ``<col>_mean``.
+        """
+        if self.df.empty:
+            return pd.DataFrame()
+        # Sort so .last() picks the largest step.
+        df = self.df.sort_index(level=["element_id", "step"])
+        grouped = df.groupby(level="element_id")
+        peak_abs = df.abs().groupby(level="element_id").max().add_suffix("_peak_abs")
+        out = pd.concat(
+            [
+                grouped.max().add_suffix("_max"),
+                grouped.min().add_suffix("_min"),
+                peak_abs,
+                grouped.last().add_suffix("_residual"),
+                grouped.mean().add_suffix("_mean"),
+            ],
+            axis=1,
+        )
+        return out.sort_index()
+
     def at_time(self, t: float, tol: float = 1e-10) -> pd.DataFrame:
         """
         Extract results at the time step closest to *t*.
@@ -733,13 +870,20 @@ class ElementResults:
 
     def __getstate__(self) -> dict[str, Any]:
         state = self.__dict__.copy()
+        # ResultView proxies and the plotter hold a back-reference to
+        # ``self``; rebuild them on unpickle rather than serializing
+        # the cycle.
         state["_views"] = None
+        state.pop("plot", None)
         return state
 
     def __setstate__(self, state: dict[str, Any]) -> None:
         self.__dict__.update(state)
         self._views = {}
         self._build_views()
+        from .element_results_plotting import ElementResultsPlotter
+
+        self.plot = ElementResultsPlotter(self)
 
     def save_pickle(
         self,
