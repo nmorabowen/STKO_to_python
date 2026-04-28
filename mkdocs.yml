@@ -84,6 +84,7 @@ nav:
       - Overview: api/index.md
       - MPCODataSet: api/mpco-dataset.md
       - NodalResults: api/nodal-results.md
+      - ElementResults: api/element-results.md
       - AggregationEngine: api/aggregation-engine.md
       - Query engines: api/query-engines.md
       - Plotting: api/plotting.md
@@ -94,3 +95,8 @@ nav:
       - NodalResults: NodalResults.md
       - ElementResults: ElementResults.md
       - Elements workflow: elements_guide.md
+  - Examples:
+      - Usage tour: examples/usage_tour.md
+      - Elastic frame: examples/elastic_frame.md
+      - Quad-frame shells: examples/quad_frame_shell.md
+      - Solid + fiber beam: examples/solid_mixed.md
