@@ -23,6 +23,7 @@ EXAMPLES_DIR = REPO_ROOT / "stko_results_examples"
 ELASTIC_FRAME_DIR = EXAMPLES_DIR / "elasticFrame" / "results"
 QUAD_FRAME_DIR = EXAMPLES_DIR / "elasticFrame" / "QuadFrame_results"
 SOLID_PARTITION_DIR = EXAMPLES_DIR / "solid_partition_example"
+NL_SHELL_DIR = EXAMPLES_DIR / "Test_NLShell"
 
 
 @pytest.fixture(scope="session")
@@ -81,3 +82,24 @@ def solid_partition_dir() -> Path:
             f"solid_partition_example not available at {SOLID_PARTITION_DIR}"
         )
     return SOLID_PARTITION_DIR
+
+
+@pytest.fixture(scope="session")
+def nl_shell_dir() -> Path:
+    """Four-partition fixture covering the layered-shell META pattern.
+
+    Exercises:
+
+    * ``204-ASDShellT3`` (3-IP triangular shell) alongside
+      ``203-ASDShellQ4`` (4-IP quad shell) in the same model.
+    * Layered ``section.fiber.*`` buckets where a single bucket carries
+      ``(gauss_point × thickness_layer)`` blocks — repeated GAUSS_IDS,
+      mixed MULTIPLICITY across blocks, and empty COMPONENTS segments
+      for layers that don't track the requested quantity.
+
+    Skips the test if the fixture is absent (it's developer-local —
+    ~2 GB of recorder output, gitignored).
+    """
+    if not (NL_SHELL_DIR / "Results.part-0.mpco").exists():
+        pytest.skip(f"Test_NLShell not available at {NL_SHELL_DIR}")
+    return NL_SHELL_DIR

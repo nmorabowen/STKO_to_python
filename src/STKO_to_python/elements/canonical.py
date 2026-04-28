@@ -125,19 +125,34 @@ CANONICAL_TO_MPCO: dict[str, Tuple[str, ...]] = {
 # ---------------------------------------------------------------------- #
 #
 # Column names produced by io/meta_parser.py end in one of:
-#   * ``_<int>``        — closed-form node-suffixed (Px_1, N_2, P3_8)
-#   * ``_ip<int>``      — line-stations / gauss-level (P_ip0, sigma11_ip7)
-#   * ``_f<int>_ip<int>`` — compressed fiber (sigma11_f0_ip0)
+#   * ``_<int>``                       — closed-form node-suffixed (Px_1, N_2, P3_8)
+#   * ``_ip<int>``                     — line-stations / gauss-level (P_ip0, sigma11_ip7)
+#   * ``_f<int>_ip<int>``              — compressed fiber (sigma11_f0_ip0)
+#   * ``_l<int>_ip<int>``              — layered shell, no fibers (d+_l2_ip3)
+#   * ``_f<int>_l<int>_ip<int>``       — layered shell with fibers
 # Stripping the suffix yields the MPCO shortname.
+#
+# Order in the regex alternation is longest-first so the most-specific
+# suffix wins; otherwise ``_l0_ip0`` would shadow under ``_ip0``.
 
-_SUFFIX_RE = re.compile(r"_(?:f\d+_ip\d+|ip\d+|\d+)$")
+_SUFFIX_RE = re.compile(
+    r"_(?:"
+    r"f\d+_l\d+_ip\d+"   # fiber + layer + ip (layered shell with fibers)
+    r"|f\d+_ip\d+"        # fiber + ip
+    r"|l\d+_ip\d+"        # layer + ip (layered shell, no fibers)
+    r"|ip\d+"             # plain ip
+    r"|\d+"               # closed-form node
+    r")$"
+)
 
 
 def shortname_of(column: str) -> str:
     """Return the MPCO shortname carried by a flat column name.
 
-    Strips the ``_<int>`` / ``_ip<int>`` / ``_f<int>_ip<int>`` suffix
-    introduced by :func:`STKO_to_python.io.meta_parser.parse_bucket_meta`.
+    Strips one of the suffixes introduced by
+    :func:`STKO_to_python.io.meta_parser.parse_bucket_meta`:
+    ``_<int>``, ``_ip<int>``, ``_f<int>_ip<int>``, ``_l<int>_ip<int>``,
+    or ``_f<int>_l<int>_ip<int>``.
 
     Examples
     --------
@@ -147,8 +162,10 @@ def shortname_of(column: str) -> str:
     'P'
     >>> shortname_of("sigma11_f5_ip0")
     'sigma11'
-    >>> shortname_of("Fxx_ip0")
-    'Fxx'
+    >>> shortname_of("d+_l2_ip3")
+    'd+'
+    >>> shortname_of("sigma11_f4_l2_ip0")
+    'sigma11'
     >>> shortname_of("d+")            # already a shortname
     'd+'
     """

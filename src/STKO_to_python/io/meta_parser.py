@@ -167,8 +167,18 @@ def parse_bucket_meta(bucket_grp, *, bucket_path: str | None = None) -> BucketLa
     # Closed-form sentinel (§3).
     closed_form = gauss_ids.size == 1 and int(gauss_ids[0]) == -1
 
-    # Parse semicolon-separated COMPONENTS segments (§2).
-    raw_segments = [s for s in components_str.split(";") if s.strip()]
+    # Parse semicolon-separated COMPONENTS segments (§2). Layered-shell
+    # fiber buckets (e.g. section.fiber.damage on ASDShellQ4) include
+    # *empty* segments like ``"0.1.2.3.4."`` for layers that don't carry
+    # the requested quantity — pair these with NUM_COMPONENTS=0. Don't
+    # filter them out: the segment count must equal MULTIPLICITY.size
+    # for the per-block consistency check below.
+    raw_segments = components_str.split(";")
+    # Drop a trailing empty segment that some writers emit after a
+    # final ``;``. We detect this by NUM_COMPONENTS not having that
+    # extra block; truncate to match.
+    if len(raw_segments) == multiplicity.size + 1 and raw_segments[-1].strip() == "":
+        raw_segments = raw_segments[:-1]
     if not raw_segments:
         raise MpcoFormatError(f"{path}: META/COMPONENTS parsed to zero segments")
 
@@ -233,30 +243,62 @@ def parse_bucket_meta(bucket_grp, *, bucket_path: str | None = None) -> BucketLa
             num_columns=num_columns,
         )
 
-    # Non-closed-form: one block per IP. GAUSS_IDS must be sequential
-    # 0..n-1 (the shape we've seen in practice; deviations would
-    # indicate format drift, raise loud).
-    expected_gids = np.arange(gauss_ids.size, dtype=np.int64)
-    if not np.array_equal(gauss_ids, expected_gids):
+    # Non-closed-form: blocks correspond to (gauss-point × layer)
+    # pairs. The unique GAUSS_IDS values must form 0..n_unique-1, and
+    # the array must be non-decreasing so we can group blocks by IP.
+    # Layered shells repeat each gauss-id once per thickness layer
+    # (e.g. ``[0,0,0,0,0, 1,1,1,1,1, ...]`` for 4 IPs × 5 layers); plain
+    # gauss-level buckets have each gauss-id exactly once.
+    if gauss_ids.size == 0:
+        raise MpcoFormatError(f"{path}: GAUSS_IDS is empty")
+    if not np.all(np.diff(gauss_ids) >= 0):
         raise MpcoFormatError(
-            f"{path}: GAUSS_IDS must be sequential 0..n-1 for "
+            f"{path}: GAUSS_IDS must be non-decreasing for "
             f"non-closed-form buckets, got {gauss_ids.tolist()}"
         )
+    unique_gids = np.unique(gauss_ids)
+    expected_unique = np.arange(unique_gids.size, dtype=np.int64)
+    if not np.array_equal(unique_gids, expected_unique):
+        raise MpcoFormatError(
+            f"{path}: unique GAUSS_IDS must be sequential 0..n-1 "
+            f"for non-closed-form buckets, got {unique_gids.tolist()}"
+        )
 
-    # Build the flat column vector. For MULT[i]==1 we only need the IP
-    # suffix (P_ip0, Mz_ip0, ...). For MULT[i]>1 (compressed fibers per
-    # IP) we add a fiber-index suffix so each column is unambiguous:
-    # sigma11_f0_ip0, sigma11_f1_ip0, ..., sigma11_f5_ip1.
+    # If any gauss-point repeats, this is a layered bucket. Compute
+    # each block's layer index = its position among prior blocks with
+    # the same gauss-id. n_layers_per_ip is the max repetition count.
+    has_layers = bool((np.bincount(gauss_ids) > 1).any())
+    layer_counter: Dict[int, int] = {}
+
+    # Build the flat column vector. Suffix conventions:
+    #   * plain gauss / line-stations (MULT=1, no layers):
+    #         <comp>_ip<gid>
+    #   * compressed fibers (MULT>1, no layers):
+    #         <comp>_f<fiber>_ip<gid>
+    #   * layered (gauss-id repeats, MULT=1):
+    #         <comp>_l<layer>_ip<gid>
+    #   * layered + fibers (gauss-id repeats, MULT>1):
+    #         <comp>_f<fiber>_l<layer>_ip<gid>
     flat_list: List[str] = []
-    for gid, mult_i, comps in zip(gauss_ids.tolist(), multiplicity.tolist(), ip_components):
+    for gid, mult_i, comps in zip(
+        gauss_ids.tolist(), multiplicity.tolist(), ip_components
+    ):
+        gid = int(gid)
         mult_i = int(mult_i)
-        if mult_i == 1:
+        layer_idx = layer_counter.get(gid, 0)
+        layer_counter[gid] = layer_idx + 1
+        # Empty NUM_COMPONENTS / segment → no columns from this block.
+        if not comps:
+            continue
+        for fiber_j in range(mult_i):
             for c in comps:
-                flat_list.append(f"{c}_ip{int(gid)}")
-        else:
-            for fiber_j in range(mult_i):
-                for c in comps:
-                    flat_list.append(f"{c}_f{fiber_j}_ip{int(gid)}")
+                parts: List[str] = [c]
+                if mult_i > 1:
+                    parts.append(f"f{fiber_j}")
+                if has_layers:
+                    parts.append(f"l{layer_idx}")
+                parts.append(f"ip{gid}")
+                flat_list.append("_".join(parts))
 
     if len(flat_list) != num_columns:
         raise MpcoFormatError(
@@ -267,7 +309,12 @@ def parse_bucket_meta(bucket_grp, *, bucket_path: str | None = None) -> BucketLa
 
     return BucketLayout(
         closed_form=False,
-        n_ip=int(gauss_ids.size),
+        # ``n_ip`` is the number of *geometric* integration points
+        # (unique gauss-ids), not the raw block count. Layered buckets
+        # have one block per (gauss × layer) but n_ip stays at the
+        # gauss-only count so it matches the catalog and the physical
+        # element geometry.
+        n_ip=int(unique_gids.size),
         gauss_ids=tuple(int(g) for g in gauss_ids),
         ip_components=ip_components,
         flat_columns=tuple(flat_list),

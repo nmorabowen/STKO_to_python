@@ -92,6 +92,8 @@ patterns the parser produces:
 | Line-stations (`section.force`, `section.deformation`) | force-/disp-based beam, 5 IPs × 4 section comps | `P_ip0, Mz_ip0, My_ip0, T_ip0, ..., T_ip4` |
 | Gauss-level continuum (`material.stress`, `material.strain`) | `56-Brick`, 8 IPs × 6 stress comps | `sigma11_ip0, sigma22_ip0, ..., sigma13_ip7` |
 | Compressed fibers (`section.fiber.stress`) | `MULTIPLICITY > 1`, 6 fibers × 2 IPs | `sigma11_f0_ip0, sigma11_f1_ip0, ..., sigma11_f5_ip1` |
+| Layered shell (`section.fiber.damage` on ASDShellQ4) | 4 IPs × layered concrete section (only some layers carry damage) | `d+_l0_ip0, d-_l0_ip0, d+_l2_ip0, ..., d-_l4_ip3` |
+| Layered + fibers | rare; both layers and fibers per layer | `<comp>_f<fiber>_l<layer>_ip<gauss>` |
 
 See [`docs/mpco_format_conventions.md`](mpco_format_conventions.md) for
 the underlying META layout, and `STKO_to_python/io/meta_parser.py` for
