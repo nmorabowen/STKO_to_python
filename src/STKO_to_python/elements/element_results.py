@@ -411,6 +411,117 @@ class ElementResults:
             self.gp_natural, self.element_node_coords, dN_fn, geom_kind
         )
 
+    def integrate_canonical(self, name: str) -> pd.Series:
+        """Integrate a canonical quantity over the *physical* element
+        for every element and step.
+
+        For each ``(element_id, step)``, computes the quadrature sum::
+
+            ∫ value dΩ ≈ Σ_ip value_at_ip * gp_weights * |J|
+
+        where ``gp_weights`` come from the static Gauss-point catalog
+        and ``|J|`` is the appropriate Jacobian measure (volume for
+        solids, surface for shells, length for line elements).
+
+        Parameters
+        ----------
+        name : str
+            Canonical engineering name, e.g. ``"stress_11"``,
+            ``"membrane_xx"``, ``"axial_force"``. Must resolve to
+            exactly one column per integration point — i.e. the same
+            quantity at every IP. Compressed-fiber buckets (with
+            sub-IP fibers) are rejected; integrate them by selecting
+            specific fiber columns directly via :meth:`canonical_columns`.
+
+        Returns
+        -------
+        pd.Series
+            Indexed by ``(element_id, step)`` — same MultiIndex as
+            ``self.df``. Use ``.unstack("element_id")`` for a
+            step × element matrix.
+
+        Raises
+        ------
+        ValueError
+            If the bucket is closed-form, has no ``gp_weights`` (line
+            elements with custom rules), no Jacobian (no node coords
+            or unknown element class), or the canonical name doesn't
+            match exactly ``n_ip`` columns.
+
+        Examples
+        --------
+        Volume-integrate σ_11 over each brick element, get a
+        Series indexed by (element_id, step):
+
+        >>> s = er.integrate_canonical("stress_11")
+        >>> s.unstack("element_id").head()    # step × element matrix
+
+        Area-integrate Mxx (bending moment per unit length) over
+        each shell element to get total internal moment:
+
+        >>> moments = er_shell.integrate_canonical("bending_moment_xx")
+        """
+        if self.gp_weights is None:
+            raise ValueError(
+                f"integrate_canonical({name!r}): no gp_weights on this "
+                f"result. Either the bucket is closed-form (no IPs) "
+                f"or this is a line element with a custom rule whose "
+                f"weights aren't written to MPCO. Catalog-driven "
+                f"shell / solid / plane elements have weights."
+            )
+        dets = self.jacobian_dets()
+        if dets is None:
+            raise ValueError(
+                f"integrate_canonical({name!r}): jacobian_dets() "
+                f"returned None. Likely missing element_node_coords "
+                f"or no shape function registered for "
+                f"element_type={self.element_type!r}."
+            )
+
+        cols = self.canonical_columns(name)
+        if not cols:
+            raise ValueError(
+                f"integrate_canonical({name!r}): no columns matching "
+                f"this canonical name. Present canonicals: "
+                f"{self.list_canonicals()}"
+            )
+        if len(cols) != self.n_ip:
+            # Compressed-fiber bucket (n_fibers * n_ip) or some other
+            # multi-block layout. Per-fiber integration needs section /
+            # fiber metadata we don't carry yet — refuse loudly.
+            raise ValueError(
+                f"integrate_canonical({name!r}): canonical resolves to "
+                f"{len(cols)} columns but the bucket has {self.n_ip} "
+                f"integration points. Likely a fiber bucket — pick the "
+                f"specific columns via canonical_columns() / df[...] "
+                f"and integrate manually."
+            )
+
+        # cols are in IP order (the META parser emits them sorted by
+        # gauss_id for line/gauss-level buckets). values shape: rows
+        # of ``self.df`` × n_ip.
+        values = self.df[list(cols)].to_numpy(dtype=np.float64)
+
+        # Build a per-row (gp_weights * |J|) array. dets is aligned to
+        # ``self.element_ids`` (sorted ascending); look up each row's
+        # element to get the right Jacobian.
+        eids_in_df = (
+            self.df.index.get_level_values("element_id").to_numpy(np.int64)
+        )
+        elem_id_to_row = {int(eid): i for i, eid in enumerate(self.element_ids)}
+        try:
+            row_idx = np.array(
+                [elem_id_to_row[int(e)] for e in eids_in_df], dtype=np.int64
+            )
+        except KeyError as err:
+            raise ValueError(
+                f"integrate_canonical({name!r}): df contains element_id "
+                f"{err.args[0]} not in self.element_ids. Index out of sync."
+            )
+        row_weights = self.gp_weights[None, :] * dets[row_idx]
+        integrals = (values * row_weights).sum(axis=1)
+        return pd.Series(integrals, index=self.df.index, name=f"integral_{name}")
+
     def physical_x(self, length: float) -> np.ndarray:
         """Convert ``self.gp_xi`` (natural ξ ∈ [-1, +1]) to physical
         positions along an element of the given ``length``.

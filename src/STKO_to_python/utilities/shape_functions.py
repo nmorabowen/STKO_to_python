@@ -38,6 +38,14 @@ __all__ = [
     "get_shape_functions",
     "compute_physical_coords",
     "compute_jacobian_dets",
+    # Reusable shape-function primitives — exported so users can
+    # register them under their own element-class keys when those
+    # surface in fixtures (e.g. ``SHAPE_FUNCTIONS["204-ASDShellT3"] =
+    # (tri3_N, tri3_dN, "shell")``).
+    "tri3_N",
+    "tri3_dN",
+    "tet4_N",
+    "tet4_dN",
 ]
 
 
@@ -162,6 +170,77 @@ def _line2_dN(nat: np.ndarray) -> np.ndarray:
     out = np.empty((n_ip, 2, 1), dtype=np.float64)
     out[:, 0, 0] = -0.5
     out[:, 1, 0] = +0.5
+    return out
+
+
+# --------------------------------------------------------------------- #
+# Tri3 — 3-node linear triangle (shell or plane)                        #
+# --------------------------------------------------------------------- #
+#
+# Parent domain: unit triangle with vertices at (0,0), (1,0), (0,1).
+# Pair with ``gauss_triangle()`` from :mod:`gauss_points`.
+#
+# Node ordering (natural):
+#   1: (0, 0)
+#   2: (1, 0)
+#   3: (0, 1)
+
+
+def tri3_N(nat: np.ndarray) -> np.ndarray:
+    """Linear-triangle shape functions — shape ``(n_ip, 3)``."""
+    xi = nat[:, 0]
+    eta = nat[:, 1]
+    return np.stack([1.0 - xi - eta, xi, eta], axis=1)
+
+
+def tri3_dN(nat: np.ndarray) -> np.ndarray:
+    """Linear-triangle derivatives — shape ``(n_ip, 3, 2)``.
+
+    Derivatives are constant on the parent triangle; the per-IP
+    repetition just makes the array shape consistent with the rest of
+    the catalog.
+    """
+    n_ip = nat.shape[0]
+    out = np.empty((n_ip, 3, 2), dtype=np.float64)
+    out[:, 0, 0] = -1.0; out[:, 0, 1] = -1.0  # ∂N1/∂(ξ, η)
+    out[:, 1, 0] = +1.0; out[:, 1, 1] = +0.0  # ∂N2/∂(ξ, η)
+    out[:, 2, 0] = +0.0; out[:, 2, 1] = +1.0  # ∂N3/∂(ξ, η)
+    return out
+
+
+# --------------------------------------------------------------------- #
+# Tet4 — 4-node linear tetrahedron (solid)                              #
+# --------------------------------------------------------------------- #
+#
+# Parent domain: unit tetrahedron with vertices at the origin and the
+# three unit-axis points. Pair with ``gauss_tetrahedron()`` from
+# :mod:`gauss_points`.
+#
+# Node ordering (natural):
+#   1: (0, 0, 0)
+#   2: (1, 0, 0)
+#   3: (0, 1, 0)
+#   4: (0, 0, 1)
+
+
+def tet4_N(nat: np.ndarray) -> np.ndarray:
+    """Linear-tet shape functions — shape ``(n_ip, 4)``."""
+    xi = nat[:, 0]
+    eta = nat[:, 1]
+    zeta = nat[:, 2]
+    return np.stack(
+        [1.0 - xi - eta - zeta, xi, eta, zeta], axis=1
+    )
+
+
+def tet4_dN(nat: np.ndarray) -> np.ndarray:
+    """Linear-tet derivatives — shape ``(n_ip, 4, 3)`` (constant)."""
+    n_ip = nat.shape[0]
+    out = np.empty((n_ip, 4, 3), dtype=np.float64)
+    out[:, 0, :] = [-1.0, -1.0, -1.0]
+    out[:, 1, :] = [+1.0,  0.0,  0.0]
+    out[:, 2, :] = [ 0.0, +1.0,  0.0]
+    out[:, 3, :] = [ 0.0,  0.0, +1.0]
     return out
 
 

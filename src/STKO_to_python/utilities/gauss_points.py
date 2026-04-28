@@ -38,6 +38,8 @@ __all__ = [
     "gauss_legendre_1d",
     "tensor_product_2d",
     "tensor_product_3d",
+    "gauss_triangle",
+    "gauss_tetrahedron",
     "ELEMENT_IP_CATALOG",
     "get_ip_layout",
 ]
@@ -119,6 +121,111 @@ def tensor_product_3d(n: int) -> Tuple[np.ndarray, np.ndarray]:
     wxi, weta, wzeta = np.meshgrid(wts, wts, wts, indexing="ij")
     weights = (wxi * weta * wzeta).transpose(2, 1, 0).ravel()
     return coords.astype(np.float64), weights.astype(np.float64)
+
+
+# --------------------------------------------------------------------- #
+# Triangle / tetrahedron quadrature                                     #
+# --------------------------------------------------------------------- #
+#
+# Triangles and tets use barycentric-style natural coords on the
+# **unit** triangle / tetrahedron (vertices at the origin and on the
+# axes). This is a different parent domain than tensor-product
+# rules — the parent measure is 1/2 (triangle) or 1/6 (tet), not 4 / 8
+# — and the corresponding shape functions in
+# :mod:`STKO_to_python.utilities.shape_functions` use the same domain.
+
+# Standard 1-, 3-, 7-point rules on the unit triangle.
+_TRI_RULES: Dict[int, Tuple[np.ndarray, np.ndarray]] = {
+    1: (
+        np.array([[1.0 / 3.0, 1.0 / 3.0]]),
+        np.array([0.5]),
+    ),
+    3: (
+        np.array(
+            [
+                [1.0 / 6.0, 1.0 / 6.0],
+                [2.0 / 3.0, 1.0 / 6.0],
+                [1.0 / 6.0, 2.0 / 3.0],
+            ]
+        ),
+        np.array([1.0 / 6.0] * 3),
+    ),
+}
+
+# Standard 1- and 4-point rules on the unit tetrahedron.
+_TET_A = (5.0 + 3.0 * np.sqrt(5.0)) / 20.0
+_TET_B = (5.0 - np.sqrt(5.0)) / 20.0
+_TET_RULES: Dict[int, Tuple[np.ndarray, np.ndarray]] = {
+    1: (
+        np.array([[0.25, 0.25, 0.25]]),
+        np.array([1.0 / 6.0]),
+    ),
+    4: (
+        np.array(
+            [
+                [_TET_A, _TET_B, _TET_B],
+                [_TET_B, _TET_A, _TET_B],
+                [_TET_B, _TET_B, _TET_A],
+                [_TET_B, _TET_B, _TET_B],
+            ]
+        ),
+        np.array([1.0 / 24.0] * 4),
+    ),
+}
+
+
+def gauss_triangle(n_ip: int) -> Tuple[np.ndarray, np.ndarray]:
+    """Standard Gauss rule on the unit reference triangle.
+
+    Parent domain: vertices at (0,0), (1,0), (0,1); area 1/2.
+    Sum of weights equals the parent area.
+
+    Parameters
+    ----------
+    n_ip : int
+        ``1`` (degree-1, centroid) or ``3`` (degree-2, edge midpoints
+        of the medial triangle). Other rules can be added if needed.
+
+    Returns
+    -------
+    (coords, weights) : (ndarray (n_ip, 2), ndarray (n_ip,))
+
+    Raises
+    ------
+    ValueError if ``n_ip`` is not in the supported set.
+    """
+    if n_ip not in _TRI_RULES:
+        raise ValueError(
+            f"Unsupported n_ip={n_ip!r} for triangle rule. "
+            f"Available: {sorted(_TRI_RULES)}"
+        )
+    coords, weights = _TRI_RULES[n_ip]
+    return coords.copy(), weights.copy()
+
+
+def gauss_tetrahedron(n_ip: int) -> Tuple[np.ndarray, np.ndarray]:
+    """Standard Gauss rule on the unit reference tetrahedron.
+
+    Parent domain: vertices at the origin and the three unit axis
+    points; volume 1/6. Sum of weights equals the parent volume.
+
+    Parameters
+    ----------
+    n_ip : int
+        ``1`` (degree-1, centroid) or ``4`` (degree-2). Other rules
+        (e.g. 5-point degree-3) can be added if needed.
+
+    Returns
+    -------
+    (coords, weights) : (ndarray (n_ip, 3), ndarray (n_ip,))
+    """
+    if n_ip not in _TET_RULES:
+        raise ValueError(
+            f"Unsupported n_ip={n_ip!r} for tetrahedron rule. "
+            f"Available: {sorted(_TET_RULES)}"
+        )
+    coords, weights = _TET_RULES[n_ip]
+    return coords.copy(), weights.copy()
 
 
 # --------------------------------------------------------------------- #
