@@ -396,6 +396,55 @@ df_flat = er.to_dataframe(include_time=True)
 # Adds a 'time' column mapped from step index to time value
 ```
 
+## Per-element time-series statistics
+
+For pushover and dynamic post-processing:
+
+```python
+# Per-element absolute peak across the full step history
+peaks = er.peak_abs()                       # all components
+peaks = er.peak_abs(component="Mz_1")       # one component
+
+# Step index where a component peaks (per element)
+idx_abs    = er.time_of_peak("Mz_1")              # by |value| (default)
+idx_signed = er.time_of_peak("Mz_1", abs=False)   # by signed value
+
+# Running min/max envelope at every step (monotonic-load workflows)
+ce = er.cumulative_envelope("N_1")
+# MultiIndex (element_id, step) with columns N_1_running_min/max
+
+# One-row-per-element summary: max, min, peak_abs, residual, mean
+s = er.summary()
+```
+
+## Plotting
+
+`ElementResults.plot` is a small wrapper around matplotlib for the
+three engineering views that come up most:
+
+```python
+# Time history of a component for one or more elements
+ax, meta = er.plot.history("Mz_1", element_ids=[1, 2, 3])
+ax, meta = er.plot.history("P_ip2", x_axis="step")  # step instead of time
+
+# Force / moment / strain diagram along a beam (line elements only)
+ax, meta = er.plot.diagram("axial_force", element_id=1, step=100)
+ax, meta = er.plot.diagram("bending_moment_z", element_id=1, step=100,
+                            x_in_natural=True)  # ξ ∈ [-1, +1]
+
+# Spatial scatter for shells / planes / solids (color = component value)
+ax, meta = er_shell.plot.scatter("membrane_xx", step=100)
+ax, meta = er_shell.plot.scatter("membrane_xx", step=100, axes=("x", "z"))
+ax, meta = er_brick.plot.scatter("stress_11", step=100)
+```
+
+Each method returns ``(ax, meta)`` — pass an existing ``ax=`` to compose
+plots, or use ``meta["x"]`` / ``meta["values"]`` directly if you want to
+build your own visualization. ``diagram()`` requires the result to be a
+line element (``gp_dim == 1``); ``scatter()`` requires
+``physical_coords()`` to resolve (so closed-form buckets and unknown
+classes raise loudly).
+
 ## Pickle Serialization
 
 Save and reload without needing the original HDF5 files:
