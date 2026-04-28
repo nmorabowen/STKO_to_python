@@ -116,30 +116,65 @@ er = ds.elements.get_element_results(
 
 ### Element Spatial Queries
 
-The Elements class provides spatial filtering methods for finding elements at specific elevations:
+Building and bridge models are often post-processed **story by story** — you want forces in all columns at floor level 3.0 m, or the membrane stresses in every shear wall panel at a particular elevation. The spatial query helpers implement this horizontal-slice pattern so you don't have to filter the element DataFrame by hand.
+
+#### What is a "Z-level"?
+
+A Z-level is a specific elevation in the global Z-axis (vertical axis in most OpenSees models). The helper matches elements whose **centroid Z-coordinate** falls within a configurable tolerance of the requested value. A single call with `list_z=[0.0, 3.0, 6.0, 9.0]` partitions the entire element set into per-story buckets in one pass.
+
+#### `get_elements_at_z_levels`
+
+Returns a filtered `DataFrame` — a subset of `ds.elements_info["dataframe"]` — keeping only those elements of the requested type whose centroids are at the given Z-levels.
+
+Use this when you want to **inspect** which elements sit at each floor before fetching results.
 
 ```python
-# Elements at Z-levels (horizontal slicing)
 df_at_z = ds.elements.get_elements_at_z_levels(
     list_z=[0.0, 3.0, 6.0],
     element_type="203-ASDShellQ4",
+    tol=0.1,          # Z-coordinate tolerance (default 0.1 m)
 )
+# Returns a DataFrame with columns: element_id, element_type, z_level, …
+```
 
-# Elements in a selection set at Z-levels
+#### `get_elements_in_selection_at_z_levels`
+
+Same as above but intersects with a named selection set first. Useful for filtering a *specific structural system* (e.g. "only interior shear walls") at each floor.
+
+```python
 df_sel_z = ds.elements.get_elements_in_selection_at_z_levels(
     list_z=[0.0, 3.0],
     selection_set_name="ShearWall",
     element_type="203-ASDShellQ4",
 )
+```
 
-# Combined: filter by selection + Z, then fetch results grouped by type
+#### `get_element_results_by_selection_and_z`
+
+The most powerful variant. It applies the selection + Z-level filter and then **fetches `ElementResults` for each distinct element type found**. The return value is a dictionary keyed by the decorated element-type string (as it appears in the HDF5 file):
+
+```python
 results_by_type = ds.elements.get_element_results_by_selection_and_z(
     results_name="globalForces",
     list_z=[0.0, 3.0],
     selection_set_name="ShearWall",
+    model_stage="MODEL_STAGE[1]",
 )
-# returns: {'203-ASDShellQ4[...details...]': ElementResults, ...}
+# {
+#   '203-ASDShellQ4[...]': ElementResults,   # shells at z=0 and z=3
+#   '5-ElasticBeam3d[...]': ElementResults,  # columns at those floors
+# }
 ```
+
+Iterate the returned dict to process each type independently:
+
+```python
+for type_key, er in results_by_type.items():
+    s = er.integrate_canonical("membrane_xx")
+    print(f"{type_key}: total Fxx = {s.unstack().sum(axis=1).values}")
+```
+
+This pattern is the recommended way to extract **inter-story shear** or **story-level membrane forces** for post-processing workflows.
 
 ### Introspecting Available Element Results
 
