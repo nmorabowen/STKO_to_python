@@ -7,9 +7,11 @@ wrapper" from spec §8.
 """
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Sequence
+from typing import TYPE_CHECKING, Any, Optional, Sequence
 
 import matplotlib.pyplot as plt
+
+from .deformed_shape import plot_deformed_shape, plot_undeformed_shape
 
 if TYPE_CHECKING:
     from ..core.dataset import MPCODataSet
@@ -93,6 +95,70 @@ class Plot:
             marker=marker,
             label=label,
             **line_kwargs,
+        )
+
+
+    # ------------------------------------------------------------------ #
+    # Deformed-mesh visualization
+    # ------------------------------------------------------------------ #
+
+    def deformed_shape(
+        self,
+        *,
+        model_stage: str,
+        step: int,
+        scale: float = 1.0,
+        ax: Any = None,
+        show_undeformed: bool = True,
+        color: Any = "C0",
+        undeformed_color: Any = "0.7",
+        linewidth: float = 1.2,
+        undeformed_linewidth: float = 0.8,
+        alpha: float = 1.0,
+        undeformed_alpha: float = 0.6,
+        title: Optional[str] = None,
+    ) -> tuple[Any, dict[str, Any]]:
+        """Render the deformed mesh at a given step.
+
+        Computes ``deformed = node_coords + scale * displacement`` for
+        every node, then draws element edges class-by-class. Returns
+        ``(ax, meta)`` like the other plot helpers; see
+        :func:`STKO_to_python.plotting.deformed_shape.plot_deformed_shape`
+        for the full parameter list.
+        """
+        return plot_deformed_shape(
+            self._dataset,
+            model_stage=model_stage,
+            step=step,
+            scale=scale,
+            ax=ax,
+            show_undeformed=show_undeformed,
+            color=color,
+            undeformed_color=undeformed_color,
+            linewidth=linewidth,
+            undeformed_linewidth=undeformed_linewidth,
+            alpha=alpha,
+            undeformed_alpha=undeformed_alpha,
+            title=title,
+        )
+
+    def undeformed_shape(
+        self,
+        *,
+        ax: Any = None,
+        color: Any = "0.3",
+        linewidth: float = 1.0,
+        alpha: float = 1.0,
+        title: Optional[str] = None,
+    ) -> tuple[Any, dict[str, Any]]:
+        """Render the original (undeformed) mesh — sanity-check helper."""
+        return plot_undeformed_shape(
+            self._dataset,
+            ax=ax,
+            color=color,
+            linewidth=linewidth,
+            alpha=alpha,
+            title=title,
         )
 
 
