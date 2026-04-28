@@ -71,12 +71,28 @@ ds.plot.xy(
 - **[Elements workflow guide](elements_guide.md)** — end-to-end
   walkthrough of element results: discovery, selection sets,
   integration-point access, canonical names, plotting, and pickling.
+- **[ElementResults reference](api/element-results.md)** — full API
+  for the element result container, including `physical_coords()`,
+  `integrate_canonical()`, time-series statistics, and the new
+  `plot.history()` / `plot.diagram()` / `plot.scatter()` plotters.
 - **[Architecture](architecture.md)** — the layered design, what lives
   where, pickle compatibility, and the per-phase refactor history.
 - **[API reference](api/index.md)** — class-by-class docs generated
   from the package's docstrings.
-- **[Design spec](architecture-refactor-proposal.md)** — the proposal
-  document that drove the 2026 refactor. Kept for historical context.
+
+## Executable examples
+
+Three runnable scripts — one per fixture — each focused on capabilities
+unique to that element family:
+
+| Script | Fixture | Highlights |
+|---|---|---|
+| [Elastic frame](examples/elastic_frame.md) | `elasticFrame` (single partition) | Nodal aggregations, closed-form beam forces, canonical names, plotting |
+| [Quad-frame shells](examples/quad_frame_shell.md) | `QuadFrame_results` (2 partitions) | 4-IP shells, `physical_coords()`, `integrate_canonical()`, scatter plot |
+| [Solid + fiber beam](examples/solid_mixed.md) | `solid_partition_example` (2 partitions) | 8-IP Brick volume integration, fiber `at_ip()`, beam moment diagram |
+
+The [Usage tour](examples/usage_tour.md) covers all major API
+surfaces in one script (nodal + element + plotting + pickle).
 
 ## Building these docs locally
 
