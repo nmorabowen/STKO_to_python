@@ -200,6 +200,64 @@ class ElementResults:
         """Number of integration points (0 for closed-form buckets)."""
         return 0 if self.gp_xi is None else int(self.gp_xi.size)
 
+    # ------------------------------------------------------------------ #
+    # Canonical-name access                                              #
+    # ------------------------------------------------------------------ #
+
+    def list_canonicals(self) -> Tuple[str, ...]:
+        """Canonical-name vocabulary present in this result's columns.
+
+        Returns the engineering-friendly names (e.g. ``"axial_force"``,
+        ``"bending_moment_z"``) for which at least one matching column
+        exists. See :mod:`STKO_to_python.elements.canonical` for the
+        full mapping.
+        """
+        from .canonical import list_canonical_for_columns
+
+        return list_canonical_for_columns(self.df.columns)
+
+    def canonical_columns(self, name: str) -> Tuple[str, ...]:
+        """List the column names that match a canonical engineering name.
+
+        Parameters
+        ----------
+        name : str
+            E.g. ``"axial_force"``, ``"bending_moment_z"``,
+            ``"stress_11"``. See ``list_canonicals()`` for what's
+            available in this result, or ``available_canonicals()`` in
+            :mod:`STKO_to_python.elements.canonical` for the full map.
+
+        Returns
+        -------
+        tuple of str
+            Column names in their on-disk order. Empty tuple if no
+            columns match (e.g. asking for ``"axial_force"`` on a
+            shell ``section.force`` result).
+
+        Raises
+        ------
+        ValueError
+            If ``name`` is not a known canonical name.
+        """
+        from .canonical import match_canonical_columns
+
+        return tuple(match_canonical_columns(name, self.df.columns))
+
+    def canonical(self, name: str) -> pd.DataFrame:
+        """Return the DataFrame subset for a canonical engineering name.
+
+        Convenience wrapper around :meth:`canonical_columns`. Raises if
+        no columns match (catches typos and shells-asking-for-axial-
+        force-style misuse loudly).
+        """
+        cols = self.canonical_columns(name)
+        if not cols:
+            raise ValueError(
+                f"No columns matching canonical name {name!r} in this "
+                f"result. Present canonicals: {self.list_canonicals()}"
+            )
+        return self.df[list(cols)]
+
     def physical_x(self, length: float) -> np.ndarray:
         """Convert ``self.gp_xi`` (natural ξ ∈ [-1, +1]) to physical
         positions along an element of the given ``length``.

@@ -158,6 +158,47 @@ env = er.envelope(component="Mz_1")
 #   Mz_1_min, Mz_1_max
 ```
 
+## Canonical (engineering-friendly) names
+
+The on-disk MPCO shortnames vary by element family — `P_ip0` for axial
+force at the first IP of a line-station beam, `N_1` for axial force at
+node 1 of a closed-form `localForce` bucket, `Fxx_ip0` for shell
+membrane Fxx, `sigma11_ip7` for the 11-stress at the 8th Gauss point
+of a brick. The canonical-name layer maps engineering quantities
+(`axial_force`, `bending_moment_z`, `stress_11`, `membrane_xx`, …) to
+whichever shortnames are present in the result:
+
+```python
+er = ds.elements.get_element_results("section.force", "64-DispBeamColumn3d", element_ids=[1])
+er.list_canonicals()
+# ('axial_force', 'bending_moment_y', 'bending_moment_z', 'torsion')
+
+er.canonical_columns("axial_force")
+# ('P_ip0', 'P_ip1', 'P_ip2', 'P_ip3', 'P_ip4')
+
+er.canonical("bending_moment_z")    # DataFrame view
+# columns: Mz_ip0, Mz_ip1, Mz_ip2, Mz_ip3, Mz_ip4
+```
+
+Asking for a quantity that doesn't apply to the result raises:
+
+```python
+er_shell = ds.elements.get_element_results("section.force", "203-ASDShellQ4", element_ids=[100])
+er_shell.canonical("axial_force")
+# ValueError: No columns matching canonical name 'axial_force'.
+# Present canonicals: ('membrane_xx', 'membrane_yy', ..., 'transverse_shear_yz')
+```
+
+The full canonical → MPCO-shortname map and the regex used to strip
+`_<int>` / `_ip<int>` / `_f<int>_ip<int>` suffixes live in
+[`elements/canonical.py`](api/index.md). Note: `My`/`Mz` and similar
+local↔global axis collisions (per
+[`mpco_format_conventions.md` §9](mpco_format_conventions.md)) are
+**disambiguated by which results bucket you fetched**, not by the
+canonical name. Fetch `localForce` for element-local moments, fetch
+`force` (globalForce) and access columns directly by shortname for
+global-axis moments.
+
 ## Integration-point coordinates
 
 Line-station and gauss-level buckets that have a `GP_X` attribute on
