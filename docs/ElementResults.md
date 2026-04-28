@@ -280,6 +280,50 @@ the catalog entry in `utilities/gauss_points.py`.
 `gp_natural=None`. Adding an entry is a one-line change — see the
 catalog docstring for the convention.
 
+### Physical coordinates and Jacobians
+
+For numerical integration over the *physical* element (volume / area /
+length, not just the parent domain) the library exposes shape-function-
+based mapping for each catalogued class. Two methods on
+`ElementResults`:
+
+```python
+phys = er.physical_coords()   # (n_elements, n_ip, 3) — physical (x, y, z) per IP
+dets = er.jacobian_dets()     # (n_elements, n_ip)    — |J| per IP
+```
+
+For solids the determinant is `|det(∂x/∂ξ)|` (volume measure); for
+shells it's `||∂x/∂ξ × ∂x/∂η||` (surface measure); for line elements
+it's `||∂x/∂ξ||` (line measure).
+
+**Numerical integration.** Multiply value × weight × `|J|` and sum
+over IPs to get a contribution to the integral over the physical
+element. For a brick `material.stress`:
+
+```python
+cols = er.canonical_columns("stress_11")
+sigma_step = er.df.xs(100, level="step")[list(cols)].to_numpy()  # (n_e, n_ip)
+volume_int_per_elem = (sigma_step * er.gp_weights[None, :] * dets).sum(axis=1)
+```
+
+For a shell `section.force`, the same pattern integrates a quantity
+over the physical surface. For a line element, over the physical
+length.
+
+**Inputs.** `physical_coords()` and `jacobian_dets()` rely on
+``element_node_coords`` (populated automatically from the dataset's
+node table at fetch time, aligned with `er.element_ids`). Both return
+``None`` when any of these is missing:
+
+- The bucket is closed-form (`gp_natural is None`), or
+- Node coordinates aren't available on the dataset, or
+- The element class isn't in the shape-function catalog
+  (``utilities/shape_functions.py``).
+
+The ``element_node_coords`` and ``element_node_ids`` arrays survive
+pickle round-trips, so a saved `ElementResults` carries everything
+needed to recompute physical coords without re-opening the MPCO file.
+
 For the underlying convention details, see
 [mpco_format_conventions.md §1, §7](mpco_format_conventions.md). The
 natural↔physical conversion utilities live at
