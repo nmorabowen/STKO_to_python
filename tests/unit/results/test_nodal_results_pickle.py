@@ -92,9 +92,15 @@ def test_setstate_drops_unknown_keys_with_debug_log(caplog):
 
     # Known fields land on the instance.
     pd.testing.assert_frame_equal(target.df, nr.df)
-    # Unknown fields did not leak in.
-    assert "drift_profile_cache" not in target.__dict__
-    assert "residual_cache" not in target.__dict__
+    # Unknown fields did not leak in. ``NodalResults`` is slotted, so a
+    # leaked key would have raised AttributeError on setattr; verify both
+    # that the names aren't bound and that the instance has no __dict__.
+    assert not hasattr(target, "drift_profile_cache")
+    assert not hasattr(target, "residual_cache")
+    assert not hasattr(target, "__dict__"), (
+        "NodalResults must remain slotted; an unexpected __dict__ would "
+        "let unknown pickle keys leak onto the instance."
+    )
     # DEBUG log mentions the dropped keys by name.
     messages = [r.getMessage() for r in caplog.records if r.levelno == logging.DEBUG]
     joined = "\n".join(messages)

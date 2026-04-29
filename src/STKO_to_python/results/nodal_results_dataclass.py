@@ -33,6 +33,8 @@ class _ResultView:
         results.ACCELERATION[:, [14, 25]]   -> all components, nodes 14 & 25
     """
 
+    __slots__ = ("_parent", "_result_name")
+
     def __init__(self, parent: "NodalResults", result_name: str):
         self._parent = parent
         self._result_name = result_name
@@ -77,7 +79,16 @@ class NodalResults:
     Expected df shape:
       - index: (node_id, step) OR (stage, node_id, step)
       - columns: MultiIndex (result, component) OR single-level
+
+    Memory layout
+    -------------
+    Instance attributes are declared in ``__slots__``. There is no
+    ``__dict__`` per instance; setting an undeclared attribute raises
+    ``AttributeError``. The class-level ``_aggregation_engine`` and
+    ``_PICKLE_FIELDS`` are class attributes and are unaffected.
     """
+
+    __slots__ = ("df", "time", "name", "info", "plot_settings", "_views")
 
     # Shared stateless aggregator — engineering methods (drift, envelope,
     # rocking, ...) forward to this instance. Class-level rather than
@@ -152,7 +163,15 @@ class NodalResults:
     )
 
     def __getstate__(self) -> dict[str, Any]:
-        state = self.__dict__.copy()
+        # Slotted classes have no ``self.__dict__``; build the pickle
+        # payload explicitly from ``_PICKLE_FIELDS``. Missing slots
+        # (e.g. an instance that was never fully initialized) round-trip
+        # as ``None``; ``__setstate__`` ignores ``None`` values for
+        # required fields the same way it ignores missing keys.
+        state: dict[str, Any] = {f: getattr(self, f, None) for f in self._PICKLE_FIELDS}
+        # ``_views`` is transient — rebuilt by ``__setstate__`` against
+        # the restored ``df``. Encoded as None so old readers still see a
+        # familiar shape.
         state["_views"] = None
         return state
 
@@ -160,7 +179,7 @@ class NodalResults:
         """
         Restore from a pickle dict. Tolerant of:
           - extra keys from older layouts (silently dropped with a DEBUG log)
-          - missing keys (the corresponding attribute stays unset; callers
+          - missing keys (the corresponding slot stays unset; callers
             see an AttributeError at access time rather than a cryptic
             unpickling failure)
           - the absence of _aggregation_engine (it is a class attribute
@@ -172,7 +191,9 @@ class NodalResults:
 
         for key, value in state.items():
             if key in known:
-                self.__dict__[key] = value
+                # ``setattr`` routes through the slot descriptor;
+                # ``self.__dict__[...]`` would AttributeError under slots.
+                setattr(self, key, value)
             elif key in accepted_transient:
                 continue
             else:
@@ -183,7 +204,10 @@ class NodalResults:
 
         # _views is never persisted — always rebuild against the loaded df.
         self._views = {}
-        if "df" in self.__dict__:
+        # Pre-slots tolerance: when ``df`` is missing we leave the views
+        # empty rather than synthesizing them from a half-loaded state.
+        df = getattr(self, "df", None)
+        if df is not None:
             self._build_views()
 
     def save_pickle(
@@ -810,13 +834,28 @@ class NodalResults:
     # ------------------------------------------------------------------ #
 
     def __getattr__(self, item: str) -> Any:
-        if "_views" in self.__dict__ and item in self._views:
-            return self._views[item]
+        # ``__getattr__`` only fires after normal lookup (slot descriptor)
+        # has missed. Access ``_views`` through ``object.__getattribute__``
+        # to bypass this method and avoid infinite recursion when the
+        # ``_views`` slot is itself unset (e.g. during early ``__new__``
+        # before ``__init__`` ran).
+        try:
+            views = object.__getattribute__(self, "_views")
+        except AttributeError:
+            raise AttributeError(
+                f"{type(self).__name__!r} object has no attribute {item!r}"
+            ) from None
+        if item in views:
+            return views[item]
         raise AttributeError(f"{type(self).__name__!r} object has no attribute {item!r}")
 
     def __dir__(self):
         base = set(super().__dir__())
-        base.update(self._views.keys())
+        try:
+            views = object.__getattribute__(self, "_views")
+            base.update(views.keys())
+        except AttributeError:
+            pass
         return sorted(base)
 
     # ------------------------------------------------------------------ #
