@@ -13,7 +13,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from STKO_to_python.utilities.gauss_points import (
+from STKO_to_python.format.gauss_points import (
     ELEMENT_IP_CATALOG,
     gauss_legendre_1d,
     get_ip_layout,

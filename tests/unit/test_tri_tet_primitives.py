@@ -12,11 +12,11 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from STKO_to_python.utilities.gauss_points import (
+from STKO_to_python.format.gauss_points import (
     gauss_tetrahedron,
     gauss_triangle,
 )
-from STKO_to_python.utilities.shape_functions import (
+from STKO_to_python.format.shape_functions import (
     compute_jacobian_dets,
     compute_physical_coords,
     tet4_N,
@@ -184,7 +184,7 @@ def test_tet4_volume_works_with_1pt_rule():
 def test_user_registration_pattern_works():
     """Document the API contract: user adds a class to the catalog by
     assigning to the SHAPE_FUNCTIONS dict."""
-    from STKO_to_python.utilities.shape_functions import (
+    from STKO_to_python.format.shape_functions import (
         SHAPE_FUNCTIONS,
         get_shape_functions,
     )

@@ -380,7 +380,7 @@ class ElementResults:
         """
         if self.gp_natural is None or self.element_node_coords is None:
             return None
-        from ..utilities.shape_functions import (
+        from ..format.shape_functions import (
             compute_physical_coords,
             get_shape_functions,
         )
@@ -422,7 +422,7 @@ class ElementResults:
         """
         if self.gp_natural is None or self.element_node_coords is None:
             return None
-        from ..utilities.shape_functions import (
+        from ..format.shape_functions import (
             compute_jacobian_dets,
             get_shape_functions,
         )
