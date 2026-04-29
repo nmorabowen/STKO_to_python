@@ -64,6 +64,8 @@ ELASTIC_FRAME_DIR = EXAMPLES_DIR / "elasticFrame" / "results"
 QUAD_FRAME_DIR = EXAMPLES_DIR / "elasticFrame" / "QuadFrame_results"
 SOLID_PARTITION_DIR = EXAMPLES_DIR / "solid_partition_example"
 NL_SHELL_DIR = EXAMPLES_DIR / "Test_NLShell"
+DISP_BEAM_COL_DIR = EXAMPLES_DIR / "dispBeamCol"
+FORCE_BEAM_COL_DIR = EXAMPLES_DIR / "forceBeamCol"
 
 
 @pytest.fixture(scope="session")
@@ -122,6 +124,44 @@ def solid_partition_dir() -> Path:
             f"solid_partition_example not available at {SOLID_PARTITION_DIR}"
         )
     return SOLID_PARTITION_DIR
+
+
+@pytest.fixture(scope="session")
+def disp_beam_col_dir() -> Path:
+    """Single-partition fixture exercising ``dispBeamColumn`` elements
+    (displacement-based beam-column with Lobatto integration).
+
+    The ``elements.tcl`` source uses ``dispBeamColumn ... Lobatto 3 5``
+    — three integration points per element with five fibers per IP.
+    Complements the ``forceBeamCol`` fixture by isolating the
+    displacement-based-vs-force-based distinction on identical
+    geometry.
+
+    Skips the test if the fixture is absent (it's developer-local —
+    ~600 MB of recorder output, gitignored).
+    """
+    if not (DISP_BEAM_COL_DIR / "results.mpco").exists():
+        pytest.skip(f"dispBeamCol not available at {DISP_BEAM_COL_DIR}")
+    return DISP_BEAM_COL_DIR
+
+
+@pytest.fixture(scope="session")
+def force_beam_col_dir() -> Path:
+    """Single-partition fixture exercising ``forceBeamColumn`` elements
+    (force-based beam-column with Lobatto integration).
+
+    The ``elements.tcl`` source uses ``forceBeamColumn ... Lobatto 3 5``
+    — three integration points per element with five fibers per IP.
+    Complements the ``dispBeamCol`` fixture by isolating the
+    displacement-based-vs-force-based distinction on identical
+    geometry.
+
+    Skips the test if the fixture is absent (it's developer-local —
+    ~13 MB of recorder output, gitignored).
+    """
+    if not (FORCE_BEAM_COL_DIR / "results.mpco").exists():
+        pytest.skip(f"forceBeamCol not available at {FORCE_BEAM_COL_DIR}")
+    return FORCE_BEAM_COL_DIR
 
 
 @pytest.fixture(scope="session")
