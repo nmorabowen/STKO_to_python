@@ -49,7 +49,7 @@ test = [
     "pytest>=7.4",
 ]
 # Installed with: pip install -e ".[bench]"
-# Enables pytest-benchmark suites under tests/bench/. Opt-in so regular
+# Enables pytest-benchmark suites under bench/. Opt-in so regular
 # test runs don't pay the bench collection overhead. Introduced in
 # Phase 5.1.a.
 bench = [

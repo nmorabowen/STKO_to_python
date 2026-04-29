@@ -1,0 +1,51 @@
+name: Bench
+
+# Runs the pytest-benchmark suite under bench/ on every PR and on every
+# push to main. Uploads benchmark.json as an artifact so it can be
+# compared across runs. Regression detection lands in a follow-up:
+# this workflow currently surfaces numbers but does not fail the build
+# on regression.
+#
+# The bench tree is gated on small fixtures committed under
+# stko_results_examples/elasticFrame/ (~330 KB). Benches that require
+# the larger Test_NLShell fixture (gitignored) skip cleanly.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install package with bench extras
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[bench]"
+
+      - name: Run benchmarks
+        run: |
+          pytest bench/ -q \
+            --benchmark-only \
+            --benchmark-json=benchmark.json
+
+      - name: Upload benchmark.json
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-${{ github.run_id }}
+          path: benchmark.json
+          if-no-files-found: warn
