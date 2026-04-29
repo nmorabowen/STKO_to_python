@@ -7,7 +7,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from STKO_to_python.nodes.nodes import _flatten_node_ids
+from STKO_to_python.nodes.node_manager import _flatten_node_ids
 
 
 def test_scalar_int():

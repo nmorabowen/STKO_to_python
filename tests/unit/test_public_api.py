@@ -37,17 +37,19 @@ PUBLIC_SYMBOLS = [
     # Deep imports that existing notebooks use.
     ("STKO_to_python.core.dataset", "MPCODataSet"),
     ("STKO_to_python.io.hdf5_utils", "HDF5Utils"),
-    ("STKO_to_python.nodes.nodes", "Nodes"),
-    ("STKO_to_python.elements.elements", "Elements"),
     ("STKO_to_python.elements.element_results", "ElementResults"),
-    ("STKO_to_python.model.model_info", "ModelInfo"),
-    ("STKO_to_python.model.cdata", "CData"),
     ("STKO_to_python.plotting.plot", "Plot"),
     ("STKO_to_python.utilities.attribute_dictionary_class", "AttrDict"),
     ("STKO_to_python.results.nodal_results_dataclass", "NodalResults"),
     ("STKO_to_python.results.nodal_results_plotting", "NodalResultsPlotter"),
-    # NOTE: deprecated deep paths (e.g. STKO_to_python.plotting.plot_dataclasses)
-    # are exercised below with explicit DeprecationWarning expectations.
+    # Canonical post-Group-B paths (no warning).
+    ("STKO_to_python.nodes.node_manager", "NodeManager"),
+    ("STKO_to_python.elements.element_manager", "ElementManager"),
+    ("STKO_to_python.model.model_info_reader", "ModelInfoReader"),
+    ("STKO_to_python.model.cdata_reader", "CDataReader"),
+    # NOTE: deprecated deep paths (e.g. STKO_to_python.plotting.plot_dataclasses,
+    # STKO_to_python.nodes.nodes) are exercised below with explicit
+    # DeprecationWarning expectations.
 ]
 
 
@@ -115,6 +117,34 @@ DEPRECATED_DEEP_IMPORTS = [
         "SHAPE_FUNCTIONS",
         "STKO_to_python.format.shape_functions",
         "SHAPE_FUNCTIONS",
+    ),
+    # Group-B file renames: legacy module paths now warn on the legacy
+    # class name. The canonical class also lives there (re-exported by
+    # the shim) and resolves quietly — that case is tested in
+    # test_manager_aliases.py.
+    (
+        "STKO_to_python.nodes.nodes",
+        "Nodes",
+        "STKO_to_python.nodes.node_manager",
+        "NodeManager",
+    ),
+    (
+        "STKO_to_python.elements.elements",
+        "Elements",
+        "STKO_to_python.elements.element_manager",
+        "ElementManager",
+    ),
+    (
+        "STKO_to_python.model.model_info",
+        "ModelInfo",
+        "STKO_to_python.model.model_info_reader",
+        "ModelInfoReader",
+    ),
+    (
+        "STKO_to_python.model.cdata",
+        "CData",
+        "STKO_to_python.model.cdata_reader",
+        "CDataReader",
     ),
 ]
 

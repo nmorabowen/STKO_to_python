@@ -3,10 +3,10 @@ import logging
 from pathlib import Path
 from typing import Dict, Optional, Tuple, Any
 
-from ..nodes.nodes import Nodes
-from ..elements.elements import Elements
-from ..model.model_info import ModelInfo
-from ..model.cdata import CData
+from ..nodes.node_manager import NodeManager
+from ..elements.element_manager import ElementManager
+from ..model.model_info_reader import ModelInfoReader
+from ..model.cdata_reader import CDataReader
 from ..plotting.plot import Plot
 from ..io.info import Info
 from ..io.partition_pool import Hdf5PartitionPool
@@ -178,10 +178,10 @@ class MPCODataSet:
         self.metadata = ModelMetadata()
         
         # Instanciate the composite classes
-        self.nodes=Nodes(self)
-        self.elements=Elements(self)
-        self.model_info = ModelInfo(self)
-        self.cdata=CData(self)
+        self.nodes = NodeManager(self)
+        self.elements = ElementManager(self)
+        self.model_info = ModelInfoReader(self)
+        self.cdata = CDataReader(self)
         self.plot=Plot(self)
         self.info=Info(self)
         self.plot_settings = plot_settings or PlotSettings()

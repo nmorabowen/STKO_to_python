@@ -2,21 +2,22 @@ from .core.dataset import MPCODataSet
 
 from .io.hdf5_utils import HDF5Utils
 
-from .nodes.nodes import Nodes
-
-from .elements.elements import Elements
+from .nodes.node_manager import NodeManager
+from .elements.element_manager import ElementManager
 from .elements.element_results import ElementResults
-
-from .model.model_info import ModelInfo
-from .model.cdata import CData
+from .model.model_info_reader import ModelInfoReader
+from .model.cdata_reader import CDataReader
 
 from .plotting.plot import Plot
 from .plotting.plot_settings import PlotSettings
 
-# Back-compat alias preserved on the top-level package surface (quiet);
-# the deep path
-# ``STKO_to_python.plotting.plot_dataclasses.ModelPlotSettings`` emits a
-# ``DeprecationWarning``.
+# Back-compat aliases preserved on the top-level package surface
+# (quiet); each deprecated deep path emits a ``DeprecationWarning`` via
+# PEP 562 ``__getattr__`` in its respective shim.
+Nodes = NodeManager
+Elements = ElementManager
+ModelInfo = ModelInfoReader
+CData = CDataReader
 ModelPlotSettings = PlotSettings
 
 from .dataprocess import Aggregator, StrOp

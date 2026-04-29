@@ -13,18 +13,22 @@ import logging
 import pytest
 
 
-# Modules that Phase 0 converted from print() to logging.
+# Modules that Phase 0 converted from print() to logging. After Group B
+# (file renames), the loggers live on the canonical-class modules; the
+# legacy paths (nodes.nodes, elements.elements, model.model_info,
+# model.cdata) are now thin DeprecationWarning shims that don't carry
+# their own loggers.
 # (See docs/architecture-refactor-proposal.md §8 Phase 0.)
 LOGGING_MODULES = [
     "STKO_to_python.core.dataset",
     "STKO_to_python.MPCOList.MPCOResults",
-    "STKO_to_python.model.model_info",
     "STKO_to_python.utilities.h5_repair_tool",
     "STKO_to_python.io.info",
     "STKO_to_python.io.hdf5_utils",
-    "STKO_to_python.nodes.nodes",
-    "STKO_to_python.elements.elements",
-    "STKO_to_python.model.cdata",
+    "STKO_to_python.nodes.node_manager",
+    "STKO_to_python.elements.element_manager",
+    "STKO_to_python.model.model_info_reader",
+    "STKO_to_python.model.cdata_reader",
 ]
 
 
