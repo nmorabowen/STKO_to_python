@@ -95,6 +95,12 @@ nav:
       - NodalResults: NodalResults.md
       - ElementResults: ElementResults.md
       - Elements workflow: elements_guide.md
+  - Cookbook:
+      - Overview: cookbook/index.md
+      - Base shear from column forces: cookbook/01-base-shear-from-column-forces.md
+      - Stress contour on a shear wall: cookbook/02-stress-contour-on-a-wall.md
+      - Peak moment per beam over a pushover: cookbook/03-peak-moment-per-beam.md
+      - Volume integral on bricks: cookbook/04-volume-integral-on-bricks.md
   - Examples:
       - Usage tour: examples/usage_tour.md
       - Elastic frame: examples/elastic_frame.md
