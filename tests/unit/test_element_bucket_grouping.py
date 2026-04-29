@@ -21,7 +21,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from STKO_to_python.elements.elements import ElementManager
+from STKO_to_python.elements.element_manager import ElementManager
 from STKO_to_python.io.meta_parser import MpcoFormatError
 
 
