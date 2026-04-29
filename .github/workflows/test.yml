@@ -1,0 +1,44 @@
+name: Test
+
+# Runs the unit + integration test suite under tests/ on every PR and on
+# every push to main. Matrix-tests across the supported Python versions
+# (3.11 / 3.12 / 3.13) declared in pyproject.toml.
+#
+# Plotting tests rely on matplotlib; MPLBACKEND=Agg keeps the headless
+# runner from trying to open an interactive display.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    env:
+      MPLBACKEND: Agg
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install package with test extras
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[test]"
+
+      - name: Run pytest
+        run: pytest tests/ -q
