@@ -37,12 +37,15 @@ class ElementResultsQueryEngine(BaseResultsQueryEngine):
         element_ids: Union[Sequence[int], np.ndarray, None] = None,
         selection_set_id: Union[int, Sequence[int], None] = None,
         selection_set_name: Union[str, Sequence[str], None] = None,
-        model_stage: Optional[str] = None,
+        model_stage: Union[str, Sequence[str], None] = None,
         verbose: bool = False,
     ) -> "ElementResults":
         """Return an ``ElementResults`` view for the given selection.
 
         Signature mirrors :meth:`Elements.get_element_results` verbatim.
+        ``model_stage`` accepts a single stage name or a sequence of
+        stages — the manager concatenates multi-stage fetches with a
+        contiguous global step axis.
         """
         manager = self._dataset.elements
 
@@ -60,16 +63,14 @@ class ElementResultsQueryEngine(BaseResultsQueryEngine):
                 explicit_ids=element_ids,
             )
 
-        stage = model_stage or (
-            self._dataset.model_stages[0]
-            if self._dataset.model_stages
-            else None
+        stages = _normalize_stage_arg(
+            model_stage, default_first=self._dataset.model_stages
         )
 
         cache_key = self._build_cache_key(
             results_name=results_name,
             element_type=element_type,
-            stage=stage,
+            stages=stages,
             ids=resolved_ids,
         )
         cached = self._cache_get(cache_key)
@@ -94,11 +95,30 @@ class ElementResultsQueryEngine(BaseResultsQueryEngine):
         *,
         results_name: str,
         element_type: str,
-        stage: Optional[str],
+        stages: tuple[str, ...],
         ids: Optional[np.ndarray],
     ) -> Hashable:
         if ids is None:
             ids_key: Hashable = "__all__"
         else:
             ids_key = tuple(sorted(int(x) for x in ids))
-        return ("element", results_name, element_type, stage, ids_key)
+        # Stages are kept in request order (not sorted) — different
+        # orderings imply different concatenation order on the step
+        # axis, so they must produce different cache entries.
+        return ("element", results_name, element_type, stages, ids_key)
+
+
+def _normalize_stage_arg(
+    model_stage: Union[str, Sequence[str], None],
+    default_first: Sequence[str],
+) -> tuple[str, ...]:
+    """Mirror :meth:`ElementManager._normalize_stages` for cache keying.
+
+    Returns an empty tuple only when the dataset has no stages (so the
+    underlying read raises consistently).
+    """
+    if model_stage is None:
+        return (default_first[0],) if default_first else ()
+    if isinstance(model_stage, str):
+        return (model_stage,)
+    return tuple(str(s) for s in model_stage)

@@ -54,6 +54,7 @@ class ElementResultsPlotter:
         element_ids: Union[int, Sequence[int], None] = None,
         ax: Any = None,
         x_axis: str = "time",
+        annotate_stage_boundaries: bool = True,
         **plot_kwargs: Any,
     ) -> Tuple[Any, dict]:
         """Plot the time history of one component for one or more elements.
@@ -130,7 +131,33 @@ class ElementResultsPlotter:
         ax.set_ylabel(component)
         if len(ids) > 1 and len(ids) <= 12:
             ax.legend()
-        return ax, {"x": x_full, "y_per_element": per_element}
+
+        meta: dict[str, Any] = {"x": x_full, "y_per_element": per_element}
+
+        # Stage-boundary annotation for multi-stage results. Positions
+        # come from ``stage_step_ranges``; we map them to the chosen
+        # x-axis (time or step) so the line sits on the last sample of
+        # each completed stage.
+        if annotate_stage_boundaries and er.is_multi_stage:
+            ranges = er.stage_step_ranges
+            stages = er.model_stages
+            meta["stage_boundaries"] = []
+            for st in stages[:-1]:
+                end_step = ranges.get(st, (0, 0))[1]
+                if x_axis == "time":
+                    if 0 < end_step <= x_full.size:
+                        x_b = float(x_full[end_step - 1])
+                    else:
+                        continue
+                else:  # step
+                    x_b = float(end_step - 1)
+                meta["stage_boundaries"].append((st, x_b))
+                ax.axvline(
+                    x_b, color="0.5", linestyle="--",
+                    linewidth=0.8, alpha=0.6,
+                )
+
+        return ax, meta
 
     # ------------------------------------------------------------------ #
     # Beam diagrams (line elements)                                       #
