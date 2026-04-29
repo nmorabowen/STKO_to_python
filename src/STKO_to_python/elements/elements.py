@@ -1089,7 +1089,7 @@ class ElementManager:
                                     # Look up catalog by the connectivity
                                     # bracket's base class (strip the
                                     # ``[rule:cust]`` suffix).
-                                    from ..utilities.gauss_points import (
+                                    from ..format.gauss_points import (
                                         get_ip_layout,
                                     )
 

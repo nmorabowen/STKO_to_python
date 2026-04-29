@@ -90,6 +90,32 @@ DEPRECATED_DEEP_IMPORTS = [
         "STKO_to_python.plotting.plot_settings",
         "PlotSettings",
     ),
+    # Format-package relocation: gauss_points / shape_functions moved
+    # from utilities/ to format/. Old paths re-export with warnings.
+    (
+        "STKO_to_python.utilities.gauss_points",
+        "get_ip_layout",
+        "STKO_to_python.format.gauss_points",
+        "get_ip_layout",
+    ),
+    (
+        "STKO_to_python.utilities.gauss_points",
+        "ELEMENT_IP_CATALOG",
+        "STKO_to_python.format.gauss_points",
+        "ELEMENT_IP_CATALOG",
+    ),
+    (
+        "STKO_to_python.utilities.shape_functions",
+        "compute_physical_coords",
+        "STKO_to_python.format.shape_functions",
+        "compute_physical_coords",
+    ),
+    (
+        "STKO_to_python.utilities.shape_functions",
+        "SHAPE_FUNCTIONS",
+        "STKO_to_python.format.shape_functions",
+        "SHAPE_FUNCTIONS",
+    ),
 ]
 
 

@@ -15,12 +15,12 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from STKO_to_python.utilities.gauss_points import (
+from STKO_to_python.format.gauss_points import (
     gauss_legendre_1d,
     tensor_product_2d,
     tensor_product_3d,
 )
-from STKO_to_python.utilities.shape_functions import (
+from STKO_to_python.format.shape_functions import (
     SHAPE_FUNCTIONS,
     compute_jacobian_dets,
     compute_physical_coords,
