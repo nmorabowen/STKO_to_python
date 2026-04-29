@@ -8,18 +8,26 @@ from datetime import datetime
 import pytest
 
 from STKO_to_python.core.metadata import ModelMetadata
-from STKO_to_python.core.dataclasses import MetaData
 
 
 # ---------------------------------------------------------------------- #
 # Alias identity
 # ---------------------------------------------------------------------- #
-def test_metadata_alias_is_model_metadata():
+def test_metadata_alias_is_model_metadata_and_emits_deprecation():
+    """Importing ``MetaData`` from the deprecated deep path must emit a
+    ``DeprecationWarning`` and resolve to ``ModelMetadata``."""
+    with pytest.warns(DeprecationWarning, match="MetaData.*deprecated"):
+        from STKO_to_python.core.dataclasses import MetaData
     assert MetaData is ModelMetadata
 
 
-def test_top_level_core_exports_both_names():
-    from STKO_to_python.core import MetaData as M, ModelMetadata as MM
+def test_top_level_core_exports_both_names_quietly():
+    """The package-surface alias (``STKO_to_python.core.MetaData``) is
+    quiet — only the deep ``core.dataclasses`` path emits the warning."""
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DeprecationWarning)
+        from STKO_to_python.core import MetaData as M, ModelMetadata as MM
     assert M is MM
 
 

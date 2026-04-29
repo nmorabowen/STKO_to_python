@@ -1,20 +1,42 @@
-"""Back-compat shim — re-exports ``ModelMetadata`` as ``MetaData``.
+"""Back-compat shim — emits ``DeprecationWarning`` when ``MetaData`` is accessed.
 
-The canonical class now lives in :mod:`STKO_to_python.core.metadata`.
-``MetaData`` is an alias so existing callers continue to work
-unchanged. Both names resolve to the *same* class object:
+The canonical class lives at :mod:`STKO_to_python.core.metadata` as
+``ModelMetadata``. ``MetaData`` is preserved as a back-compat name on
+this module and (without warning) on the top-level package, so
 
-    >>> from STKO_to_python.core.dataclasses import MetaData
+    >>> from STKO_to_python import MetaData            # quiet
+    >>> from STKO_to_python.core.dataclasses import MetaData   # DeprecationWarning
+
+both keep working. New code should prefer
+
     >>> from STKO_to_python.core.metadata import ModelMetadata
-    >>> MetaData is ModelMetadata
-    True
+    >>> # or, equivalently, the top-level export:
+    >>> from STKO_to_python import ModelMetadata
 
-A future phase may emit a ``DeprecationWarning`` on import; for now the
-shim is silent so the strict-warning filter under
-``pyproject.toml[tool.pytest]`` stays happy.
+The lookup is implemented via the PEP 562 module ``__getattr__`` so the
+warning only fires when ``MetaData`` is actually imported from this
+specific deep path — plain ``import STKO_to_python.core.dataclasses``
+remains silent.
 """
 from __future__ import annotations
 
-from .metadata import ModelMetadata as MetaData
+import warnings
+from typing import Any
+
+from .metadata import ModelMetadata
+
+
+def __getattr__(name: str) -> Any:
+    if name == "MetaData":
+        warnings.warn(
+            "`STKO_to_python.core.dataclasses.MetaData` is deprecated; "
+            "import `ModelMetadata` from `STKO_to_python.core.metadata` "
+            "instead (or use the top-level `STKO_to_python.ModelMetadata`).",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return ModelMetadata
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 __all__ = ["MetaData"]

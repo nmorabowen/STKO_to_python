@@ -13,8 +13,8 @@ from ..io.partition_pool import Hdf5PartitionPool
 from ..io.format_policy import MpcoFormatPolicy
 from ..selection import SelectionSetResolver
 from ..query import ElementResultsQueryEngine, NodalResultsQueryEngine
-from .dataclasses import MetaData
-from ..plotting.plot_dataclasses import ModelPlotSettings
+from .metadata import ModelMetadata
+from ..plotting.plot_settings import PlotSettings
 
 logger = logging.getLogger(__name__)
 
@@ -149,7 +149,7 @@ class MPCODataSet:
         name=None, # The model name, if None it will be extracted from the folder name
         file_extension='*.mpco',
         verbose=False,
-        plot_settings: Optional[ModelPlotSettings] = None,
+        plot_settings: Optional[PlotSettings] = None,
         pool_size: Optional[int] = None,
     ):
 
@@ -175,7 +175,7 @@ class MPCODataSet:
         self._pool: Optional[Hdf5PartitionPool] = None
 
         # Initialize the metadata
-        self.metadata = MetaData()
+        self.metadata = ModelMetadata()
         
         # Instanciate the composite classes
         self.nodes=Nodes(self)
@@ -184,7 +184,7 @@ class MPCODataSet:
         self.cdata=CData(self)
         self.plot=Plot(self)
         self.info=Info(self)
-        self.plot_settings = plot_settings or ModelPlotSettings()
+        self.plot_settings = plot_settings or PlotSettings()
         
         # Create the object attributes
         self._create_object_attributes()
