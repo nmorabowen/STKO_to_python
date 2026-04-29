@@ -40,6 +40,53 @@ class AggregationEngine:
         return f"{type(self).__name__}()"
 
     # ------------------------------------------------------------------ #
+    # Multi-stage filtering helper
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _select_stage(
+        s: "pd.Series | pd.DataFrame",
+        results: "NodalResults",
+        *,
+        stage: Optional[str],
+        caller: str,
+    ) -> "pd.Series | pd.DataFrame":
+        """Filter a NodalResults-derived view to a single stage's slice
+        of the contiguous step axis.
+
+        Multi-stage NodalResults keep a 2-level ``(node_id, step)`` index
+        with a contiguous global step axis; the per-stage step ranges
+        live in ``results.info.stage_step_ranges``. For single-stage
+        results this is a no-op.
+        """
+        model_stages = tuple(getattr(results.info, "model_stages", None) or ())
+        ranges = dict(getattr(results.info, "stage_step_ranges", None) or {})
+
+        if len(model_stages) <= 1:
+            return s
+
+        if stage is None:
+            raise ValueError(
+                f"Multi-stage results detected. Provide stage=... "
+                f"Available: {model_stages}"
+            )
+        stage_s = str(stage)
+        if stage_s not in ranges:
+            raise ValueError(
+                f"{caller}: stage={stage_s!r} not in this result. "
+                f"Available: {tuple(ranges.keys())}"
+            )
+
+        start, end = ranges[stage_s]
+        idx = s.index
+        if not isinstance(idx, pd.MultiIndex) or "step" not in (idx.names or ()):
+            raise ValueError(
+                f"{caller}: expected a MultiIndex containing 'step'."
+            )
+        step_lvl = idx.get_level_values("step")
+        return s.loc[(step_lvl >= start) & (step_lvl < end)]
+
+    # ------------------------------------------------------------------ #
     # Internal helper (engineering-only, moves here from NodalResults)
     # ------------------------------------------------------------------ #
 
@@ -161,12 +208,7 @@ class AggregationEngine:
 
         s = results.fetch(result_name=result_name, component=component, node_ids=[top_id, bot_id])
 
-        # multi-stage -> require stage
-        if isinstance(s.index, pd.MultiIndex) and s.index.nlevels == 3:
-            if stage is None:
-                stages = tuple(sorted({str(x) for x in s.index.get_level_values(0)}))
-                raise ValueError(f"Multi-stage results detected. Provide stage=... Available: {stages}")
-            s = s.xs(str(stage), level=0)
+        s = self._select_stage(s, results, stage=stage, caller="delta_u()")
 
         if not (isinstance(s.index, pd.MultiIndex) and s.index.nlevels == 2):
             raise ValueError("delta_u() expects index (node_id, step) after stage selection.")
@@ -252,12 +294,7 @@ class AggregationEngine:
         # ---- fetch displacement for both nodes ----
         s = results.fetch(result_name=result_name, component=component, node_ids=[top_id, bot_id])
 
-        # multi-stage -> require stage
-        if isinstance(s.index, pd.MultiIndex) and s.index.nlevels == 3:
-            if stage is None:
-                stages = tuple(sorted({str(x) for x in s.index.get_level_values(0)}))
-                raise ValueError(f"Multi-stage results detected. Provide stage=... Available: {stages}")
-            s = s.xs(str(stage), level=0)
+        s = self._select_stage(s, results, stage=stage, caller="drift()")
 
         if not (isinstance(s.index, pd.MultiIndex) and s.index.nlevels == 2):
             raise ValueError("drift() expects index (node_id, step) after stage selection.")
@@ -374,14 +411,10 @@ class AggregationEngine:
                     component=component,
                     node_ids=nodes,
                 )
-                if isinstance(s.index, pd.MultiIndex) and s.index.nlevels == 3:
-                    if stage is None:
-                        stages = tuple(sorted({str(x) for x in s.index.get_level_values(0)}))
-                        raise ValueError(
-                            f"Multi-stage results detected. Provide stage=... "
-                            f"Available: {stages}"
-                        )
-                    s = s.xs(str(stage), level=0)
+                s = self._select_stage(
+                    s, results, stage=stage,
+                    caller="interstory_drift_envelope(max_abs_peak)",
+                )
 
                 wide = s.unstack(level=-1)
                 A = wide.to_numpy(dtype=float)
@@ -575,11 +608,7 @@ class AggregationEngine:
 
         s = results.fetch(result_name=result_name, component=component, node_ids=all_ids)
 
-        if isinstance(s.index, pd.MultiIndex) and s.index.nlevels == 3:
-            if stage is None:
-                stages = tuple(sorted({str(x) for x in s.index.get_level_values(0)}))
-                raise ValueError(f"Multi-stage results detected. Provide stage=... Available: {stages}")
-            s = s.xs(str(stage), level=0)
+        s = self._select_stage(s, results, stage=stage, caller="story_pga_envelope()")
 
         if not (isinstance(s.index, pd.MultiIndex) and s.index.nlevels == 2):
             raise ValueError("story_pga_envelope() expects index (node_id, step) after stage selection.")
@@ -691,13 +720,10 @@ class AggregationEngine:
                     component=component,
                     node_ids=nodes,
                 )
-                if isinstance(s.index, pd.MultiIndex) and s.index.nlevels == 3:
-                    if stage is None:
-                        stages = tuple(sorted({str(x) for x in s.index.get_level_values(0)}))
-                        raise ValueError(
-                            f"Multi-stage results detected. Provide stage=... Available: {stages}"
-                        )
-                    s = s.xs(str(stage), level=0)
+                s = self._select_stage(
+                    s, results, stage=stage,
+                    caller="residual_interstory_drift_profile(max_abs_peak)",
+                )
 
                 wide = s.unstack(level=-1)
                 A = wide.to_numpy(dtype=float)
@@ -894,16 +920,8 @@ class AggregationEngine:
         ux = results.fetch(result_name=result_name, component=ux_component, node_ids=[a_id, b_id])
         uy = results.fetch(result_name=result_name, component=uy_component, node_ids=[a_id, b_id])
 
-        def _select_stage(s: pd.Series | pd.DataFrame):
-            if isinstance(s.index, pd.MultiIndex) and s.index.nlevels == 3:
-                if stage is None:
-                    stages = tuple(sorted({str(x) for x in s.index.get_level_values(0)}))
-                    raise ValueError(f"Multi-stage results detected. Provide stage=... Available: {stages}")
-                return s.xs(str(stage), level=0)
-            return s
-
-        ux = _select_stage(ux)
-        uy = _select_stage(uy)
+        ux = self._select_stage(ux, results, stage=stage, caller="roof_torsion()")
+        uy = self._select_stage(uy, results, stage=stage, caller="roof_torsion()")
 
         if not (isinstance(ux.index, pd.MultiIndex) and ux.index.nlevels == 2):
             raise ValueError("roof_torsion(): expected index (node_id, step) after stage selection.")
@@ -1026,11 +1044,7 @@ class AggregationEngine:
         uz = results.fetch(result_name=result_name, component=uz_component, node_ids=[n1, n2, n3])
 
         # stage selection
-        if isinstance(uz.index, pd.MultiIndex) and uz.index.nlevels == 3:
-            if stage is None:
-                stages = tuple(sorted({str(x) for x in uz.index.get_level_values(0)}))
-                raise ValueError(f"Multi-stage results detected. Provide stage=... Available: {stages}")
-            uz = uz.xs(str(stage), level=0)
+        uz = self._select_stage(uz, results, stage=stage, caller="base_rocking()")
 
         if not (isinstance(uz.index, pd.MultiIndex) and uz.index.nlevels == 2):
             raise ValueError("base_rocking(): expected index (node_id, step) after stage selection.")
@@ -1373,16 +1387,8 @@ class AggregationEngine:
         sx = results.fetch(result_name=result_name, component=x_component, node_ids=resolved_node_ids)
         sy = results.fetch(result_name=result_name, component=y_component, node_ids=resolved_node_ids)
 
-        def _select_stage(s: pd.Series) -> pd.Series:
-            if isinstance(s.index, pd.MultiIndex) and s.index.nlevels == 3:
-                if stage is None:
-                    stages = tuple(sorted({str(x) for x in s.index.get_level_values(0)}))
-                    raise ValueError(f"Multi-stage results detected. Provide stage=... Available: {stages}")
-                return s.xs(str(stage), level=0)
-            return s
-
-        sx = _select_stage(sx)
-        sy = _select_stage(sy)
+        sx = self._select_stage(sx, results, stage=stage, caller="orbit()")
+        sy = self._select_stage(sy, results, stage=stage, caller="orbit()")
 
         if not (isinstance(sx.index, pd.MultiIndex) and sx.index.nlevels == 2):
             raise ValueError("orbit(): expected index (node_id, step) after stage selection.")

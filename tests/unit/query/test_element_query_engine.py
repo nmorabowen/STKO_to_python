@@ -93,13 +93,13 @@ def test_build_cache_key_sorts_ids():
     k1 = ElementResultsQueryEngine._build_cache_key(
         results_name="force",
         element_type="5-ElasticBeam3d",
-        stage="s0",
+        stages=("s0",),
         ids=np.array([3, 1, 2]),
     )
     k2 = ElementResultsQueryEngine._build_cache_key(
         results_name="force",
         element_type="5-ElasticBeam3d",
-        stage="s0",
+        stages=("s0",),
         ids=np.array([1, 2, 3]),
     )
     assert k1 == k2
@@ -109,13 +109,13 @@ def test_build_cache_key_all_vs_ids():
     k_all = ElementResultsQueryEngine._build_cache_key(
         results_name="force",
         element_type="5-ElasticBeam3d",
-        stage="s0",
+        stages=("s0",),
         ids=None,
     )
     k_ids = ElementResultsQueryEngine._build_cache_key(
         results_name="force",
         element_type="5-ElasticBeam3d",
-        stage="s0",
+        stages=("s0",),
         ids=np.array([1]),
     )
     assert k_all != k_ids

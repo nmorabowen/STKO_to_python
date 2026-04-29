@@ -27,6 +27,7 @@ class NodalResultsInfo:
         "nodes_ids",
         "nodes_info",
         "model_stages",
+        "stage_step_ranges",
         "results_components",
         "selection_set",
         "analysis_time",
@@ -40,6 +41,7 @@ class NodalResultsInfo:
         nodes_ids: Optional[tuple[int, ...]] = None,
         nodes_info: Optional[pd.DataFrame] = None,
         model_stages: Optional[tuple[str, ...]] = None,
+        stage_step_ranges: Optional[dict[str, tuple[int, int]]] = None,
         results_components: Optional[tuple[str, ...]] = None,
         selection_set: Optional[dict] = None,
         analysis_time: Optional[float] = None,
@@ -54,6 +56,14 @@ class NodalResultsInfo:
 
         if model_stages is not None:
             model_stages = tuple(str(s) for s in model_stages)
+
+        if stage_step_ranges is not None:
+            stage_step_ranges = {
+                str(k): (int(v[0]), int(v[1]))
+                for k, v in stage_step_ranges.items()
+            }
+        else:
+            stage_step_ranges = {}
 
         if results_components is not None:
             results_components = tuple(str(c) for c in results_components)
@@ -74,6 +84,7 @@ class NodalResultsInfo:
         self.nodes_ids = nodes_ids
         self.nodes_info = nodes_info
         self.model_stages = model_stages
+        self.stage_step_ranges = stage_step_ranges
         self.results_components = results_components
         self.selection_set = selection_set
         self.analysis_time = analysis_time

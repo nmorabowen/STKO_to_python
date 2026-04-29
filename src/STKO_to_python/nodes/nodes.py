@@ -326,7 +326,15 @@ class NodeManager:
             .loc[ids_sorted, ["x", "y", "z"]]
         )
 
-        stage_frames = []
+        # Multi-stage fetches use a *contiguous global* step axis: each
+        # stage's local step 0..N-1 is shifted by the cumulative step
+        # count of all earlier stages. ``stage_step_ranges`` records the
+        # global ``(start, end)`` per stage for downstream filtering and
+        # plot-boundary annotation.
+        stage_frames: list[pd.DataFrame] = []
+        stage_step_ranges: dict[str, tuple[int, int]] = {}
+        stage_layouts: dict[str, tuple] = {}
+        step_offset = 0
 
         for st in stages:
             file_frames = []
@@ -343,21 +351,58 @@ class NodeManager:
                     )
 
             df_stage = pd.concat(file_frames, ignore_index=True)
+            n_steps_stage = (
+                int(df_stage["step"].max()) + 1 if not df_stage.empty else 0
+            )
+            df_stage["step"] = df_stage["step"] + step_offset
             df_stage = df_stage.set_index(["node_id", "step"]).sort_index()
 
-            if len(stages) > 1:
-                df_stage = df_stage.reset_index()
-                df_stage["stage"] = st
-                df_stage = df_stage.set_index(["stage", "node_id", "step"]).sort_index()
-
             stage_frames.append(df_stage)
+            stage_step_ranges[st] = (step_offset, step_offset + n_steps_stage)
+            stage_layouts[st] = tuple(map(tuple, df_stage.columns))
+            step_offset += n_steps_stage
 
-        df = stage_frames[0] if len(stage_frames) == 1 else pd.concat(stage_frames).sort_index()
+        # Cross-stage layout check: same column tuple per stage. Mirrors
+        # the bucket-by-bucket detail in
+        # :func:`MpcoFormatError` raises elsewhere (see
+        # ``ElementManager._validate_homogeneous_layouts_across_stages``
+        # for the equivalent on the element side).
+        if len(stages) > 1:
+            unique_layouts = {v for v in stage_layouts.values()}
+            if len(unique_layouts) > 1:
+                from ..io.meta_parser import MpcoFormatError
 
+                raise MpcoFormatError(
+                    f"Heterogeneous nodal column layouts across "
+                    f"MODEL_STAGE groups for "
+                    f"results={tuple(results)!r}: "
+                    f"{len(unique_layouts)} distinct layouts across "
+                    f"{len(stages)} stages. Restart-style models that "
+                    f"change topology between stages must be queried "
+                    f"one stage at a time. Layouts: "
+                    f"{ {s: [list(c) for c in cols] for s, cols in stage_layouts.items()} }"
+                )
+
+        df = (
+            stage_frames[0]
+            if len(stage_frames) == 1
+            else pd.concat(stage_frames).sort_index()
+        )
+
+        # Stitch time arrays end-to-end. Each stage's TIME records
+        # absolute time, so the concatenation is naturally monotonic
+        # for the gravity → pushover → dynamic workflow this targets.
+        time_chunks: list[np.ndarray] = []
+        for st in stages:
+            try:
+                t = self.dataset.time.loc[st]["TIME"].to_numpy()
+            except (KeyError, AttributeError):
+                start, end = stage_step_ranges[st]
+                t = np.full(end - start, np.nan, dtype=np.float64)
+            n = stage_step_ranges[st][1] - stage_step_ranges[st][0]
+            time_chunks.append(np.asarray(t, dtype=np.float64)[:n])
         time = (
-            self.dataset.time.loc[stages[0]]["TIME"].to_numpy()
-            if len(stages) == 1
-            else {s: self.dataset.time.loc[s]["TIME"].to_numpy() for s in stages}
+            np.concatenate(time_chunks) if time_chunks else np.array([])
         )
 
         component_names = tuple("|".join(map(str, c)) for c in df.columns)
@@ -371,6 +416,7 @@ class NodeManager:
             nodes_info=coords_df,
             results_components=component_names,
             model_stages=stages,
+            stage_step_ranges=stage_step_ranges,
             plot_settings=self.dataset.plot_settings,
             selection_set=self.dataset.selection_set,
             analysis_time=self.dataset.info.analysis_time,

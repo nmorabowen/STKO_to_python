@@ -623,6 +623,54 @@ class ElementManager:
         return out_xyz, out_ids
 
     @staticmethod
+    def _validate_homogeneous_layouts_across_stages(
+        stage_buckets: dict[str, dict[str, tuple[str, ...]]],
+        *,
+        results_name: str,
+        element_type: str,
+    ) -> None:
+        """Refuse silently mis-aligning frames across MODEL_STAGE groups
+        when the column set for any shared bucket differs across stages.
+
+        Mirrors :meth:`_validate_homogeneous_layouts` (which catches
+        cross-bucket mismatches within a single stage); this one catches
+        cross-stage mismatches that would otherwise produce NaN-padded
+        rows in the contiguous-step concatenation. The bucket-by-bucket
+        detail in the message lets the caller see which stage / bucket
+        is the odd one out.
+        """
+        # Union of all bucket paths seen across stages.
+        all_buckets: set[str] = set()
+        for buckets in stage_buckets.values():
+            all_buckets.update(buckets.keys())
+
+        mismatches: dict[str, dict[str, tuple[str, ...] | None]] = {}
+        for bucket in sorted(all_buckets):
+            per_stage: dict[str, tuple[str, ...] | None] = {}
+            for stage, buckets in stage_buckets.items():
+                per_stage[stage] = buckets.get(bucket)
+            unique = {v for v in per_stage.values() if v is not None}
+            if len(unique) > 1:
+                mismatches[bucket] = per_stage
+
+        if not mismatches:
+            return
+
+        from ..io.meta_parser import MpcoFormatError
+
+        raise MpcoFormatError(
+            f"Heterogeneous bucket layouts across MODEL_STAGE groups "
+            f"for results_name={results_name!r}, "
+            f"element_type={element_type!r}: "
+            f"{len(mismatches)} bucket(s) disagree across "
+            f"{len(stage_buckets)} stages. "
+            f"This usually means the model topology / integration "
+            f"rules changed between stages (restart-style); query "
+            f"each stage separately. Mismatches: "
+            f"{ {b: {s: list(c) if c is not None else None for s, c in by_stage.items()} for b, by_stage in mismatches.items()} }"
+        )
+
+    @staticmethod
     def _validate_homogeneous_layouts(
         collected,
         *,
@@ -705,6 +753,29 @@ class ElementManager:
             except Exception:
                 return list(keys)
 
+    @staticmethod
+    def _normalize_stages(
+        model_stage: Union[str, Sequence[str], None],
+        all_stages: Sequence[str],
+    ) -> Tuple[str, ...]:
+        """Resolve the ``model_stage`` argument to a tuple of stage names.
+
+        - ``None`` defaults to the first available stage (single-stage
+          back-compat); not all stages, since users typically don't want
+          surprise concatenation across every stage in the file.
+        - ``str`` -> ``(stage,)`` (single-stage path).
+        - ``Sequence[str]`` -> tuple in the order given (multi-stage
+          path, contiguous step axis).
+        """
+        if model_stage is None:
+            return (all_stages[0],) if all_stages else ()
+        if isinstance(model_stage, str):
+            return (model_stage,)
+        out = tuple(str(s) for s in model_stage)
+        if not out:
+            raise ValueError("model_stage list is empty.")
+        return out
+
     def get_element_results(
         self,
         results_name: str,
@@ -713,7 +784,7 @@ class ElementManager:
         element_ids: Union[list[int], np.ndarray, None] = None,
         selection_set_id: Union[int, Sequence[int], None] = None,
         selection_set_name: Union[str, Sequence[str], None] = None,
-        model_stage: Optional[str] = None,
+        model_stage: Union[str, Sequence[str], None] = None,
         verbose: bool = False,
     ) -> "ElementResults":
         """Public entry point — routes through the dataset-owned query
@@ -748,7 +819,7 @@ class ElementManager:
         element_ids: Union[list[int], np.ndarray, None] = None,
         selection_set_id: Union[int, Sequence[int], None] = None,
         selection_set_name: Union[str, Sequence[str], None] = None,
-        model_stage: Optional[str] = None,
+        model_stage: Union[str, Sequence[str], None] = None,
         verbose: bool = False,
     ) -> "ElementResults":
         """Uncached read path for element results.
@@ -765,14 +836,21 @@ class ElementManager:
         element_ids : list[int] or ndarray, optional
         selection_set_id : int or list[int], optional
         selection_set_name : str or list[str], optional
-        model_stage : str, optional
-            Defaults to the first model stage.
+        model_stage : str or sequence of str, optional
+            Single stage name (default: first stage), or a sequence of
+            stages. Multi-stage fetches concatenate along a *contiguous
+            global* step axis (stage 2 starts at the last step of stage
+            1 + 1) and stitch the time arrays end-to-end. Bucket layouts
+            (column names) must agree across stages — heterogeneous
+            layouts raise ``MpcoFormatError``.
         verbose : bool
 
         Returns
         -------
         ElementResults
             Container with results DataFrame, time, and metadata.
+            ``model_stages`` and ``stage_step_ranges`` describe the
+            stage decomposition.
         """
         # Resolve IDs
         ids = self._resolve_element_ids(
@@ -781,8 +859,9 @@ class ElementManager:
             selection_set_name=selection_set_name,
         )
 
-        if model_stage is None:
-            model_stage = self.dataset.model_stages[0]
+        stages = self._normalize_stages(model_stage, self.dataset.model_stages)
+        if not stages:
+            raise ValueError("Dataset has no model stages.")
 
         # Filter from cached index
         df_info = self._ensure_elem_index_df()
@@ -811,6 +890,9 @@ class ElementManager:
         # it comes from the static catalog at
         # ``utilities/gauss_points.py``. ``gp_weights`` is catalog-
         # provided integration weights (None for line elements).
+        # ``collected`` accumulates across all stages; ``stage_buckets``
+        # tracks per-stage column layouts for the cross-stage validity
+        # check.
         collected: list[
             tuple[
                 str,
@@ -821,200 +903,232 @@ class ElementManager:
                 pd.DataFrame,
             ]
         ] = []
+        stage_buckets: dict[str, dict[str, tuple[str, ...]]] = {
+            st: {} for st in stages
+        }
+        stage_n_steps: dict[str, int] = {}
+        step_offset = 0
 
-        # Group by partition for efficient HDF5 access
-        for file_id, df_group in df_info.groupby("file_id"):
-            with self.dataset._pool.with_partition(int(file_id)) as f:
-                base_path = f"{model_stage}/RESULTS/ON_ELEMENTS/{results_name}"
-                if base_path not in f:
-                    if verbose:
-                        print(
-                            f"[WARN] '{base_path}' not found in partition {file_id}"
-                        )
-                    continue
+        # Outer loop: stages. For multi-stage fetches we read each stage
+        # in turn, tag its chunks with the contiguous global step offset,
+        # and accumulate. Time arrays are stitched after the read loop.
+        for model_stage in stages:
+            stage_step_count = 0
 
-                candidates = list(f[base_path].keys())
-
-                # Group by *connectivity* decorated bracket (2-field —
-                # the element_idx values are positions within that
-                # specific MODEL/ELEMENTS/<bracket> dataset and only
-                # apply to results buckets sharing the same rule:cust
-                # prefix).
-                if "decorated_type" not in df_group.columns:
-                    raise RuntimeError(
-                        "element index missing 'decorated_type' column; "
-                        "rebuild the dataset to populate it."
-                    )
-
-                for conn_decorated, sub_group in df_group.groupby(
-                    "decorated_type"
-                ):
-                    if not conn_decorated.endswith("]"):
-                        # Defensive: connectivity brackets always end in ']'.
+            # Group by partition for efficient HDF5 access
+            for file_id, df_group in df_info.groupby("file_id"):
+                with self.dataset._pool.with_partition(int(file_id)) as f:
+                    base_path = f"{model_stage}/RESULTS/ON_ELEMENTS/{results_name}"
+                    if base_path not in f:
                         if verbose:
                             print(
-                                f"[WARN] Unexpected decorated_type "
-                                f"{conn_decorated!r}; skipping."
+                                f"[WARN] '{base_path}' not found in partition {file_id}"
                             )
                         continue
 
-                    # 3-field results bucket = 2-field connectivity
-                    # bracket with ']' replaced by ':' followed by the
-                    # response stream index, then ']'.
-                    bracket_prefix = conn_decorated[:-1] + ":"
-                    matching_results = [
-                        n
-                        for n in candidates
-                        if n.startswith(bracket_prefix) and n.endswith("]")
-                    ]
+                    candidates = list(f[base_path].keys())
 
-                    if not matching_results:
-                        if verbose:
-                            print(
-                                f"[WARN] No results bucket for connectivity "
-                                f"bracket {conn_decorated!r} under "
-                                f"{base_path}"
-                            )
-                        continue
-
-                    # Read GP_X from the connectivity dataset (only
-                    # present on custom-rule beam-columns; None for
-                    # closed-form connectivities and continuum classes).
-                    # See docs/mpco_format_conventions §1.
-                    conn_path = (
-                        f"{model_stage}/MODEL/ELEMENTS/{conn_decorated}"
-                    )
-                    conn_grp = f.get(conn_path)
-                    gp_xi: Optional[np.ndarray] = None
-                    if conn_grp is not None and "GP_X" in conn_grp.attrs:
-                        gp_xi = (
-                            np.asarray(conn_grp.attrs["GP_X"])
-                            .flatten()
-                            .astype(np.float64)
+                    # Group by *connectivity* decorated bracket (2-field —
+                    # the element_idx values are positions within that
+                    # specific MODEL/ELEMENTS/<bracket> dataset and only
+                    # apply to results buckets sharing the same rule:cust
+                    # prefix).
+                    if "decorated_type" not in df_group.columns:
+                        raise RuntimeError(
+                            "element index missing 'decorated_type' column; "
+                            "rebuild the dataset to populate it."
                         )
 
-                    # Pre-compute fancy-indexing arrays for this group
-                    # (element_idx is local to this connectivity bucket).
-                    idx_arr = sub_group["element_idx"].to_numpy(dtype=np.int64)
-                    id_arr = sub_group["element_id"].to_numpy(dtype=np.int64)
-                    sort_order = np.argsort(idx_arr, kind="mergesort")
-                    idx_sorted = idx_arr[sort_order]
-                    inv = np.empty_like(sort_order)
-                    inv[sort_order] = np.arange(sort_order.size)
-
-                    # If there are multiple response streams under the
-                    # same connectivity bracket (rare; ":1", ":2", ...),
-                    # take the first stream and warn — concatenating
-                    # them would silently duplicate (element_id, step)
-                    # rows. Users wanting other streams should query
-                    # the decorated_type explicitly.
-                    if len(matching_results) > 1:
-                        matching_results = sorted(matching_results)
-                        if verbose:
-                            print(
-                                f"[WARN] Multiple response streams under "
-                                f"{conn_decorated!r}: {matching_results}; "
-                                f"using {matching_results[0]!r}."
-                            )
-                        matching_results = matching_results[:1]
-
-                    for results_decorated in matching_results:
-                        bucket_path = f"{base_path}/{results_decorated}"
-                        h5_data_path = f"{bucket_path}/DATA"
-                        if h5_data_path not in f:
+                    for conn_decorated, sub_group in df_group.groupby(
+                        "decorated_type"
+                    ):
+                        if not conn_decorated.endswith("]"):
+                            # Defensive: connectivity brackets always end in ']'.
                             if verbose:
-                                print(f"[WARN] Path not found: {h5_data_path}")
+                                print(
+                                    f"[WARN] Unexpected decorated_type "
+                                    f"{conn_decorated!r}; skipping."
+                                )
                             continue
 
-                        bucket_grp = f[bucket_path]
-                        layout = self._resolve_bucket_layout(
-                            bucket_grp, bucket_path, verbose=verbose
-                        )
+                        # 3-field results bucket = 2-field connectivity
+                        # bracket with ']' replaced by ':' followed by the
+                        # response stream index, then ']'.
+                        bracket_prefix = conn_decorated[:-1] + ":"
+                        matching_results = [
+                            n
+                            for n in candidates
+                            if n.startswith(bracket_prefix) and n.endswith("]")
+                        ]
 
-                        data_group = f[h5_data_path]
-                        step_names = self._sort_step_keys(data_group.keys())
-                        n_steps = len(step_names)
-                        n_elems = len(idx_sorted)
-
-                        if layout is not None:
-                            n_comp = layout.num_columns
-                            col_names = list(layout.flat_columns)
-                        else:
-                            sample = data_group[step_names[0]][idx_sorted[:1]]
-                            n_comp = sample.shape[1]
-                            col_names = [f"val_{i + 1}" for i in range(n_comp)]
-
-                        out = np.empty(
-                            (n_steps * n_elems, n_comp), dtype=np.float64
-                        )
-                        for s, sname in enumerate(step_names):
-                            raw = data_group[sname][idx_sorted]
-                            if raw.shape[1] != n_comp:
-                                from ..io.meta_parser import MpcoFormatError
-
-                                raise MpcoFormatError(
-                                    f"{bucket_path}/DATA/{sname}: width "
-                                    f"{raw.shape[1]} disagrees with expected "
-                                    f"{n_comp} "
-                                    f"(from {'META' if layout else 'first step'})"
+                        if not matching_results:
+                            if verbose:
+                                print(
+                                    f"[WARN] No results bucket for connectivity "
+                                    f"bracket {conn_decorated!r} under "
+                                    f"{base_path}"
                                 )
-                            out[s * n_elems : (s + 1) * n_elems, :] = raw[inv]
+                            continue
 
-                        df_chunk = pd.DataFrame(out, columns=col_names)
-                        df_chunk["element_id"] = np.tile(id_arr, n_steps)
-                        df_chunk["step"] = np.repeat(
-                            np.arange(n_steps), n_elems
+                        # Read GP_X from the connectivity dataset (only
+                        # present on custom-rule beam-columns; None for
+                        # closed-form connectivities and continuum classes).
+                        # See docs/mpco_format_conventions §1.
+                        conn_path = (
+                            f"{model_stage}/MODEL/ELEMENTS/{conn_decorated}"
                         )
-                        # GP_X (1-D ξ) is only meaningful for non-closed-
-                        # form line buckets. For closed-form, drop it
-                        # even if the connectivity dataset happened to
-                        # carry one.
-                        chunk_gp_xi = (
-                            gp_xi
-                            if (layout is not None and not layout.closed_form)
-                            else None
-                        )
-
-                        # Resolve the multi-D natural-coord layout. For
-                        # line elements with GP_X we get a 1×n_ip vector
-                        # which we promote to (n_ip, 1). For shells /
-                        # solids we consult the catalog by base class +
-                        # IP count. Closed-form buckets stay None.
-                        chunk_gp_natural: Optional[np.ndarray] = None
-                        chunk_gp_weights: Optional[np.ndarray] = None
-                        if layout is not None and not layout.closed_form:
-                            if chunk_gp_xi is not None:
-                                chunk_gp_natural = chunk_gp_xi.reshape(-1, 1)
-                                # Line-element custom rules: weights
-                                # are not in the file. Leave as None.
-                            else:
-                                # Look up catalog by the connectivity
-                                # bracket's base class (strip the
-                                # ``[rule:cust]`` suffix).
-                                from ..utilities.gauss_points import (
-                                    get_ip_layout,
-                                )
-
-                                conn_base = conn_decorated.split("[", 1)[0]
-                                cat = get_ip_layout(conn_base, layout.n_ip)
-                                if cat is not None:
-                                    chunk_gp_natural = np.asarray(
-                                        cat[0], dtype=np.float64
-                                    )
-                                    chunk_gp_weights = np.asarray(
-                                        cat[1], dtype=np.float64
-                                    )
-
-                        collected.append(
-                            (
-                                bucket_path,
-                                col_names,
-                                chunk_gp_xi,
-                                chunk_gp_natural,
-                                chunk_gp_weights,
-                                df_chunk,
+                        conn_grp = f.get(conn_path)
+                        gp_xi: Optional[np.ndarray] = None
+                        if conn_grp is not None and "GP_X" in conn_grp.attrs:
+                            gp_xi = (
+                                np.asarray(conn_grp.attrs["GP_X"])
+                                .flatten()
+                                .astype(np.float64)
                             )
-                        )
+
+                        # Pre-compute fancy-indexing arrays for this group
+                        # (element_idx is local to this connectivity bucket).
+                        idx_arr = sub_group["element_idx"].to_numpy(dtype=np.int64)
+                        id_arr = sub_group["element_id"].to_numpy(dtype=np.int64)
+                        sort_order = np.argsort(idx_arr, kind="mergesort")
+                        idx_sorted = idx_arr[sort_order]
+                        inv = np.empty_like(sort_order)
+                        inv[sort_order] = np.arange(sort_order.size)
+
+                        # If there are multiple response streams under the
+                        # same connectivity bracket (rare; ":1", ":2", ...),
+                        # take the first stream and warn — concatenating
+                        # them would silently duplicate (element_id, step)
+                        # rows. Users wanting other streams should query
+                        # the decorated_type explicitly.
+                        if len(matching_results) > 1:
+                            matching_results = sorted(matching_results)
+                            if verbose:
+                                print(
+                                    f"[WARN] Multiple response streams under "
+                                    f"{conn_decorated!r}: {matching_results}; "
+                                    f"using {matching_results[0]!r}."
+                                )
+                            matching_results = matching_results[:1]
+
+                        for results_decorated in matching_results:
+                            bucket_path = f"{base_path}/{results_decorated}"
+                            h5_data_path = f"{bucket_path}/DATA"
+                            if h5_data_path not in f:
+                                if verbose:
+                                    print(f"[WARN] Path not found: {h5_data_path}")
+                                continue
+
+                            bucket_grp = f[bucket_path]
+                            layout = self._resolve_bucket_layout(
+                                bucket_grp, bucket_path, verbose=verbose
+                            )
+
+                            data_group = f[h5_data_path]
+                            step_names = self._sort_step_keys(data_group.keys())
+                            n_steps = len(step_names)
+                            n_elems = len(idx_sorted)
+
+                            if layout is not None:
+                                n_comp = layout.num_columns
+                                col_names = list(layout.flat_columns)
+                            else:
+                                sample = data_group[step_names[0]][idx_sorted[:1]]
+                                n_comp = sample.shape[1]
+                                col_names = [f"val_{i + 1}" for i in range(n_comp)]
+
+                            out = np.empty(
+                                (n_steps * n_elems, n_comp), dtype=np.float64
+                            )
+                            for s, sname in enumerate(step_names):
+                                raw = data_group[sname][idx_sorted]
+                                if raw.shape[1] != n_comp:
+                                    from ..io.meta_parser import MpcoFormatError
+
+                                    raise MpcoFormatError(
+                                        f"{bucket_path}/DATA/{sname}: width "
+                                        f"{raw.shape[1]} disagrees with expected "
+                                        f"{n_comp} "
+                                        f"(from {'META' if layout else 'first step'})"
+                                    )
+                                out[s * n_elems : (s + 1) * n_elems, :] = raw[inv]
+
+                            df_chunk = pd.DataFrame(out, columns=col_names)
+                            df_chunk["element_id"] = np.tile(id_arr, n_steps)
+                            # Apply the contiguous-global step offset so
+                            # multi-stage fetches concatenate without
+                            # overlap. Stage-local step numbering is
+                            # 0..n_steps-1; we add ``step_offset`` so
+                            # stage 2 starts where stage 1 ended.
+                            df_chunk["step"] = np.repeat(
+                                np.arange(n_steps) + step_offset, n_elems
+                            )
+                            # GP_X (1-D ξ) is only meaningful for non-closed-
+                            # form line buckets. For closed-form, drop it
+                            # even if the connectivity dataset happened to
+                            # carry one.
+                            chunk_gp_xi = (
+                                gp_xi
+                                if (layout is not None and not layout.closed_form)
+                                else None
+                            )
+
+                            # Resolve the multi-D natural-coord layout. For
+                            # line elements with GP_X we get a 1×n_ip vector
+                            # which we promote to (n_ip, 1). For shells /
+                            # solids we consult the catalog by base class +
+                            # IP count. Closed-form buckets stay None.
+                            chunk_gp_natural: Optional[np.ndarray] = None
+                            chunk_gp_weights: Optional[np.ndarray] = None
+                            if layout is not None and not layout.closed_form:
+                                if chunk_gp_xi is not None:
+                                    chunk_gp_natural = chunk_gp_xi.reshape(-1, 1)
+                                    # Line-element custom rules: weights
+                                    # are not in the file. Leave as None.
+                                else:
+                                    # Look up catalog by the connectivity
+                                    # bracket's base class (strip the
+                                    # ``[rule:cust]`` suffix).
+                                    from ..utilities.gauss_points import (
+                                        get_ip_layout,
+                                    )
+
+                                    conn_base = conn_decorated.split("[", 1)[0]
+                                    cat = get_ip_layout(conn_base, layout.n_ip)
+                                    if cat is not None:
+                                        chunk_gp_natural = np.asarray(
+                                            cat[0], dtype=np.float64
+                                        )
+                                        chunk_gp_weights = np.asarray(
+                                            cat[1], dtype=np.float64
+                                        )
+
+                            collected.append(
+                                (
+                                    bucket_path,
+                                    col_names,
+                                    chunk_gp_xi,
+                                    chunk_gp_natural,
+                                    chunk_gp_weights,
+                                    df_chunk,
+                                )
+                            )
+                            # Stage-independent bucket key: the
+                            # ``<connectivity>/<results_decorated>`` pair
+                            # uniquely identifies a logical bucket
+                            # across stages (the stage prefix in
+                            # ``bucket_path`` would otherwise make every
+                            # cross-stage comparison vacuously distinct).
+                            bucket_key = (
+                                f"{conn_decorated}/{results_decorated}"
+                            )
+                            stage_buckets[model_stage][bucket_key] = tuple(
+                                col_names
+                            )
+                            stage_step_count = max(stage_step_count, n_steps)
+
+            stage_n_steps[model_stage] = stage_step_count
+            step_offset += stage_step_count
 
         if not collected:
             if verbose:
@@ -1029,7 +1143,9 @@ class ElementManager:
                 element_ids=tuple(),
                 element_type=element_type,
                 results_name=results_name,
-                model_stage=model_stage,
+                model_stage=stages[0],
+                model_stages=stages,
+                stage_step_ranges={},
             )
 
         # Cross-bucket layout consistency check (refuses heterogeneous
@@ -1039,6 +1155,18 @@ class ElementManager:
             results_name=results_name,
             element_type=element_type,
         )
+
+        # Cross-stage layout consistency: the column set for each bucket
+        # must agree across stages. Restart-style models (where the
+        # column layout differs between stages) raise the same loud
+        # MpcoFormatError as cross-bucket mismatches — silent NaN
+        # padding under pd.concat would be a footgun.
+        if len(stages) > 1:
+            self._validate_homogeneous_layouts_across_stages(
+                stage_buckets,
+                results_name=results_name,
+                element_type=element_type,
+            )
 
         # Reconcile gp_xi / gp_natural / gp_weights across chunks.
         # All non-None values for a given attribute must agree; if not,
@@ -1075,11 +1203,28 @@ class ElementManager:
         )
         result_df = result_df.set_index(["element_id", "step"]).sort_index()
 
-        # Extract time array for the model stage
-        try:
-            time_arr = self.dataset.time.loc[model_stage]["TIME"].to_numpy()
-        except (KeyError, AttributeError):
-            time_arr = np.array([])
+        # Stitch per-stage time arrays end-to-end. Stage time arrays
+        # come from f[stage].attrs["TIME"] via dataset.time; the total
+        # ``time`` is naturally monotonic because each stage records
+        # absolute time. Build ``stage_step_ranges`` alongside.
+        stage_step_ranges: Dict[str, Tuple[int, int]] = {}
+        time_chunks: list[np.ndarray] = []
+        running = 0
+        for st in stages:
+            n = stage_n_steps.get(st, 0)
+            stage_step_ranges[st] = (running, running + n)
+            running += n
+            try:
+                t = self.dataset.time.loc[st]["TIME"].to_numpy()
+                # Truncate or extend to match this stage's actual step
+                # count; if the time DataFrame is shorter (e.g. partial
+                # write) we accept the shorter array.
+                time_chunks.append(np.asarray(t, dtype=np.float64)[:n])
+            except (KeyError, AttributeError):
+                time_chunks.append(np.full(n, np.nan, dtype=np.float64))
+        time_arr = (
+            np.concatenate(time_chunks) if time_chunks else np.array([])
+        )
 
         from .element_results import ElementResults
 
@@ -1098,7 +1243,9 @@ class ElementManager:
             element_ids=sorted_ids_tup,
             element_type=element_type,
             results_name=results_name,
-            model_stage=model_stage,
+            model_stage=stages[0],
+            model_stages=stages,
+            stage_step_ranges=stage_step_ranges,
             gp_xi=merged_gp_xi,
             gp_natural=merged_gp_natural,
             gp_weights=merged_gp_weights,

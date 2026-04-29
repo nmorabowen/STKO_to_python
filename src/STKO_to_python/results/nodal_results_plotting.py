@@ -161,15 +161,10 @@ class NodalResultsPlotter:
             # ---- TIME ------------------------------------------------------ #
             if what.upper() == "TIME":
                 t = res.time
-                if isinstance(t, dict):
-                    raise ValueError(
-                        "[NodalResultsPlotter.xy] TIME axis for multi-stage "
-                        "NodalResults is not supported yet.\n"
-                        "Either:\n"
-                        "  • specify x_results_name='STEP', or\n"
-                        "  • pre-select a single stage and build a stage-only "
-                        "NodalResults."
-                    )
+                # Multi-stage NodalResults now stitch per-stage TIME
+                # arrays into a single contiguous monotonic ndarray
+                # at fetch time (see ``Nodes._fetch_nodal_results_uncached``);
+                # the legacy dict-of-stages layout no longer occurs.
                 arr = np.asarray(t, dtype=float).reshape(-1)
                 return arr * float(scale)
 
@@ -359,6 +354,35 @@ class NodalResultsPlotter:
         if multi_x or multi_y:
             meta["dataframe"] = x_vals if multi_x else y_vals
 
+        # Stage-boundary annotation when the x-axis is TIME or STEP and
+        # the result spans multiple stages. We annotate against the same
+        # axis the user asked for; for a generic result-vs-result xy
+        # plot the boundaries don't have a natural x position so we
+        # skip the lines.
+        if x_results_name.upper() in ("TIME", "STEP"):
+            ranges = dict(getattr(res.info, "stage_step_ranges", None) or {})
+            stages_meta = tuple(getattr(res.info, "model_stages", None) or ())
+            if len(stages_meta) > 1 and ranges:
+                meta["stage_boundaries"] = []
+                t_arr = np.asarray(res.time, dtype=float).reshape(-1)
+                for st in stages_meta[:-1]:
+                    end_step = ranges.get(st, (0, 0))[1]
+                    if x_results_name.upper() == "TIME":
+                        if 0 < end_step <= t_arr.size:
+                            x_b = float(t_arr[end_step - 1]) * float(x_scale)
+                            meta["stage_boundaries"].append((st, x_b))
+                            ax.axvline(
+                                x_b, color="0.5", linestyle="--",
+                                linewidth=0.8, alpha=0.6,
+                            )
+                    else:  # STEP
+                        x_b = float(end_step - 1) * float(x_scale)
+                        meta["stage_boundaries"].append((st, x_b))
+                        ax.axvline(
+                            x_b, color="0.5", linestyle="--",
+                            linewidth=0.8, alpha=0.6,
+                        )
+
         return ax, meta
 
     # ------------------------------------------------------------------ #
@@ -376,26 +400,23 @@ class NodalResultsPlotter:
         marker: str | None = None,
         sharey: bool = True,
         label_prefix: str | None = "Node",
+        annotate_stage_boundaries: bool = True,
         **line_kwargs,
     ) -> tuple[plt.Figure | None, dict[str, Any]]:
         """
         Plot raw nodal time-history curves for a single result/component.
 
-        Assumes the NodalResults corresponds to a **single stage**, with
-        index (node_id, step). If multiple stages are present in the index,
-        this currently raises.
+        Works for both single-stage and multi-stage NodalResults — the
+        index is always ``(node_id, step)`` with step as a contiguous
+        global counter. For multi-stage results,
+        ``annotate_stage_boundaries`` adds vertical dashed lines at each
+        stage transition (in time on the x-axis).
         """
         res = self._results
         df = res.df
 
         # ---- TIME ARRAY ----------------------------------------------------- #
         t = res.time
-        if isinstance(t, dict):
-            raise ValueError(
-                "[NodalResultsPlotter.plot_TH] This NodalResults has per-stage "
-                "time information. For now, build a stage-specific "
-                "NodalResults before calling plot_TH."
-            )
         time_arr = np.asarray(t, dtype=float).reshape(-1)
 
         # ---- extract the single component via NodalResults.fetch ------------- #
@@ -524,6 +545,26 @@ class NodalResultsPlotter:
         if split_subplots and np.isfinite(global_ymin) and np.isfinite(global_ymax):
             for ax_sub in axes:
                 ax_sub.set_ylim(global_ymin, global_ymax)
+
+        # Stage-boundary annotation for multi-stage results: a dashed
+        # vertical line at each stage transition. Positions are taken
+        # from ``info.stage_step_ranges`` and mapped through ``time_arr``
+        # so the annotation lives in time, not step, coordinates.
+        if annotate_stage_boundaries:
+            ranges = dict(getattr(res.info, "stage_step_ranges", None) or {})
+            stages = tuple(getattr(res.info, "model_stages", None) or ())
+            if len(stages) > 1 and ranges:
+                meta["stage_boundaries"] = []
+                for st in stages[:-1]:
+                    end_step = ranges.get(st, (0, 0))[1]
+                    if 0 < end_step <= time_arr.size:
+                        x_b = float(time_arr[end_step - 1])
+                        meta["stage_boundaries"].append((st, x_b))
+                        for ax_sub in axes:
+                            ax_sub.axvline(
+                                x_b, color="0.5", linestyle="--",
+                                linewidth=0.8, alpha=0.6,
+                            )
 
         axes[-1].set_xlabel("Time")
         if not split_subplots:

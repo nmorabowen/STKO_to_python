@@ -117,6 +117,8 @@ class ElementResults:
         element_type: Optional[str] = None,
         results_name: Optional[str] = None,
         model_stage: Optional[str] = None,
+        model_stages: Optional[Tuple[str, ...]] = None,
+        stage_step_ranges: Optional[Dict[str, Tuple[int, int]]] = None,
         gp_xi: Optional[np.ndarray] = None,
         gp_natural: Optional[np.ndarray] = None,
         gp_weights: Optional[np.ndarray] = None,
@@ -130,6 +132,23 @@ class ElementResults:
         self.element_type = element_type or ""
         self.results_name = results_name or ""
         self.model_stage = model_stage or ""
+
+        # Multi-stage metadata. ``model_stages`` lists every stage in the
+        # result in the order requested; ``model_stage`` (singular,
+        # back-compat) is the first one. For a single-stage fetch
+        # ``model_stages == (model_stage,)`` and ``stage_step_ranges`` has
+        # one entry covering the whole step axis. For multi-stage fetches
+        # the step axis is *contiguous global* — stage 2's first step is
+        # ``stage_step_ranges["MODEL_STAGE[2]"][0] == n_steps_stage1``.
+        self.model_stages: Tuple[str, ...] = (
+            tuple(str(s) for s in model_stages) if model_stages else
+            ((self.model_stage,) if self.model_stage else ())
+        )
+        self.stage_step_ranges: Dict[str, Tuple[int, int]] = (
+            {str(k): (int(v[0]), int(v[1])) for k, v in stage_step_ranges.items()}
+            if stage_step_ranges
+            else {}
+        )
 
         # Multi-dimensional natural-coord IP positions, shape
         # ``(n_ip, dim)``: dim=1 for lines, 2 for shells / plane
@@ -928,8 +947,18 @@ class ElementResults:
     # Dunder niceties
     # ------------------------------------------------------------------ #
 
+    @property
+    def is_multi_stage(self) -> bool:
+        """True when this result spans more than one MODEL_STAGE."""
+        return len(self.model_stages) > 1
+
     def __repr__(self) -> str:
         ip_part = f", n_ip={self.n_ip}" if self.n_ip else ""
+        stage_part = (
+            f", stages={self.model_stages}"
+            if self.is_multi_stage
+            else ""
+        )
         return (
             f"ElementResults("
             f"results_name={self.results_name!r}, "
@@ -937,7 +966,7 @@ class ElementResults:
             f"n_elements={self.n_elements}, "
             f"n_steps={self.n_steps}, "
             f"n_components={self.n_components}"
-            f"{ip_part})"
+            f"{ip_part}{stage_part})"
         )
 
     def __str__(self) -> str:
