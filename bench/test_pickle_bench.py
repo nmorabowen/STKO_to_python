@@ -89,6 +89,10 @@ def test_bench_setstate_with_unknown_keys(benchmark, warm_dataset):
         return target
 
     loaded = benchmark(_setstate)
-    assert "drift_profile_cache" not in loaded.__dict__
-    assert "residual_cache" not in loaded.__dict__
-    assert "legacy_flag" not in loaded.__dict__
+    # NodalResults is slotted (Phase 4a); leaked unknown keys would
+    # AttributeError on setattr. Verify both that the names aren't bound
+    # and that no rogue __dict__ snuck in.
+    assert not hasattr(loaded, "drift_profile_cache")
+    assert not hasattr(loaded, "residual_cache")
+    assert not hasattr(loaded, "legacy_flag")
+    assert not hasattr(loaded, "__dict__")
