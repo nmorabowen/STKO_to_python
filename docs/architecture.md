@@ -253,7 +253,7 @@ resolved after unpickle, regardless of state-dict contents.
 
 ## Testing & CI
 
-- **`pytest tests/`** — 628 unit + integration tests. Runs on every
+- **`pytest tests/`** — 638 unit + integration tests. Runs on every
   PR via `.github/workflows/test.yml` across Python 3.11 / 3.12 /
   3.13 (PR #45).
 - **`pytest bench/`** — 10 benchmarks via `pytest-benchmark`. Opt-in
@@ -262,6 +262,37 @@ resolved after unpickle, regardless of state-dict contents.
   artifact for later regression analysis (PR #44).
 - **mkdocs strict build** — every PR builds the docs site under
   `--strict`; broken cross-references fail the build.
+
+### Test fixtures
+
+Integration tests source `.mpco` recorder outputs from
+`stko_results_examples/`. A `_resolve_examples_dir` helper in
+`tests/conftest.py` falls back to the main checkout's copy when the
+suite runs inside a Claude worktree, so tests stay green without
+needing the heavy fixtures duplicated under each worktree.
+
+| Fixture | Element type | Tracked? | Notes |
+|---|---|---|---|
+| `elasticFrame/results/` | `5-ElasticBeam3d` (closed-form) | ✅ committed | ~330 KB, single partition |
+| `elasticFrame/QuadFrame_results/` | `203-ASDShellQ4` | ✅ committed | Multi-partition (MP) shells |
+| `elasticFrame/elasticFrame_mesh_results/` | `5-ElasticBeam3d` (meshed) | ✅ committed | Multi-element mesh |
+| `elasticFrame/elasticFrame_mesh_displacementBased_results/` | `64-DispBeamColumn3d` | ✅ committed | Lobatto-3, smaller |
+| `dispBeamCol/` | `64-DispBeamColumn3d` | gitignored (~600 MB) | **Lobatto-5**, isolation fixture |
+| `forceBeamCol/` | `74-ForceBeamColumn3d` | gitignored (~13 MB) | **Lobatto-5**, isolation fixture |
+| `solid_partition_example/` | `Brick` + `DispBeamColumn3d` | gitignored | MP solid + fiber-beam |
+| `Test_NLShell/` | `203-ASDShellQ4` + `204-ASDShellT3` (layered) | gitignored (~2 GB) | MP layered shells |
+
+Tests against gitignored fixtures skip cleanly via their conftest
+fixtures (`disp_beam_col_dir`, `force_beam_col_dir`, `nl_shell_dir`,
+`solid_partition_dir`). On a clean clone the suite stays green; on a
+workstation that has the recorder outputs, the corresponding tests
+exercise them automatically.
+
+The `dispBeamCol` and `forceBeamCol` fixtures are deliberately twins:
+identical geometry, sections, and integration rule (Lobatto-5), with
+only the beam-column formulation differing. They exist so the
+displacement-based-vs-force-based distinction is testable in
+isolation — see `tests/integration/test_disp_force_beam_col.py`.
 
 The strict-warning filter
 (`pyproject.toml [tool.pytest] filterwarnings`) elevates every
