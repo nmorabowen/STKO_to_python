@@ -7,18 +7,26 @@ import pickle
 import pytest
 
 from STKO_to_python.plotting.plot_settings import PlotSettings
-from STKO_to_python.plotting.plot_dataclasses import ModelPlotSettings
 
 
 # ---------------------------------------------------------------------- #
 # Alias identity
 # ---------------------------------------------------------------------- #
-def test_alias_is_plot_settings():
+def test_alias_is_plot_settings_and_emits_deprecation():
+    """Importing ``ModelPlotSettings`` from the deprecated deep path must
+    emit a ``DeprecationWarning`` and resolve to ``PlotSettings``."""
+    with pytest.warns(DeprecationWarning, match="ModelPlotSettings.*deprecated"):
+        from STKO_to_python.plotting.plot_dataclasses import ModelPlotSettings
     assert ModelPlotSettings is PlotSettings
 
 
-def test_top_level_plotting_exports_both_names():
-    from STKO_to_python.plotting import ModelPlotSettings as M, PlotSettings as P
+def test_top_level_plotting_exports_both_names_quietly():
+    """The package-surface alias is quiet — only the deep
+    ``plotting.plot_dataclasses`` path emits the warning."""
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", DeprecationWarning)
+        from STKO_to_python.plotting import ModelPlotSettings as M, PlotSettings as P
     assert M is P
 
 
