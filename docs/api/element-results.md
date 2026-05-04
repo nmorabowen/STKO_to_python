@@ -167,6 +167,145 @@ df_summary = er.summary()
 
 ---
 
+## Element selectors (pre-fetch)
+
+Build chainable, composable element-id queries against the cached
+element index — no HDF5 reads required. Pass the resolved selector
+into `get_element_results(selector=...)` to fetch only what you need.
+
+```python
+sel = (ds.elements.select()
+       .of_type("DispBeamColumn3d")           # universe anchor
+       .from_selection("CoreColumns")          # set membership
+       .within_box(min=(0, 0, 0), max=(10, 10, 30))
+       .nearest_to((5, 5, 15), k=20))
+
+ids = sel.ids()          # np.ndarray[int64]
+df  = sel.df()           # element-index rows
+mask = sel.mask()        # bool Series indexed by element_id
+n   = sel.count()        # int
+
+er = ds.elements.get_element_results("globalForces", selector=sel)
+```
+
+**Spatial primitives** — every primitive narrows AND-style in chain
+order:
+
+| Primitive | Notes |
+|---|---|
+| `.within_box(min, max, mode="centroid")` | `mode` ∈ `"centroid"`, `"any_node"`, `"all_nodes"` |
+| `.within_distance(point, radius)` | centroid-distance test |
+| `.nearest_to(point, k=1)` | k-NN by centroid; result rows sorted by distance |
+| `.on_plane(z=2.5)` / `.on_plane(point=, normal=)` | element crosses (or touches) the plane |
+| `.near_line(p0, p1, radius)` | distance to segment |
+| `.centroid_in(axis, lo=, hi=)` | one-sided or two-sided range |
+| `.where(fn)` | predicate escape hatch — `fn(df) -> bool_mask` |
+
+**Anchors** — set the type-bound universe used for negation:
+
+| Anchor | Purpose |
+|---|---|
+| `.of_type(name)` | base class (decorated `[bracket]` is stripped automatically) |
+| `.from_selection(name_or_id)` | one or more selection sets |
+| `.with_ids(ids)` | explicit element IDs |
+
+**Boolean composition** — combine independently anchored selectors:
+
+```python
+a = ds.elements.select().of_type("Beam").within_box(...)
+b = ds.elements.select().of_type("Beam").from_selection("Core")
+
+(a & b).ids()       # intersection
+(a | b).ids()       # union
+(~a).ids()          # complement WITHIN a's of_type universe
+```
+
+Negation requires an anchor (`of_type` / `from_selection` / `with_ids`)
+on every leaf — otherwise the universe is undefined and the call
+raises. The combinator's universe is the intersection of its leaves'
+universes for `&`, the union for `|`.
+
+---
+
+## Result masks (post-fetch)
+
+`er.where(...)` builds a per-element boolean mask from a value
+condition. Combine with `& / | / ~` and apply via `er[mask]` to get a
+fresh trimmed `ElementResults`.
+
+```python
+mask = (er.where(time=(0.0, 10.0))           # default time window
+        .component("Mz_ip0")                  # or .canonical("axial_force")
+        .abs_peak()                           # reduction over the window
+        .gt(50.0))                            # comparator → ResultMask
+
+hot = er[mask]              # fresh ElementResults with only matched ids
+ids = mask.ids()            # int64 array
+n   = mask.count()          # int
+```
+
+**Reductions over time**
+
+| Reduction | Returns one scalar per element |
+|---|---|
+| `at_step(s)` | value at exactly step `s` |
+| `at_time(t)` | value at the step nearest to time `t` |
+| `peak(time=...)` | signed maximum over the window |
+| `trough(time=...)` | signed minimum over the window |
+| `abs_peak(time=...)` | maximum of `|·|` over the window |
+| `mean(time=...)` | mean over the window |
+| `residual(time=...)` | last step in the window |
+| `over_threshold(v, time=...)` | fraction of steps above `v` (chain a comparator) |
+
+**Comparators** — `gt`, `lt`, `ge`, `le`, `between(lo, hi, inclusive=True)`,
+`outside(lo, hi)`, `eq(v, atol=0)`, `near(v, atol=...)`.
+
+**Time-spec grammar** — the `time=` argument on `er.where()` and on
+every reduction accepts:
+
+| Spec | Meaning |
+|---|---|
+| `None` | all steps in `er.time` |
+| `int` | one step index (negative wraps) |
+| `float` | step nearest to that time value |
+| `slice(t0, t1)` | half-open *time* range `t0 ≤ time < t1` |
+| `(t0, t1)` tuple | same as the slice form |
+| `list[int]` / `np.ndarray[int]` | explicit step indices |
+| `list[float]` / `np.ndarray[float]` | nearest step for each |
+
+The chain inherits the default window from `er.where(time=...)`; any
+reduction may override with its own `time=` argument.
+
+**Composition**
+
+```python
+m1 = er.where().component("Mz_ip0").peak().gt(50.0)
+m2 = er.where().component("N_1").at_step(100).between(-100.0, 0.0)
+
+mask = m1 & m2          # both conditions
+mask = m1 | m2          # either condition
+mask = ~m1              # complement (vs all elements in `er`)
+```
+
+Masks must come from the same `ElementResults` instance — combining
+masks across instances raises `ValueError`.
+
+**Predicate escape hatch**
+
+```python
+mask = er.where().predicate(
+    lambda df: df["Mz_ip0"].abs() > 60.0    # full (e_id, step) index
+)
+# The full-index form is reduced via `any` to a per-element mask.
+
+mask = er.where().predicate(
+    lambda df: np.array([True, False, True])    # length == n_elements
+)
+# Per-element mask used directly.
+```
+
+---
+
 ## DataFrame export
 
 ```python

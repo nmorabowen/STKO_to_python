@@ -10,6 +10,7 @@ import pandas as pd
 if TYPE_CHECKING:
     from ..core.dataset import MPCODataSet
     from .element_results import ElementResults
+    from .selector import ElementSelector
 
 logger = logging.getLogger(__name__)
 
@@ -308,6 +309,32 @@ class ElementManager:
             base = element_type.split("[")[0]
             df = df[df["element_type"].str.startswith(base)]
         return df
+
+    # ------------------------------------------------------------------ #
+    # Selector entry point                                                #
+    # ------------------------------------------------------------------ #
+
+    def select(self) -> "ElementSelector":
+        """Build a lazy, chainable element-id query.
+
+        Returns a fresh :class:`~STKO_to_python.elements.selector.ElementSelector`
+        anchored to nothing; chain ``of_type`` / ``from_selection`` /
+        ``with_ids`` to set its universe, then add spatial primitives
+        (``within_box``, ``nearest_to``, ``on_plane``, ``near_line``,
+        ``within_distance``, ``centroid_in``) or a ``where(fn)``
+        predicate. Combine with ``&`` / ``|`` / ``~``.
+
+        Examples
+        --------
+        >>> ids = (dataset.elements.select()
+        ...        .of_type("DispBeamColumn3d")
+        ...        .within_box(min=(0, 0, 0), max=(10, 10, 30))
+        ...        .nearest_to((5, 5, 15), k=20)
+        ...        .ids())
+        """
+        from .selector import ElementSelector
+
+        return ElementSelector(self)
 
     # ------------------------------------------------------------------ #
     # Element ID resolution (mirrors Nodes._resolve_node_ids)
@@ -779,17 +806,65 @@ class ElementManager:
     def get_element_results(
         self,
         results_name: str,
-        element_type: str,
+        element_type: Optional[str] = None,
         *,
         element_ids: Union[list[int], np.ndarray, None] = None,
         selection_set_id: Union[int, Sequence[int], None] = None,
         selection_set_name: Union[str, Sequence[str], None] = None,
+        selector: Optional["ElementSelector"] = None,
         model_stage: Union[str, Sequence[str], None] = None,
         verbose: bool = False,
     ) -> "ElementResults":
         """Public entry point — routes through the dataset-owned query
         engine so every call benefits from the LRU cache. Thin wrapper.
+
+        Parameters
+        ----------
+        selector : ElementSelector, optional
+            Resolved id list from a chainable selector
+            (:meth:`ElementManager.select`). When provided, its ids are
+            merged with ``element_ids``, and the selector's
+            ``of_type`` anchor (if any) overrides ``element_type`` when
+            ``element_type`` is left as ``None``.
         """
+        if selector is not None:
+            from .selector import ElementSelector  # avoid import cycle
+
+            if not isinstance(selector, ElementSelector):
+                raise TypeError(
+                    "selector must be an ElementSelector instance "
+                    f"(got {type(selector).__name__})."
+                )
+            sel_ids = selector.ids()
+            if element_ids is None:
+                element_ids = sel_ids
+            else:
+                element_ids = np.unique(
+                    np.concatenate(
+                        [
+                            np.asarray(element_ids, dtype=np.int64).ravel(),
+                            sel_ids,
+                        ]
+                    )
+                )
+            if element_type is None:
+                anchor_type = getattr(selector, "_anchor", None)
+                anchor_type = (
+                    anchor_type.of_type if anchor_type is not None else None
+                )
+                if anchor_type is None:
+                    raise ValueError(
+                        "get_element_results: selector has no of_type "
+                        "anchor; pass element_type= explicitly."
+                    )
+                element_type = anchor_type
+
+        if element_type is None:
+            raise ValueError(
+                "get_element_results: element_type is required (or pass "
+                "a selector with .of_type(...) set)."
+            )
+
         engine = getattr(self.dataset, "_element_query_engine", None)
         if engine is not None:
             return engine.fetch(
