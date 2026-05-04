@@ -884,6 +884,50 @@ class ElementResults:
         return self.at_step(idx)
 
     # ------------------------------------------------------------------ #
+    # Threshold / time-window query (Phase 2)                             #
+    # ------------------------------------------------------------------ #
+
+    def where(self, *, time: Any = None) -> "Any":
+        """Start a threshold / time-window mask query.
+
+        Returns a ``_ResultQuery`` object; chain ``.component(...)`` /
+        ``.canonical(...)`` / ``.predicate(...)`` to build a
+        :class:`~STKO_to_python.elements.result_mask.ResultMask`. The
+        ``time`` argument sets a default window for every reduction in
+        the chain (each reduction can override with its own ``time=``).
+
+        See :mod:`STKO_to_python.elements.result_mask` for the full
+        time-spec grammar.
+
+        Examples
+        --------
+        >>> mask = (er.where(time=(0.0, 10.0))
+        ...        .component("Mz_ip0").abs_peak().gt(50.0))
+        >>> hot = er[mask]                      # filtered ElementResults
+        >>> ids = mask.ids()                    # int64 array
+        """
+        from .result_mask import _ResultQuery
+
+        return _ResultQuery(self, default_time=time)
+
+    def __getitem__(self, key: Any) -> Any:
+        """Apply a :class:`ResultMask` (``er[mask]``) to get a fresh
+        trimmed :class:`ElementResults`.
+
+        Column / view access still goes through the dynamic
+        ``__getattr__`` proxies (``er.Mz_ip0``); slicing here is for
+        masks only.
+        """
+        from .result_mask import ResultMask
+
+        if isinstance(key, ResultMask):
+            return key.apply()
+        raise TypeError(
+            f"ElementResults[...] expects a ResultMask; got "
+            f"{type(key).__name__}. Use attribute access for columns."
+        )
+
+    # ------------------------------------------------------------------ #
     # Pickle support
     # ------------------------------------------------------------------ #
 
