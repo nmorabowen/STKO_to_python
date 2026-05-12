@@ -307,6 +307,45 @@ def _node_coord_lookup(manager: "ElementManager") -> Optional[_NodeCoordLookup]:
     return cache
 
 
+def _resolve_element_info_filter(
+    manager: "ElementManager", anchor: "_Anchor"
+) -> set[int]:
+    """Intersect every active *ELEMENT_INFO anchor in a single pass.
+
+    Returns the set of element ids whose ``ElementInfo`` matches every
+    anchor field that is set. One pass over ``element_info`` regardless
+    of how many anchor fields are active.
+    """
+    cdata = getattr(manager.dataset, "cdata", None)
+    if cdata is None:
+        raise AttributeError(
+            "Selector uses an element_info anchor but "
+            "dataset.cdata is not available."
+        )
+    element_info = cdata.element_info
+    if not element_info:
+        # Selector resolves to empty rather than raising; consistent
+        # with .of_type() against a class that has no rows.
+        return set()
+
+    matched: set[int] = set()
+    want_geom = anchor.geom_name
+    want_pp = anchor.physical_property_name
+    want_ep = anchor.element_property_name
+    want_sub = anchor.sub_geom_type
+    for eid, ei in element_info.items():
+        if want_geom is not None and ei.geom_name != want_geom:
+            continue
+        if want_pp is not None and ei.physical_property_name != want_pp:
+            continue
+        if want_ep is not None and ei.element_property_name != want_ep:
+            continue
+        if want_sub is not None and ei.sub_geom_type != want_sub:
+            continue
+        matched.add(int(eid))
+    return matched
+
+
 # ---------------------------------------------------------------------- #
 # Anchor — defines the type-bound universe for a selector                #
 # ---------------------------------------------------------------------- #
@@ -316,12 +355,30 @@ class _Anchor:
     of_type: Optional[str] = None
     selection: Optional[Tuple[Any, ...]] = None  # names or set ids
     explicit_ids: Optional[Tuple[int, ...]] = None
+    # .cdata *ELEMENT_INFO anchors (resolved against
+    # ``dataset.cdata.element_info``):
+    geom_name: Optional[str] = None
+    physical_property_name: Optional[str] = None
+    element_property_name: Optional[str] = None
+    sub_geom_type: Optional[str] = None
 
     def is_set(self) -> bool:
         return (
             self.of_type is not None
             or self.selection is not None
             or self.explicit_ids is not None
+            or self.geom_name is not None
+            or self.physical_property_name is not None
+            or self.element_property_name is not None
+            or self.sub_geom_type is not None
+        )
+
+    def has_element_info_filter(self) -> bool:
+        return (
+            self.geom_name is not None
+            or self.physical_property_name is not None
+            or self.element_property_name is not None
+            or self.sub_geom_type is not None
         )
 
     def with_(
@@ -330,6 +387,10 @@ class _Anchor:
         of_type: Optional[str] = None,
         selection: Optional[Tuple[Any, ...]] = None,
         explicit_ids: Optional[Tuple[int, ...]] = None,
+        geom_name: Optional[str] = None,
+        physical_property_name: Optional[str] = None,
+        element_property_name: Optional[str] = None,
+        sub_geom_type: Optional[str] = None,
     ) -> "_Anchor":
         return _Anchor(
             of_type=of_type if of_type is not None else self.of_type,
@@ -338,6 +399,24 @@ class _Anchor:
                 explicit_ids
                 if explicit_ids is not None
                 else self.explicit_ids
+            ),
+            geom_name=(
+                geom_name if geom_name is not None else self.geom_name
+            ),
+            physical_property_name=(
+                physical_property_name
+                if physical_property_name is not None
+                else self.physical_property_name
+            ),
+            element_property_name=(
+                element_property_name
+                if element_property_name is not None
+                else self.element_property_name
+            ),
+            sub_geom_type=(
+                sub_geom_type
+                if sub_geom_type is not None
+                else self.sub_geom_type
             ),
         )
 
@@ -427,6 +506,55 @@ class ElementSelector:
         return ElementSelector(
             self._manager,
             anchor=self._anchor.with_(explicit_ids=existing + arr),
+            ops=self._ops,
+        )
+
+    def of_geometry(self, name: str) -> "ElementSelector":
+        """Anchor universe to elements whose STKO parent geometry has *name*.
+
+        Resolves against ``dataset.cdata.element_info[*].geom_name``.
+        Example: ``select().of_geometry("Slab")``.
+        """
+        return ElementSelector(
+            self._manager,
+            anchor=self._anchor.with_(geom_name=str(name)),
+            ops=self._ops,
+        )
+
+    def of_physical_property(self, name: str) -> "ElementSelector":
+        """Anchor universe to elements with the named physical (material/section) property.
+
+        Resolves against ``dataset.cdata.element_info[*].physical_property_name``.
+        Example: ``select().of_physical_property("ShearWalls_Elastic")``.
+        """
+        return ElementSelector(
+            self._manager,
+            anchor=self._anchor.with_(physical_property_name=str(name)),
+            ops=self._ops,
+        )
+
+    def of_element_property(self, name: str) -> "ElementSelector":
+        """Anchor universe to elements with the named element property.
+
+        Resolves against ``dataset.cdata.element_info[*].element_property_name``.
+        Example: ``select().of_element_property("elasticBeamCol")``.
+        """
+        return ElementSelector(
+            self._manager,
+            anchor=self._anchor.with_(element_property_name=str(name)),
+            ops=self._ops,
+        )
+
+    def of_sub_geom_type(self, geom_type: str) -> "ElementSelector":
+        """Anchor universe to elements whose parent sub-geometry has the given type.
+
+        ``geom_type`` is one of ``"Edge"``, ``"Face"``, ``"Solid"`` (and
+        whatever else STKO emits). Resolves against
+        ``dataset.cdata.element_info[*].sub_geom_type``.
+        """
+        return ElementSelector(
+            self._manager,
+            anchor=self._anchor.with_(sub_geom_type=str(geom_type)),
             ops=self._ops,
         )
 
@@ -662,6 +790,9 @@ class ElementSelector:
             df = df[df["element_id"].isin(sel_ids)]
         if a.explicit_ids is not None:
             df = df[df["element_id"].isin(a.explicit_ids)]
+        if a.has_element_info_filter():
+            matched = _resolve_element_info_filter(self._manager, a)
+            df = df[df["element_id"].isin(matched)]
         return df
 
     def _universe_ids(self) -> np.ndarray:
@@ -686,6 +817,18 @@ class ElementSelector:
             bits.append(f"from_selection={list(self._anchor.selection)!r}")
         if self._anchor.explicit_ids:
             bits.append(f"with_ids({len(self._anchor.explicit_ids)})")
+        if self._anchor.geom_name:
+            bits.append(f"of_geometry={self._anchor.geom_name!r}")
+        if self._anchor.physical_property_name:
+            bits.append(
+                f"of_physical_property={self._anchor.physical_property_name!r}"
+            )
+        if self._anchor.element_property_name:
+            bits.append(
+                f"of_element_property={self._anchor.element_property_name!r}"
+            )
+        if self._anchor.sub_geom_type:
+            bits.append(f"of_sub_geom_type={self._anchor.sub_geom_type!r}")
         for op in self._ops:
             bits.append(type(op).__name__.strip("_"))
         return f"ElementSelector({', '.join(bits)})"
@@ -806,6 +949,30 @@ class _CombinedSelector(ElementSelector):
         raise TypeError(
             "Cannot call .with_ids() on a combined selector; anchor "
             "each leaf selector before combining."
+        )
+
+    def of_geometry(self, name: str) -> "ElementSelector":  # type: ignore[override]
+        raise TypeError(
+            "Cannot call .of_geometry() on a combined selector; anchor "
+            "each leaf selector before combining."
+        )
+
+    def of_physical_property(self, name: str) -> "ElementSelector":  # type: ignore[override]
+        raise TypeError(
+            "Cannot call .of_physical_property() on a combined selector; "
+            "anchor each leaf selector before combining."
+        )
+
+    def of_element_property(self, name: str) -> "ElementSelector":  # type: ignore[override]
+        raise TypeError(
+            "Cannot call .of_element_property() on a combined selector; "
+            "anchor each leaf selector before combining."
+        )
+
+    def of_sub_geom_type(self, geom_type: str) -> "ElementSelector":  # type: ignore[override]
+        raise TypeError(
+            "Cannot call .of_sub_geom_type() on a combined selector; "
+            "anchor each leaf selector before combining."
         )
 
     def _with_op(self, op: _FilterOp) -> "ElementSelector":

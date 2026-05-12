@@ -24,6 +24,7 @@ import pandas as pd
 import pytest
 
 from STKO_to_python.elements.selector import ElementSelector
+from STKO_to_python.model.cdata_reader import ElementInfo
 
 
 # ---------------------------------------------------------------------- #
@@ -162,19 +163,39 @@ class _MockSelResolver:
         return np.unique(np.concatenate(gathered))
 
 
+class _MockCData:
+    """Stand-in for ``CDataReader`` exposing just the .element_info dict
+    that the selector touches."""
+
+    def __init__(self, element_info: dict):
+        self.element_info = element_info
+
+
 class _MockDataset:
-    def __init__(self, df_nodes: pd.DataFrame, resolver: _MockSelResolver):
+    def __init__(
+        self,
+        df_nodes: pd.DataFrame,
+        resolver: _MockSelResolver,
+        element_info: Optional[dict] = None,
+    ):
         self.nodes_info = {"dataframe": df_nodes}
         self._selection_resolver = resolver
+        self.cdata = _MockCData(element_info or {})
 
 
 class _MockManager:
     """Stand-in for :class:`ElementManager` exposing only the surface
     that :class:`ElementSelector` touches."""
 
-    def __init__(self, df_elems: pd.DataFrame, df_nodes: pd.DataFrame, resolver):
+    def __init__(
+        self,
+        df_elems: pd.DataFrame,
+        df_nodes: pd.DataFrame,
+        resolver,
+        element_info: Optional[dict] = None,
+    ):
         self._df = df_elems
-        self.dataset = _MockDataset(df_nodes, resolver)
+        self.dataset = _MockDataset(df_nodes, resolver, element_info)
 
     def _ensure_elem_index_df(self) -> pd.DataFrame:
         return self._df
@@ -581,3 +602,197 @@ def test_selectors_are_immutable(mgr: _MockManager):
     assert base.count() == 9
     # a and b cover disjoint x-ranges so produce disjoint id sets.
     assert set(a.ids().tolist()).isdisjoint(set(b.ids().tolist()))
+
+
+# ---------------------------------------------------------------------- #
+# Tests — *ELEMENT_INFO anchors (.of_geometry / .of_physical_property etc) #
+# ---------------------------------------------------------------------- #
+
+
+def _build_element_info() -> dict[int, ElementInfo]:
+    """Annotate every element with parent-geometry + property metadata.
+
+    Beams (ids 1..9):
+      ids 1..3   -> geom "Frame",   physical "Steel_Elastic",    element_prop "elasticBeamCol", Edge
+      ids 4..9   -> geom "Frame",   physical "Concrete_Elastic", element_prop "elasticBeamCol", Edge
+
+    Shells (ids 10..18):
+                  -> geom "Slab",   physical "Slab_Elastic",     element_prop "Q4",            Face
+    """
+    info: dict[int, ElementInfo] = {}
+    for eid in range(1, 10):
+        pp = "Steel_Elastic" if eid <= 3 else "Concrete_Elastic"
+        info[eid] = ElementInfo(
+            element_id=eid,
+            geom_id=1,
+            geom_name="Frame",
+            sub_geom_idx=0,
+            sub_geom_type="Edge",
+            physical_property_id=1,
+            physical_property_name=pp,
+            element_property_id=1,
+            element_property_name="elasticBeamCol",
+        )
+    for eid in range(10, 19):
+        info[eid] = ElementInfo(
+            element_id=eid,
+            geom_id=2,
+            geom_name="Slab",
+            sub_geom_idx=0,
+            sub_geom_type="Face",
+            physical_property_id=2,
+            physical_property_name="Slab_Elastic",
+            element_property_id=2,
+            element_property_name="Q4",
+        )
+    return info
+
+
+@pytest.fixture
+def mgr_with_info() -> _MockManager:
+    """Same geometry as ``mgr`` plus a populated ``cdata.element_info``."""
+    df_elems, df_nodes = _build_index()
+    # Reuse the same two named sets as the main fixture.
+    beam_first = (
+        df_elems[
+            (df_elems["element_type"] == BEAM_TYPE)
+            & (df_elems["centroid_x"] <= 1.0)
+        ]["element_id"]
+        .to_numpy(np.int64)
+    )
+    shell_outer = (
+        df_elems[
+            (df_elems["element_type"] == SHELL_TYPE)
+            & (
+                (df_elems["centroid_x"] < 1.0)
+                | (df_elems["centroid_x"] > 2.0)
+                | (df_elems["centroid_y"] < 11.0)
+                | (df_elems["centroid_y"] > 12.0)
+            )
+        ]["element_id"]
+        .to_numpy(np.int64)
+    )
+    resolver = _MockSelResolver(
+        element_sets={"firstcolumn": beam_first, "outer": shell_outer},
+        id_sets={1: beam_first, 2: shell_outer},
+    )
+    return _MockManager(df_elems, df_nodes, resolver, _build_element_info())
+
+
+def test_of_geometry_filters_to_named_geometry(mgr_with_info: _MockManager):
+    sel = ElementSelector(mgr_with_info).of_geometry("Slab")
+    ids = set(sel.ids().tolist())
+    assert ids == set(range(10, 19))  # all shells
+
+
+def test_of_physical_property_filters_by_material(mgr_with_info: _MockManager):
+    sel = ElementSelector(mgr_with_info).of_physical_property("Steel_Elastic")
+    assert sorted(sel.ids().tolist()) == [1, 2, 3]
+
+
+def test_of_element_property_filters_by_element_class_name(
+    mgr_with_info: _MockManager,
+):
+    sel = ElementSelector(mgr_with_info).of_element_property("Q4")
+    assert sorted(sel.ids().tolist()) == list(range(10, 19))
+
+
+def test_of_sub_geom_type_filters_to_topology(mgr_with_info: _MockManager):
+    sel = ElementSelector(mgr_with_info).of_sub_geom_type("Edge")
+    assert sorted(sel.ids().tolist()) == list(range(1, 10))
+
+
+def test_element_info_anchors_compose_AND(mgr_with_info: _MockManager):
+    """Multiple element_info anchors AND-narrow within a single call chain."""
+    sel = (
+        ElementSelector(mgr_with_info)
+        .of_geometry("Frame")
+        .of_physical_property("Concrete_Elastic")
+    )
+    assert sorted(sel.ids().tolist()) == [4, 5, 6, 7, 8, 9]
+
+
+def test_element_info_anchor_composes_with_of_type(mgr_with_info: _MockManager):
+    """``of_type`` and ``of_geometry`` AND-narrow as expected."""
+    sel = (
+        ElementSelector(mgr_with_info)
+        .of_type("DispBeamColumn3d")
+        .of_physical_property("Steel_Elastic")
+    )
+    assert sorted(sel.ids().tolist()) == [1, 2, 3]
+
+
+def test_element_info_anchor_composes_with_filter_op(mgr_with_info: _MockManager):
+    """Filter ops apply after the anchor universe is resolved."""
+    sel = (
+        ElementSelector(mgr_with_info)
+        .of_geometry("Frame")
+        .within_box(min=(0.0, -0.5, 0.0), max=(1.5, 0.5, 0.5))
+    )
+    # Frame elements within the box: beam ids with centroid_x ∈ {0.5, 1.5}
+    # and centroid_z = 0 → exactly 2 beams (ids 1 and 4 in the fixture).
+    assert sel.count() == 2
+
+
+def test_unknown_geom_name_returns_empty(mgr_with_info: _MockManager):
+    """Unknown names produce empty results (consistent with ``of_type``)."""
+    sel = ElementSelector(mgr_with_info).of_geometry("DoesNotExist")
+    assert sel.count() == 0
+
+
+def test_empty_element_info_returns_empty(mgr: _MockManager):
+    """When dataset.cdata.element_info is empty, anchor resolves to empty."""
+    # The default `mgr` fixture has element_info={}.
+    sel = ElementSelector(mgr).of_geometry("anything")
+    assert sel.count() == 0
+
+
+def test_missing_cdata_attribute_raises(mgr_with_info: _MockManager):
+    """A dataset without ``cdata`` errors with a clear message."""
+    # Drop cdata to simulate an old/exotic dataset shape.
+    del mgr_with_info.dataset.cdata
+    sel = ElementSelector(mgr_with_info).of_geometry("Slab")
+    with pytest.raises(AttributeError, match="cdata"):
+        sel.ids()
+
+
+def test_element_info_anchor_negation_uses_anchor_universe(
+    mgr_with_info: _MockManager,
+):
+    """``~sel`` for an element_info anchor is well-defined: the complement
+    is everything else in the same universe (here, the anchor universe is
+    everything matching the anchor filters, so ``~`` returns everything
+    NOT matching them — which is an empty set if the universe is itself
+    just the match. We use the type universe for clarity).
+    """
+    sel = (
+        ElementSelector(mgr_with_info)
+        .of_type("DispBeamColumn3d")
+        .of_physical_property("Steel_Elastic")
+    )
+    # sel: beams 1..3
+    inv = ~sel
+    # Universe is "beams that are Steel_Elastic" = {1,2,3}; complement
+    # within that universe is empty.
+    assert inv.count() == 0
+
+
+def test_element_info_anchor_repr(mgr_with_info: _MockManager):
+    sel = ElementSelector(mgr_with_info).of_geometry("Slab").of_physical_property(
+        "Slab_Elastic"
+    )
+    r = repr(sel)
+    assert "of_geometry='Slab'" in r
+    assert "of_physical_property='Slab_Elastic'" in r
+
+
+def test_element_info_anchor_blocked_on_combined_selector(
+    mgr_with_info: _MockManager,
+):
+    a = ElementSelector(mgr_with_info).of_type("DispBeamColumn3d")
+    b = ElementSelector(mgr_with_info).of_geometry("Slab")
+    combined = a | b
+    with pytest.raises(TypeError, match="of_geometry"):
+        combined.of_geometry("Frame")
+    with pytest.raises(TypeError, match="of_physical_property"):
+        combined.of_physical_property("Steel_Elastic")
