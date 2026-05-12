@@ -33,6 +33,8 @@ from typing import TYPE_CHECKING, Optional, Union
 
 import numpy as np
 
+from .cdata_format import CDataFormatPolicy
+
 
 if TYPE_CHECKING:
     from ..core.dataset import MPCODataSet
@@ -136,6 +138,50 @@ def _read_section_lines(lines: list[str], start: int) -> tuple[list[str], int]:
     return data, i
 
 
+def _consume_ids(
+    lines: list[str], start: int, count: int
+) -> tuple[np.ndarray, int]:
+    """Consume exactly *count* integers starting at ``lines[start]``.
+
+    Walks forward across as many lines as needed, regardless of how
+    STKO chose to wrap the list. The current emitter uses 10 ids per
+    line, but this helper is width-agnostic so a hand-edited file
+    (or a future format variant) still parses correctly.
+
+    Returns ``(ndarray, next_index)`` where ``next_index`` is the
+    index of the first line *not* consumed.
+
+    Raises ``ValueError`` if EOF or a section boundary (``*``)
+    is reached before *count* ids have been gathered.
+    """
+    if count == 0:
+        return np.empty(0, dtype=int), start
+
+    collected: list[int] = []
+    i = start
+    n = len(lines)
+    while len(collected) < count:
+        if i >= n:
+            raise ValueError(
+                f"cdata: expected {count} ids, got only {len(collected)} "
+                f"before EOF (started at line {start + 1})."
+            )
+        s = lines[i].strip()
+        if not s or s.startswith("*"):
+            raise ValueError(
+                f"cdata: id list truncated at line {i + 1}; expected "
+                f"{count} ids, got {len(collected)}."
+            )
+        collected.extend(int(x) for x in s.split())
+        i += 1
+
+    # If the last consumed line happened to have more ids than we
+    # needed, trim. STKO doesn't currently emit this shape (its wrap
+    # is exact), but the trim makes us safe against hand-edits.
+    arr = np.array(collected[:count], dtype=int)
+    return arr, i
+
+
 # ---------------------------------------------------------------------- #
 # CDataReader
 # ---------------------------------------------------------------------- #
@@ -150,6 +196,10 @@ class CDataReader:
     The legacy name ``CData`` is preserved as a quiet alias on the
     package surface; the deep import path emits ``DeprecationWarning``.
     """
+
+    # Format policy is stateless and identical for every reader; share
+    # one class-level instance rather than allocating per dataset.
+    _format_policy: CDataFormatPolicy = CDataFormatPolicy()
 
     def __init__(self, dataset: "MPCODataSet"):
         self.dataset = dataset
@@ -297,23 +347,24 @@ class CDataReader:
             with open(file_path, "r", encoding="utf-8", errors="replace") as f:
                 lines = f.readlines()
 
+            policy = self._format_policy
             i = 0
             n = len(lines)
             while i < n:
                 marker = lines[i].strip()
-                if marker == "*SELECTION_SET":
+                if marker == policy.MARKER_SELECTION_SET:
                     i = self._parse_one_selection_set(lines, i, accum["selection_sets"])
-                elif marker == "*LOCAL_AXES":
+                elif marker == policy.MARKER_LOCAL_AXES:
                     i = self._parse_local_axes(lines, i + 1, accum["local_axes"])
-                elif marker == "*SECTION_OFFSET":
+                elif marker == policy.MARKER_SECTION_OFFSET:
                     i = self._parse_section_offset(lines, i + 1, accum["section_offsets"])
-                elif marker == "*BEAM_PROFILE":
+                elif marker == policy.MARKER_BEAM_PROFILE:
                     i = self._parse_beam_profiles(lines, i + 1, accum["beam_profiles"])
-                elif marker == "*BEAM_PROFILE_ASSIGNMENT":
+                elif marker == policy.MARKER_BEAM_PROFILE_ASSIGNMENT:
                     i = self._parse_beam_profile_assignments(
                         lines, i + 1, accum["beam_profile_assignments"]
                     )
-                elif marker == "*ELEMENT_INFO":
+                elif marker == policy.MARKER_ELEMENT_INFO:
                     i = self._parse_element_info(lines, i + 1, accum["element_info"])
                 else:
                     i += 1
@@ -325,7 +376,13 @@ class CDataReader:
 
     @staticmethod
     def _parse_one_selection_set(lines: list[str], i: int, out: dict) -> int:
-        """Parse one ``*SELECTION_SET`` block; return index after the block."""
+        """Parse one ``*SELECTION_SET`` block; return index after the block.
+
+        Node and element id lists are read via ``_consume_ids`` which is
+        width-agnostic — STKO currently wraps at 10 ids per line, but
+        this parser also accepts 1-per-line, all-on-one-line, or any
+        consistent variant.
+        """
         set_id = int(lines[i + 1].strip())
 
         raw_name = lines[i + 2].strip()
@@ -336,22 +393,12 @@ class CDataReader:
         n_nodes = int(lines[i + 3].strip())
         n_elems = int(lines[i + 4].strip())
 
-        # Elements come right after the (possibly empty) nodes block.
-        # Initialize unconditionally so NNODES=0 + NELEMENTS>0 doesn't
-        # reference an unbound name.
+        # Both lists live right after the header; nodes first, elements
+        # second. _consume_ids advances the cursor past whichever lines
+        # the wrap width happened to use.
         cursor = i + 5
-
-        nodes: np.ndarray = np.empty(0, dtype=int)
-        if n_nodes > 0:
-            end = cursor + (n_nodes + 9) // 10
-            nodes = np.fromstring(" ".join(lines[cursor:end]).strip(), sep=" ", dtype=int)
-            cursor = end
-
-        elements: np.ndarray = np.empty(0, dtype=int)
-        if n_elems > 0:
-            end = cursor + (n_elems + 9) // 10
-            elements = np.fromstring(" ".join(lines[cursor:end]).strip(), sep=" ", dtype=int)
-            cursor = end
+        nodes, cursor = _consume_ids(lines, cursor, n_nodes)
+        elements, cursor = _consume_ids(lines, cursor, n_elems)
 
         if set_id in out:
             out[set_id]["NODES"].update(int(x) for x in nodes)

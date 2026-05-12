@@ -13,10 +13,12 @@ import pytest
 
 import numpy as np
 
+from STKO_to_python.model.cdata_format import CDataFormatPolicy
 from STKO_to_python.model.cdata_reader import (
     BeamProfile,
     CDataReader,
     ElementInfo,
+    _consume_ids,
     _read_length_prefixed,
 )
 
@@ -550,3 +552,147 @@ def test_beam_profile_assignment_multi_partition(tmp_path) -> None:
     reader = _make_reader(tmp_path, part0, part1)
     a = reader.beam_profile_assignments
     assert set(a.keys()) == {1, 2, 3, 4}
+
+
+# ---------------------------------------------------------------------- #
+# CDataFormatPolicy — section marker constants and queries
+# ---------------------------------------------------------------------- #
+
+def test_format_policy_known_markers_covers_every_section() -> None:
+    """Every section the parser dispatches on must be in known_markers().
+
+    Pins the contract: if a new *MARKER is added to the parser, it must
+    also be added to CDataFormatPolicy.
+    """
+    expected = {
+        "*SELECTION_SET",
+        "*LOCAL_AXES",
+        "*SECTION_OFFSET",
+        "*BEAM_PROFILE",
+        "*BEAM_PROFILE_ASSIGNMENT",
+        "*ELEMENT_INFO",
+    }
+    assert CDataFormatPolicy.known_markers() == expected
+
+
+def test_format_policy_is_section_marker_recognizes_known() -> None:
+    assert CDataFormatPolicy.is_section_marker("*SELECTION_SET")
+    assert CDataFormatPolicy.is_section_marker("  *LOCAL_AXES  ")
+    assert not CDataFormatPolicy.is_section_marker("*UNKNOWN")
+    assert not CDataFormatPolicy.is_section_marker("# comment")
+    assert not CDataFormatPolicy.is_section_marker("")
+
+
+def test_format_policy_is_any_marker_flags_arbitrary_star_lines() -> None:
+    """Boundary detection: any '*' line ends a section, recognized or not."""
+    assert CDataFormatPolicy.is_any_marker("*UNKNOWN")
+    assert CDataFormatPolicy.is_any_marker("*ELEMENT_INFO")
+    assert not CDataFormatPolicy.is_any_marker("# comment")
+    assert not CDataFormatPolicy.is_any_marker("")
+
+
+def test_format_policy_is_stateless_and_hashable() -> None:
+    """The policy uses __slots__ = () so instances are interchangeable."""
+    a = CDataFormatPolicy()
+    b = CDataFormatPolicy()
+    assert repr(a) == repr(b) == "CDataFormatPolicy()"
+
+
+# ---------------------------------------------------------------------- #
+# _consume_ids — width-agnostic id list reader
+# ---------------------------------------------------------------------- #
+
+def test_consume_ids_zero_count_is_noop() -> None:
+    lines = ["10 20 30\n"]
+    arr, end = _consume_ids(lines, 0, 0)
+    assert arr.shape == (0,)
+    assert end == 0
+
+
+def test_consume_ids_single_line_default_wrap() -> None:
+    lines = ["1 2 3 4 5 6 7 8 9 10\n", "11 12\n"]
+    arr, end = _consume_ids(lines, 0, 12)
+    assert arr.tolist() == list(range(1, 13))
+    assert end == 2
+
+
+def test_consume_ids_one_per_line() -> None:
+    """Width-agnostic: a file wrapped at 1 id per line still parses."""
+    lines = [f"{x}\n" for x in range(1, 11)]
+    arr, end = _consume_ids(lines, 0, 10)
+    assert arr.tolist() == list(range(1, 11))
+    assert end == 10
+
+
+def test_consume_ids_all_on_one_line() -> None:
+    """Width-agnostic: a file with no wrap (all on one line) still parses."""
+    lines = ["1 2 3 4 5 6 7 8 9 10 11 12 13 14 15\n"]
+    arr, end = _consume_ids(lines, 0, 15)
+    assert arr.tolist() == list(range(1, 16))
+    assert end == 1
+
+
+def test_consume_ids_stops_when_count_reached_in_middle_of_line() -> None:
+    """If the wrap width over-emits on the last line, take only what's needed."""
+    lines = ["1 2 3 4 5\n"]
+    arr, end = _consume_ids(lines, 0, 3)
+    assert arr.tolist() == [1, 2, 3]
+    assert end == 1
+
+
+def test_consume_ids_raises_on_truncation_by_marker() -> None:
+    lines = ["1 2 3\n", "*SELECTION_SET\n"]
+    with pytest.raises(ValueError, match="truncated"):
+        _consume_ids(lines, 0, 10)
+
+
+def test_consume_ids_raises_on_truncation_by_blank() -> None:
+    lines = ["1 2 3\n", "\n", "next section\n"]
+    with pytest.raises(ValueError, match="truncated"):
+        _consume_ids(lines, 0, 10)
+
+
+def test_consume_ids_raises_on_eof() -> None:
+    lines = ["1 2 3\n"]
+    with pytest.raises(ValueError, match="EOF"):
+        _consume_ids(lines, 0, 10)
+
+
+# ---------------------------------------------------------------------- #
+# Selection-set parser is now width-agnostic end-to-end
+# ---------------------------------------------------------------------- #
+
+def test_selection_set_parses_with_one_id_per_line_wrap(tmp_path) -> None:
+    """A file wrapping ids at width=1 should parse identically to width=10."""
+    text = (
+        "*SELECTION_SET\n"
+        "1\n"
+        "4 Test\n"
+        "5\n"           # NNODES = 5
+        "0\n"           # NELEMENTS = 0
+        # 5 nodes, one per line — atypical but legal under the new parser
+        "100\n"
+        "200\n"
+        "300\n"
+        "400\n"
+        "500\n"
+    )
+    reader = _make_reader(tmp_path, text)
+    sets = reader._extract_selection_set_ids()
+    assert sets[1]["NODES"] == [100, 200, 300, 400, 500]
+
+
+def test_selection_set_parses_with_all_ids_on_one_line(tmp_path) -> None:
+    """A file with no wrap at all should still parse."""
+    text = (
+        "*SELECTION_SET\n"
+        "2\n"
+        "3 Big\n"
+        "15\n"
+        "0\n"
+        # 15 nodes all on one line — outside the conventional wrap
+        "1 2 3 4 5 6 7 8 9 10 11 12 13 14 15\n"
+    )
+    reader = _make_reader(tmp_path, text)
+    sets = reader._extract_selection_set_ids()
+    assert sets[2]["NODES"] == list(range(1, 16))
