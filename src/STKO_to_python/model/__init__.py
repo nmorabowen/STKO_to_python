@@ -1,5 +1,5 @@
 from .model_info_reader import ModelInfoReader
-from .cdata_reader import CDataReader
+from .cdata_reader import CDataReader, ElementInfo
 
 # Back-compat aliases preserved on the package surface (quiet); the
 # deep paths ``STKO_to_python.model.model_info.ModelInfo`` and
@@ -13,4 +13,5 @@ __all__ = [
     "ModelInfoReader",
     "CData",
     "CDataReader",
+    "ElementInfo",
 ]
