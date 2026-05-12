@@ -10,7 +10,7 @@ from .elements.element_results import ElementResults
 from .elements.selector import ElementSelector
 from .elements.result_mask import ResultMask
 from .model.model_info_reader import ModelInfoReader
-from .model.cdata_reader import CDataReader, ElementInfo
+from .model.cdata_reader import BeamProfile, CDataReader, ElementInfo
 
 from .plotting.plot import Plot
 from .plotting.plot_settings import PlotSettings
@@ -41,6 +41,7 @@ __all__ = [
     "ModelInfo",
     "CData",
     "ElementInfo",
+    "BeamProfile",
     "Nodes",
     "Elements",
     "ElementResults",

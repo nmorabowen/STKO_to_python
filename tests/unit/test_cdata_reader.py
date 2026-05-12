@@ -14,6 +14,7 @@ import pytest
 import numpy as np
 
 from STKO_to_python.model.cdata_reader import (
+    BeamProfile,
     CDataReader,
     ElementInfo,
     _read_length_prefixed,
@@ -407,3 +408,145 @@ def test_real_quadframe_partitions(tmp_path) -> None:
     assert reader.section_offsets == {}
     # ELEMENT_INFO covers every element with *LOCAL_AXES.
     assert len(reader.element_info) >= len(reader.local_axes)
+    # Beam profile 1 (the rectangular section) exists in both partitions
+    # — dedup should produce exactly one entry.
+    assert 1 in reader.beam_profiles
+    p1 = reader.beam_profiles[1]
+    assert p1.points.shape == (4, 2)
+    # Every beam element in the file has a profile assignment.
+    assert len(reader.beam_profile_assignments) > 0
+
+
+# ---------------------------------------------------------------------- #
+# *BEAM_PROFILE
+# ---------------------------------------------------------------------- #
+
+# Rectangular 4-point profile with 2 triangles, 4 straight edges, 4 sweep
+# points. Mirrors the bundled elasticFrame example exactly.
+_RECT_PROFILE = (
+    "*BEAM_PROFILE\n"
+    "1\n"
+    "4 2 4 4\n"
+    "-150 -200\n"
+    "150 -200\n"
+    "150 200\n"
+    "-150 200\n"
+    "0 1 2\n"
+    "0 2 3\n"
+    "2 0 1\n"
+    "2 1 2\n"
+    "2 2 3\n"
+    "2 3 0\n"
+    "0\n"
+    "1\n"
+    "2\n"
+    "3\n"
+)
+
+
+def test_beam_profile_rectangle_parses(tmp_path) -> None:
+    reader = _make_reader(tmp_path, _RECT_PROFILE)
+    profiles = reader.beam_profiles
+    assert set(profiles.keys()) == {1}
+
+    p = profiles[1]
+    assert isinstance(p, BeamProfile)
+    assert p.profile_id == 1
+    np.testing.assert_allclose(
+        p.points, [[-150, -200], [150, -200], [150, 200], [-150, 200]]
+    )
+    np.testing.assert_array_equal(p.triangles, [[0, 1, 2], [0, 2, 3]])
+    # All 4 edges are 2-point edges around the rectangle outline.
+    assert len(p.edges) == 4
+    np.testing.assert_array_equal(p.edges[0], [0, 1])
+    np.testing.assert_array_equal(p.edges[3], [3, 0])
+    np.testing.assert_array_equal(p.sweeps, [0, 1, 2, 3])
+
+
+def test_beam_profile_variable_length_edges(tmp_path) -> None:
+    """An edge with more than 2 points (curved outline)."""
+    text = (
+        "*BEAM_PROFILE\n"
+        "5\n"
+        "3 1 2 1\n"
+        "0 0\n"
+        "1 0\n"
+        "0 1\n"
+        "0 1 2\n"        # 1 triangle
+        "3 0 1 2\n"      # edge with 3 points
+        "2 2 0\n"        # edge with 2 points
+        "0\n"            # 1 sweep
+    )
+    reader = _make_reader(tmp_path, text)
+    p = reader.beam_profiles[5]
+    assert len(p.edges) == 2
+    np.testing.assert_array_equal(p.edges[0], [0, 1, 2])
+    np.testing.assert_array_equal(p.edges[1], [2, 0])
+
+
+def test_beam_profile_multiple_profiles_in_one_section(tmp_path) -> None:
+    """A *BEAM_PROFILE section can carry several profile blocks back-to-back."""
+    text = (
+        "*BEAM_PROFILE\n"
+        # profile 1: 2 points, 0 tris, 1 edge (2-point), 0 sweeps
+        "1\n"
+        "2 0 1 0\n"
+        "0 0\n"
+        "1 0\n"
+        "2 0 1\n"
+        # profile 2: 3 points, 1 tri, 0 edges, 1 sweep
+        "2\n"
+        "3 1 0 1\n"
+        "0 0\n"
+        "1 0\n"
+        "0 1\n"
+        "0 1 2\n"
+        "0\n"
+    )
+    reader = _make_reader(tmp_path, text)
+    assert set(reader.beam_profiles.keys()) == {1, 2}
+    assert reader.beam_profiles[1].points.shape == (2, 2)
+    assert reader.beam_profiles[2].triangles.shape == (1, 3)
+
+
+def test_beam_profile_multi_partition_dedup_first_wins(tmp_path) -> None:
+    """Profile defs are duplicated identically across MP partitions; keep one."""
+    reader = _make_reader(tmp_path, _RECT_PROFILE, _RECT_PROFILE)
+    assert set(reader.beam_profiles.keys()) == {1}
+
+
+# ---------------------------------------------------------------------- #
+# *BEAM_PROFILE_ASSIGNMENT
+# ---------------------------------------------------------------------- #
+
+def test_beam_profile_assignment_simple(tmp_path) -> None:
+    text = (
+        "*BEAM_PROFILE_ASSIGNMENT\n"
+        "1 1 1 1\n"
+        "2 1 1 1\n"
+        "3 1 2 0.5\n"
+    )
+    reader = _make_reader(tmp_path, text)
+    a = reader.beam_profile_assignments
+    assert a[1] == [(1, 1.0)]
+    assert a[2] == [(1, 1.0)]
+    assert a[3] == [(2, 0.5)]
+
+
+def test_beam_profile_assignment_multiple_profiles_per_element(tmp_path) -> None:
+    """An element can carry multiple profiles, modelling a tapered section."""
+    text = (
+        "*BEAM_PROFILE_ASSIGNMENT\n"
+        "1 2 1 0.3 2 0.7\n"
+    )
+    reader = _make_reader(tmp_path, text)
+    assert reader.beam_profile_assignments[1] == [(1, 0.3), (2, 0.7)]
+
+
+def test_beam_profile_assignment_multi_partition(tmp_path) -> None:
+    """Each element is owned by exactly one partition; merging is dict-union."""
+    part0 = "*BEAM_PROFILE_ASSIGNMENT\n1 1 1 1\n2 1 1 1\n"
+    part1 = "*BEAM_PROFILE_ASSIGNMENT\n3 1 1 1\n4 1 1 1\n"
+    reader = _make_reader(tmp_path, part0, part1)
+    a = reader.beam_profile_assignments
+    assert set(a.keys()) == {1, 2, 3, 4}

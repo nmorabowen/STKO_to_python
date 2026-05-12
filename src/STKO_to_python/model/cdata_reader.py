@@ -12,8 +12,11 @@ carries model metadata that does not live in HDF5:
 - ``*ELEMENT_INFO`` — parent geometry / sub-geometry / physical and
   element property metadata per element. Enables "select by geometry"
   workflows without pre-defined selection sets.
-- ``*BEAM_PROFILE`` and ``*BEAM_PROFILE_ASSIGNMENT`` — present in the
-  file but not yet parsed by this reader.
+- ``*BEAM_PROFILE`` — 2D cross-section geometry (points, triangles,
+  edges, sweeps) per profile id. Useful for plotting beam elements
+  as extruded solids.
+- ``*BEAM_PROFILE_ASSIGNMENT`` — element-id to profile-id mapping
+  with weights, expressing variable cross-section along an element.
 
 ``CDataReader`` does a single pass over every partition the first time
 any accessor is touched. ``MPCODataSet`` constructs the reader eagerly
@@ -61,6 +64,28 @@ class ElementInfo:
     physical_property_name: str
     element_property_id: int
     element_property_name: str
+
+
+@dataclass(frozen=True)
+class BeamProfile:
+    """2D cross-section geometry for a beam element profile.
+
+    Mirrors one block inside a ``*BEAM_PROFILE`` section.
+
+    - ``points`` are vertices in the section's local 2D frame.
+    - ``triangles`` is a triangulation of the section (for filled
+      rendering); each row is three 0-based point indices.
+    - ``edges`` is the outline as a list of polyline edges; each
+      edge is a 0-based ``ndarray`` of point indices, length varies
+      per edge (STKO supports curved/multi-point edges).
+    - ``sweeps`` indexes the points to sweep along the beam (for
+      generating an extruded 3D mesh).
+    """
+    profile_id: int
+    points: np.ndarray           # (npoints, 2) — x, y in section frame
+    triangles: np.ndarray        # (ntriangles, 3) — 0-based point indices
+    edges: list[np.ndarray]      # one (n_i,) array per edge, n_i varies
+    sweeps: np.ndarray           # (nsweeps,) — 0-based point indices
 
 
 # ---------------------------------------------------------------------- #
@@ -164,6 +189,28 @@ class CDataReader:
         """
         return self._parse_all_files()["element_info"]
 
+    @cached_property
+    def beam_profiles(self) -> dict[int, BeamProfile]:
+        """``{profile_id -> BeamProfile}`` 2D cross-section definitions.
+
+        Each entry holds the section's points, triangulation, edge
+        outline, and sweep indices. Profile definitions are typically
+        repeated identically across MP partitions; only the first
+        occurrence is kept.
+        """
+        return self._parse_all_files()["beam_profiles"]
+
+    @cached_property
+    def beam_profile_assignments(self) -> dict[int, list[tuple[int, float]]]:
+        """``{elem_id -> [(profile_id, weight), ...]}`` element → profile map.
+
+        Each tuple is one profile assigned to the element with a
+        weight in ``[0, 1]`` expressing relative span along the
+        element. The ``beam_profiles`` accessor resolves ``profile_id``
+        to the underlying cross-section geometry.
+        """
+        return self._parse_all_files()["beam_profile_assignments"]
+
     # ------------------------------------------------------------------ #
     # Selection-set surface (eager from MPCODataSet.__init__)
     # ------------------------------------------------------------------ #
@@ -220,10 +267,12 @@ class CDataReader:
             return self._parsed
 
         accum: dict = {
-            "selection_sets": {},      # int -> {"SET_NAME": str, "NODES": set, "ELEMENTS": set}
-            "local_axes": {},          # int -> ndarray(4,)
-            "section_offsets": {},     # int -> ndarray(2,)
-            "element_info": {},        # int -> ElementInfo
+            "selection_sets": {},              # int -> {"SET_NAME": str, "NODES": set, "ELEMENTS": set}
+            "local_axes": {},                  # int -> ndarray(4,)
+            "section_offsets": {},             # int -> ndarray(2,)
+            "element_info": {},                # int -> ElementInfo
+            "beam_profiles": {},               # int -> BeamProfile
+            "beam_profile_assignments": {},    # int -> list[tuple[int, float]]
         }
         for file_path in self.dataset.cdata_partitions.values():
             self._parse_file_into(file_path, accum)
@@ -258,6 +307,12 @@ class CDataReader:
                     i = self._parse_local_axes(lines, i + 1, accum["local_axes"])
                 elif marker == "*SECTION_OFFSET":
                     i = self._parse_section_offset(lines, i + 1, accum["section_offsets"])
+                elif marker == "*BEAM_PROFILE":
+                    i = self._parse_beam_profiles(lines, i + 1, accum["beam_profiles"])
+                elif marker == "*BEAM_PROFILE_ASSIGNMENT":
+                    i = self._parse_beam_profile_assignments(
+                        lines, i + 1, accum["beam_profile_assignments"]
+                    )
                 elif marker == "*ELEMENT_INFO":
                     i = self._parse_element_info(lines, i + 1, accum["element_info"])
                 else:
@@ -325,6 +380,84 @@ class CDataReader:
             parts = line.split()
             elem_id = int(parts[0])
             out[elem_id] = np.array([float(x) for x in parts[1:3]], dtype=float)
+        return end
+
+    @staticmethod
+    def _parse_beam_profiles(lines: list[str], i: int, out: dict) -> int:
+        """Parse one ``*BEAM_PROFILE`` section (may contain N profiles back-to-back).
+
+        Per-profile layout:
+            PROFILE_ID
+            NPOINTS NTRIANGLES NEDGES NSWEEPS
+            <NPOINTS rows of (x y)>
+            <NTRIANGLES rows of (p1 p2 p3)>
+            <NEDGES rows of (N p1 p2 ... pN)>     # variable length
+            <NSWEEPS rows of (p1)>
+        """
+        data, end = _read_section_lines(lines, i)
+        cursor = 0
+        n = len(data)
+        while cursor < n:
+            profile_id = int(data[cursor].strip())
+            cursor += 1
+            counts = [int(x) for x in data[cursor].split()]
+            n_pts, n_tris, n_edges, n_sweeps = counts[:4]
+            cursor += 1
+
+            points = np.array(
+                [[float(v) for v in data[cursor + k].split()] for k in range(n_pts)],
+                dtype=float,
+            )
+            cursor += n_pts
+
+            triangles = np.array(
+                [[int(v) for v in data[cursor + k].split()] for k in range(n_tris)],
+                dtype=int,
+            )
+            cursor += n_tris
+
+            edges: list[np.ndarray] = []
+            for _ in range(n_edges):
+                parts = [int(x) for x in data[cursor].split()]
+                # parts[0] is N (count of points in this edge), parts[1:N+1] are the indices.
+                edges.append(np.array(parts[1 : 1 + parts[0]], dtype=int))
+                cursor += 1
+
+            sweeps = np.array(
+                [int(data[cursor + k].strip()) for k in range(n_sweeps)],
+                dtype=int,
+            )
+            cursor += n_sweeps
+
+            # Profile definitions are duplicated identically across MP
+            # partitions; keep the first occurrence and drop later ones.
+            if profile_id not in out:
+                out[profile_id] = BeamProfile(
+                    profile_id=profile_id,
+                    points=points,
+                    triangles=triangles,
+                    edges=edges,
+                    sweeps=sweeps,
+                )
+        return end
+
+    @staticmethod
+    def _parse_beam_profile_assignments(lines: list[str], i: int, out: dict) -> int:
+        """Parse a ``*BEAM_PROFILE_ASSIGNMENT`` section.
+
+        Each row is ``ELEM_ID N_PROFILES PID_1 WEIGHT_1 ... PID_N WEIGHT_N``.
+        """
+        data, end = _read_section_lines(lines, i)
+        for line in data:
+            parts = line.split()
+            elem_id = int(parts[0])
+            n_prof = int(parts[1])
+            assignments: list[tuple[int, float]] = []
+            for k in range(n_prof):
+                pid = int(parts[2 + 2 * k])
+                weight = float(parts[3 + 2 * k])
+                assignments.append((pid, weight))
+            out[elem_id] = assignments
         return end
 
     @staticmethod
