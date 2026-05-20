@@ -420,12 +420,20 @@ s = er.summary()
 ## Plotting
 
 `ElementResults.plot` is a small wrapper around matplotlib for the
-three engineering views that come up most:
+four engineering views that come up most:
 
 ```python
-# Time history of a component for one or more elements
+# Time history of a single raw column for one or more elements
 ax, meta = er.plot.history("Mz_1", element_ids=[1, 2, 3])
 ax, meta = er.plot.history("P_ip2", x_axis="step")  # step instead of time
+
+# Time history of a canonical name, with fiber / IP reduction.
+# Folds every fiber*ip column into one curve per element:
+ax, meta = er.plot.history_canonical("strain_11", reduce="mean")
+# Max(|.|) over fibers at IP 0:
+ax, meta = er.plot.history_canonical(
+    "strain_11", over="fibers", ip_idx=0, reduce="abs_max",
+)
 
 # Force / moment / strain diagram along a beam (line elements only)
 ax, meta = er.plot.diagram("axial_force", element_id=1, step=100)
@@ -444,6 +452,15 @@ build your own visualization. ``diagram()`` requires the result to be a
 line element (``gp_dim == 1``); ``scatter()`` requires
 ``physical_coords()`` to resolve (so closed-form buckets and unknown
 classes raise loudly).
+
+`history_canonical` is the right tool for **fiber buckets** (e.g.
+`section.fiber.stress`, `section.fiber.strain`) where one canonical
+quantity expands to `n_fibers × n_ip` (or `n_fibers × n_layers × n_ip`
+for layered shells) columns. The `over=` knob selects which axis the
+reduction collapses (`"all"` | `"fibers"` | `"ips"` | `"layers"`) and
+the partner `fiber_idx` / `ip_idx` / `layer_idx` anchors keep the
+remaining axes pinned. `meta["columns_used"]` tells you which raw
+columns were folded in, useful for audit.
 
 ## Pickle Serialization
 
