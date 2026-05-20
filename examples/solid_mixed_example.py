@@ -20,9 +20,10 @@ Sections:
     8.  Beam fiber section — ``section.fiber.stress``, 6 fibers x 2 IPs.
     9.  ``at_ip()`` on fiber result — all 6 fibers at one station.
    10.  Why ``integrate_canonical`` is not available for fiber buckets.
-   11.  ``plot.diagram()`` — bending moment diagram along a beam element.
-   12.  ``plot.scatter()`` — Gauss-point stress scatter for a brick element.
-   13.  ElementResults pickle round-trip.
+   11.  ``plot.history_canonical()`` — mean / max over fibers and IPs.
+   12.  ``plot.diagram()`` — bending moment diagram along a beam element.
+   13.  ``plot.scatter()`` — Gauss-point stress scatter for a brick element.
+   14.  ElementResults pickle round-trip.
 
 Run with::
 
@@ -334,10 +335,54 @@ def section_10_fiber_integrate_raises(er: ElementResults) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 11. plot.diagram() — bending moment diagram along a beam element
+# 11. plot.history_canonical() — fiber/IP reduction on a fiber bucket
 # ---------------------------------------------------------------------------
-def section_11_beam_diagram(er_sf: ElementResults) -> None:
-    section("11. plot.diagram() - bending moment diagram along a beam")
+def section_11_history_canonical_fiber(er: ElementResults) -> None:
+    section("11. plot.history_canonical() - mean / max over fibers and IPs")
+
+    # Pick whatever canonical name the fiber bucket exposes (typically
+    # "stress_11" on section.fiber.stress). list_canonicals() makes the
+    # example fixture-agnostic.
+    canon = next(iter(er.list_canonicals()))
+    print(f"Reducing canonical: {canon!r}")
+    print(f"Bucket has {er.n_components} raw columns "
+          f"({er.n_ip} IPs, {er.n_components // er.n_ip} fibers).\n")
+
+    # 11a — mean over EVERY fiber and IP, one curve per element.
+    ax, meta = er.plot.history_canonical(canon, over="all", reduce="mean")
+    print(f"over='all'  reduce='mean':")
+    print(f"  curves drawn:       {len(meta['y_per_element'])}")
+    print(f"  columns folded in:  {len(meta['columns_used'])}")
+    plt.close("all")
+
+    # 11b — max(|.|) over fibers at fixed IP 0.
+    ax, meta = er.plot.history_canonical(
+        canon, over="fibers", ip_idx=0, reduce="abs_max",
+    )
+    print(f"\nover='fibers' ip_idx=0  reduce='abs_max':")
+    print(f"  columns used: {meta['columns_used']}")
+    plt.close("all")
+
+    # 11c — max over IPs of fiber 0.
+    ax, meta = er.plot.history_canonical(
+        canon, over="ips", fiber_idx=0, reduce="max",
+    )
+    print(f"\nover='ips' fiber_idx=0  reduce='max':")
+    print(f"  columns used: {meta['columns_used']}")
+    plt.close("all")
+
+    # The missing-anchor case is loud — this is the contract:
+    try:
+        er.plot.history_canonical(canon, over="fibers", reduce="mean")
+    except ValueError as exc:
+        print(f"\nover='fibers' without ip_idx -> ValueError: {str(exc)[:80]}...")
+
+
+# ---------------------------------------------------------------------------
+# 12. plot.diagram() — bending moment diagram along a beam element
+# ---------------------------------------------------------------------------
+def section_12_beam_diagram(er_sf: ElementResults) -> None:
+    section("12. plot.diagram() - bending moment diagram along a beam")
 
     # er_sf is the section.force result (n_ip=2, gp_xi=[-1, +1]).
     # diagram() requires gp_dim==1 and a canonical that maps to exactly n_ip cols.
@@ -370,10 +415,10 @@ def section_11_beam_diagram(er_sf: ElementResults) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 12. plot.scatter() — Gauss-point stress scatter for a brick element
+# 13. plot.scatter() — Gauss-point stress scatter for a brick element
 # ---------------------------------------------------------------------------
-def section_12_brick_scatter(er_brick: ElementResults) -> None:
-    section("12. plot.scatter() - stress_11 at Gauss points (x-z view)")
+def section_13_brick_scatter(er_brick: ElementResults) -> None:
+    section("13. plot.scatter() - stress_11 at Gauss points (x-z view)")
 
     step = 1
     ax, meta = er_brick.plot.scatter(
@@ -391,10 +436,10 @@ def section_12_brick_scatter(er_brick: ElementResults) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 13. Pickle round-trip
+# 14. Pickle round-trip
 # ---------------------------------------------------------------------------
-def section_13_pickle(er_brick: ElementResults) -> None:
-    section("13. ElementResults pickle round-trip")
+def section_14_pickle(er_brick: ElementResults) -> None:
+    section("14. ElementResults pickle round-trip")
 
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / "brick.pkl"
@@ -436,9 +481,10 @@ def main() -> None:
     er_fiber = section_8_fiber_stress(ds, beam_ids)
     section_9_at_ip_fiber(er_fiber)
     section_10_fiber_integrate_raises(er_fiber)
-    section_11_beam_diagram(er_beam)
-    section_12_brick_scatter(er_brick)
-    section_13_pickle(er_brick)
+    section_11_history_canonical_fiber(er_fiber)
+    section_12_beam_diagram(er_beam)
+    section_13_brick_scatter(er_brick)
+    section_14_pickle(er_brick)
 
     print()
     print("solid_mixed_example complete.")

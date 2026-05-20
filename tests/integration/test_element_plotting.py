@@ -83,6 +83,119 @@ def test_history_unknown_component_raises(elastic_frame_dir: Path):
 
 
 # ---------------------------------------------------------------------- #
+# history_canonical()  — fiber / IP reduction                             #
+# ---------------------------------------------------------------------- #
+
+
+def _first_dispbeam_fiber_eids(ds, max_n: int = 3) -> list[int]:
+    """Pick a few DispBeamColumn3d elements from the index."""
+    df = ds.elements_info["dataframe"]
+    eids = df.loc[
+        df["element_type"].str.startswith("64-DispBeamColumn3d"),
+        "element_id",
+    ].head(max_n).tolist()
+    return [int(e) for e in eids]
+
+
+def test_history_canonical_over_all_mean(solid_partition_dir: Path):
+    """End-to-end fiber bucket: mean over every fiber*IP, one curve per
+    element, asserts on the returned meta."""
+    ds = MPCODataSet(str(solid_partition_dir), "Recorder", verbose=False)
+    eids = _first_dispbeam_fiber_eids(ds, max_n=3)
+    if not eids:
+        pytest.skip("no 64-DispBeamColumn3d elements in fixture")
+    er = ds.elements.get_element_results(
+        results_name="section.fiber.stress",
+        element_type="64-DispBeamColumn3d",
+        element_ids=eids,
+        model_stage="MODEL_STAGE[1]",
+    )
+    # Pick the first canonical the bucket actually carries — robust
+    # against catalog edits.
+    canon = next(iter(er.list_canonicals()))
+    ax, meta = er.plot.history_canonical(canon, over="all", reduce="mean")
+    assert ax is not None
+    assert sorted(meta["y_per_element"].keys()) == sorted(eids)
+    # Every curve has n_steps samples.
+    for y in meta["y_per_element"].values():
+        assert y.shape == (er.n_steps,)
+    # columns_used should be n_fibers * n_ip non-empty.
+    assert len(meta["columns_used"]) >= 1
+    assert "series" in meta
+
+
+def test_history_canonical_over_fibers_at_ip0(solid_partition_dir: Path):
+    """Reduce across fibers at a fixed IP — column subset should be
+    smaller than the full bucket."""
+    ds = MPCODataSet(str(solid_partition_dir), "Recorder", verbose=False)
+    eids = _first_dispbeam_fiber_eids(ds, max_n=2)
+    if not eids:
+        pytest.skip("no 64-DispBeamColumn3d elements in fixture")
+    er = ds.elements.get_element_results(
+        results_name="section.fiber.stress",
+        element_type="64-DispBeamColumn3d",
+        element_ids=eids,
+        model_stage="MODEL_STAGE[1]",
+    )
+    canon = next(iter(er.list_canonicals()))
+    _, meta_all = er.plot.history_canonical(canon, over="all", reduce="mean")
+    _, meta_ip0 = er.plot.history_canonical(
+        canon, over="fibers", ip_idx=0, reduce="abs_max"
+    )
+    # Anchored at one IP -> strictly fewer columns than the full fold.
+    assert 0 < len(meta_ip0["columns_used"]) < len(meta_all["columns_used"])
+    # Every column in the anchored subset ends with _ip0.
+    assert all(c.endswith("_ip0") for c in meta_ip0["columns_used"])
+
+
+def test_history_canonical_missing_anchor_raises(solid_partition_dir: Path):
+    ds = MPCODataSet(str(solid_partition_dir), "Recorder", verbose=False)
+    eids = _first_dispbeam_fiber_eids(ds, max_n=1)
+    if not eids:
+        pytest.skip("no 64-DispBeamColumn3d elements in fixture")
+    er = ds.elements.get_element_results(
+        results_name="section.fiber.stress",
+        element_type="64-DispBeamColumn3d",
+        element_ids=eids,
+        model_stage="MODEL_STAGE[1]",
+    )
+    canon = next(iter(er.list_canonicals()))
+    with pytest.raises(ValueError, match="requires.*ip_idx"):
+        er.plot.history_canonical(canon, over="fibers", reduce="mean")
+
+
+def test_history_canonical_unknown_canonical_raises(solid_partition_dir: Path):
+    ds = MPCODataSet(str(solid_partition_dir), "Recorder", verbose=False)
+    eids = _first_dispbeam_fiber_eids(ds, max_n=1)
+    if not eids:
+        pytest.skip("no 64-DispBeamColumn3d elements in fixture")
+    er = ds.elements.get_element_results(
+        results_name="section.fiber.stress",
+        element_type="64-DispBeamColumn3d",
+        element_ids=eids,
+        model_stage="MODEL_STAGE[1]",
+    )
+    with pytest.raises(ValueError, match="Present canonicals"):
+        er.plot.history_canonical("not_a_real_canonical", reduce="mean")
+
+
+def test_history_canonical_x_axis_step(solid_partition_dir: Path):
+    ds = MPCODataSet(str(solid_partition_dir), "Recorder", verbose=False)
+    eids = _first_dispbeam_fiber_eids(ds, max_n=1)
+    if not eids:
+        pytest.skip("no 64-DispBeamColumn3d elements in fixture")
+    er = ds.elements.get_element_results(
+        results_name="section.fiber.stress",
+        element_type="64-DispBeamColumn3d",
+        element_ids=eids,
+        model_stage="MODEL_STAGE[1]",
+    )
+    canon = next(iter(er.list_canonicals()))
+    _, meta = er.plot.history_canonical(canon, reduce="mean", x_axis="step")
+    np.testing.assert_array_equal(meta["x"], np.arange(er.n_steps))
+
+
+# ---------------------------------------------------------------------- #
 # diagram()  — line elements                                              #
 # ---------------------------------------------------------------------- #
 
