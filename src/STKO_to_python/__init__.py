@@ -24,7 +24,12 @@ from .results.nodal_results_plotting import NodalResultsPlotter
 from .MPCOList import MPCOResults
 from .MPCOList import MPCO_df
 
+from .cuts import SectionCuts, CutBand, CutResultants
+
 __all__ = [
+    "SectionCuts",
+    "CutBand",
+    "CutResultants",
     "MPCODataSet",
     "HDF5Utils",
     "ModelInfo",
