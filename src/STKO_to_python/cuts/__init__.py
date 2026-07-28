@@ -15,6 +15,7 @@ v1 surface (incremental):
 """
 from __future__ import annotations
 
+from .curvature import CutCurvatureResult, cut_curvature
 from .multi_cut import MultiCutResult
 from .plane import Plane
 from .section_cut import SectionCut
@@ -28,4 +29,6 @@ __all__ = [
     "SectionSweep",
     "MultiCutResult",
     "DriftSpec",
+    "cut_curvature",
+    "CutCurvatureResult",
 ]
