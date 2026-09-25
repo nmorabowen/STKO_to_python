@@ -67,26 +67,23 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e ".[viewer,test]"
 
-      - name: "[diag] snapshot without a display (expected to crash)"
-        continue-on-error: true
-        run: |
-          echo "DISPLAY='${DISPLAY:-}'"
-          ldconfig -p | grep -E 'libGL\.so|libGLX|libEGL|libOSMesa|libgbm' || true
-          ls /usr/lib/x86_64-linux-gnu/dri/ 2>/dev/null | head || echo "no DRI drivers"
-          python -c "import vtk; rw = vtk.vtkRenderWindow(); print('VTK', vtk.vtkVersion.GetVTKVersion(), rw.GetClassName())"
-          pytest "tests/viewer/backends/pyvista/test_backend.py::test_snapshot_returns_rgb_array" -v -p no:cacheprovider
-
       - name: Install headless GL stack (Xvfb + Mesa)
         # VTK needs an OpenGL context to render, even with off_screen=True.
-        # The hosted Ubuntu runner has no X server, so the first real
-        # render (PyVistaBackend.snapshot) segfaulted with exit 139 from
-        # #92 on. Xvfb + Mesa's software rasterizer provide one.
+        # The runner has no X server, no libEGL and no libOSMesa, so VTK
+        # fell through to an OSMesa window with no library behind it and
+        # the first real render (PyVistaBackend.snapshot) segfaulted with
+        # exit 139 from #92 on. Both packages are on the current image;
+        # they are installed explicitly so the job does not depend on it.
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends xvfb libgl1-mesa-dri
 
-      - name: "[diag] GL report under Xvfb"
-        run: xvfb-run -a -s "-screen 0 1024x768x24" python -c "import pyvista as pv; print(pv.Report())"
+      - name: "[diag] Qt stack import"
+        continue-on-error: true
+        run: |
+          ldconfig -p | grep -E 'libEGL|libxkbcommon|libfontconfig|libdbus-1' || true
+          python -c "import PySide6.QtGui" || true
+          python -c "import pyvistaqt"
 
       - name: Run viewer smoke tests
         run: xvfb-run -a -s "-screen 0 1024x768x24" pytest tests/viewer/ -v -rs

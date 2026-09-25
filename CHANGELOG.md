@@ -12,6 +12,18 @@ spelled out in [`CLAUDE.md`](CLAUDE.md#versioning-policy):
 
 ## [Unreleased]
 
+### Fixed
+
+- CI: the "Viewer extras resolve" job in `.github/workflows/test.yml`
+  had been red since [#92](https://github.com/nmorabowen/STKO_to_python/pull/92).
+  The hosted Ubuntu runner has no X server, no EGL and no OSMesa, so
+  VTK's first real render (`PyVistaBackend.snapshot`) segfaulted with
+  exit 139, and pytest died before the rest of `tests/viewer/` ran. The
+  job now installs Xvfb + Mesa and runs the viewer suite under
+  `xvfb-run`, so the PyVista snapshot and save tests render on Mesa's
+  software rasterizer
+  ([#100](https://github.com/nmorabowen/STKO_to_python/pull/100)).
+
 ## [1.12.0] — 2026-05-13
 
 Introduces the optional **viewer subpackage** — a renderer-agnostic
