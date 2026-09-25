@@ -4,13 +4,26 @@ All notable changes to this project are documented in this file.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/);
 this project adheres to [Semantic Versioning](https://semver.org/) as
-spelled out in [`CLAUDE.md`](CLAUDE.md#versioning-policy):
+spelled out in [`AGENTS.md`](AGENTS.md#versioning-policy):
 
 - **MAJOR** (`vX.0.0`) — breaking changes to the public API.
 - **MINOR** (`v1.X.0`) — new backward-compatible features.
 - **PATCH** (`v1.x.Y`) — bug fixes, docs, internal refactors with no API change.
 
 ## [Unreleased]
+
+### Added (internal — agent tooling)
+
+- `AGENTS.md` is now the single source of working rules for coding agents
+  (`CLAUDE.md` is the one line `@AGENTS.md`), with a "Lessons from incidents"
+  section and three task guides under `.claude/skills/` (`stko-mpco-reader`,
+  `stko-viewer`, `stko-release`). No library code changed.
+- `ci/check_quirk_patterns.py` — a dependency-free lint, run by a new
+  "Quirk-pattern lint" job in `test.yml`: Q1 flags text-mode file I/O without
+  `encoding=` (#57), Q2 flags `int()`/`float()` on a raw h5py attribute
+  (294b5fd). Evidence and rejected alternatives: `docs/agent-surface.md`.
+- `.gitignore` ignores `.claude/*` again (dropped by a merge resolution in
+  ab335f2) while tracking `.claude/skills/`.
 
 ## [1.12.0] — 2026-05-13
 
