@@ -1,6 +1,19 @@
 # Agent surface — AGENTS.md, task guides, quirk-pattern lint
 
-Revision 1. Not yet adversarially reviewed.
+Revision 2 — adversarial review (Opus) of the lint at e0a2266. Verdict: ship with
+changes. Every finding was reproduced on e0a2266 before it was acted on:
+
+| # | Finding | Disposition |
+|---|---|---|
+| 1 | MAJOR: the self-test couldn't see the file walk; `rglob`→`glob` still passed 54/54, and the lint then scanned 1 file | Fixed. The CLI test tree has a subpackage and asserts "2 files", and a new test asserts the real tree has ≥100 files, including `io/meta_parser.py`. The mutant is killed. |
+| 2 | A trailing waiver also waived the line below | Fixed. A trailing comment covers only its own call; a comment-only line covers the call on the next line. |
+| 3 | Waivers were matched as plain text: a string suppressed the next finding, and docstrings documenting the syntax showed up as 8 STALE lines in `ci/` | Fixed. Waivers now come from `tokenize` COMMENT tokens only, and a test asserts `ci/` has no STALE lines. |
+| 4 | A BOM file was reported as PARSE, and a latin-1 cookie crashed the lint | Fixed. Files are parsed from `read_bytes()` and tokenized as bytes. |
+| 5 | Q1 missed `encoding=None`, `codecs.open`, `builtins.open`, and `p = Path(x); p.open()` | Fixed, all four. The rest are listed under "Known holes". |
+| 6 | Q2 missed `int(g.attrs['S'][()])` (TypeError confirmed on numpy 2.4.4 with h5py 3.16) and `a = g.attrs; int(a['S'])` | Fixed, both. `[...]` is handled too. |
+| 7 | Q2 assumes every `.attrs` is h5py's | Kept, now documented as a deliberate assumption in the docstring and here, and pinned by tests. The claim that Q2 "stays silent" was removed. |
+| 8 | Evidence errors: the Q2-fix row holds only with `--only Q2`; the sweep had 7 PARSE commits, not 3; the Revision line was stale | Fixed in Results and here. |
+| 9 | 7 of 10 one-line mutants survived | Fixed: 37/37 one-line mutants are now killed. The dead `__pycache__` skip was dropped, and so was a dead `ValueError` catch (on 3.11+ `ast.parse` raises `SyntaxError` for null bytes). |
 
 **Status:** built on branch `claude/agent-surface`, cut from `main` @ `ade3e09`
 (2026-09-25), draft PR #99. No production (library) code changed. The lint reports
@@ -74,27 +87,49 @@ messages, and two entries in the owner's agent memory, which lives outside the r
    was re-zipped so its `SKILL.md` stays byte-identical to the root file (LF line
    endings, `evals.json` unchanged). The guides and `AGENTS.md` say the reverse.
    *Accept:* the extracted zip entry equals the normalized root file.
-5. **`ci/check_quirk_patterns.py`** (stdlib `ast`; about 2 s wall for 113 files on
-   the owner's Windows machine) and its
-   self-test `ci/test_check_quirk_patterns.py` (54 cases) run in a new job,
+5. **`ci/check_quirk_patterns.py`** (stdlib `ast` + `tokenize`; about 2 s wall for 113
+   files on the owner's Windows machine) and its
+   self-test `ci/test_check_quirk_patterns.py` (114 cases) run in a new job,
    "Quirk-pattern lint", in `test.yml`. The self-test runs first and the lint last.
    The repo had no static job to append to, and a separate job neither hides nor
    waits on the pytest matrix. The self-test lives in `ci/` deliberately:
    `testpaths = ["tests"]` keeps it out of the library suite, which would otherwise
    run it three times in the matrix. `main` has no branch protection, so no
    required-check name changes.
-   - **Q1 encoding.** Flags text-mode `open()` / `io.open()` / `Path(...).open()` /
-     `.read_text()` / `.write_text()` calls with no encoding. Incident: #57
-     (1f4c4c4), CHANGELOG 1.3.0 "Fixed". The Ubuntu CI runs a UTF-8 locale, so no
-     test can see this bug; only a static check can.
-   - **Q2 attrs.** Flags `int()` / `float()` applied to `X.attrs[...]` or
-     `X.attrs.get(...)`, or to a local name bound only to one of those. Incident:
-     294b5fd. numpy 2.4.4 raises `TypeError` on `int(np.array([5]))` (verified
-     locally).
-   - Unreadable cases stay silent: a variable mode, `*args` / `**kwargs`, a foreign
-     `.open` receiver, or a name that is rebound or bound in an enclosing scope.
-     Waivers take the form `# stko-lint: encoding-ok|attrs-ok <reason ≥12 chars>`.
-     A stale waiver is itself a finding.
+   - **Q1 encoding.** Flags text-mode file I/O with no encoding, or with
+     `encoding=None`: `open()`, `io.open()`, `builtins.open()`, `codecs.open()`,
+     `Path(...).open()`, `p.open()` where `p` is bound only to `Path(...)` in the
+     same scope, and any `.read_text()` / `.write_text()`. Incident: #57 (1f4c4c4),
+     CHANGELOG 1.3.0 "Fixed". The Ubuntu CI runs a UTF-8 locale, so no test can see
+     this bug; only a static check can. Q1 stays silent when it can't read a case: a
+     variable mode, `*args` / `**kwargs`, or a foreign `.open` receiver.
+   - **Q2 attrs.** Flags `int()` / `float()` applied to `X.attrs[...]`,
+     `X.attrs.get(...)`, either one reached through a name bound only to `X.attrs`, a
+     no-op `[()]` / `[...]` index of any of these, or a local name bound only to one of
+     them. Incident: 294b5fd. numpy 2.4.4 raises `TypeError` on
+     `int(np.array([5]))`, and h5py 3.16's `attrs['S'][()]` returns shape (1,)
+     (both verified locally). A name that is rebound, or bound in an enclosing scope,
+     is skipped. **A deliberate assumption departs from "stay silent":** Q2 treats
+     every `.attrs` as h5py's. pandas `DataFrame.attrs`, xarray, `self.attrs`, and an
+     `int(v)` guarded by `np.ndim(v) == 0` are all flagged. The library reads only
+     h5py attrs, the 321-commit sweep shows zero such noise, and a waiver covers a
+     legitimate case. Tests pin this behaviour.
+   - **Waivers** are `tokenize` COMMENT tokens of the form
+     `stko-lint: encoding-ok|attrs-ok <reason ≥12 chars>`. A trailing comment waives
+     the call on its own line(s); a comment-only line waives the call that starts on
+     the next line. Text in strings and docstrings is never a waiver. A stale waiver
+     is itself a finding.
+   - **Known holes** (not flagged; left out because this repo has no incident for
+     them):
+     - `gzip.open` / `bz2.open` / `lzma.open` in `'rt'` mode;
+     - `os.fdopen`, `tempfile.*(mode='w')` and `io.TextIOWrapper` without an
+       encoding;
+     - an aliased `open` (`from builtins import open as o`);
+     - a `Path` that arrives as a parameter, including `p = Path(p)` rebinding a
+       parameter (the parameter makes the name ambiguous, and a test pins this);
+     - a `Path` bound in an enclosing scope;
+     - for Q2, a parameter rebound to an attrs read, and a value that passes through
+       a function call or a container before `int()`.
    *Accept:* the mutation gate below.
 
 ## Rejected approaches
@@ -114,7 +149,11 @@ messages, and two entries in the owner's agent memory, which lives outside the r
   rule.
 - **An L3-style check that guide pointers still resolve.** This repo's guides have
   no rot incident yet, so it has no pre-fix commit to test against. The pointers
-  were checked by hand instead (Results).
+  were checked by a one-off script instead (Results).
+- **Checking every `.attrs` owner's type in Q2.** A static lint cannot know the
+  type, and following h5py-only receivers would miss the incident's own shape
+  (`step_group.attrs`, where `step_group` comes from `.items()`). The review's
+  finding 7 is accepted as a documented assumption.
 - **Q1 over `tests/`.** 7 `tcl.write_text(...)` calls in
   `tests/unit/cuts/test_per_layer_shell.py` write ASCII-only literals, so flagging
   them would be noise. The incident lived in `src/`. Scope: `src/STKO_to_python/`.
@@ -132,37 +171,47 @@ messages, and two entries in the owner's agent memory, which lives outside the r
 
 ## Results (2026-09-25)
 
-**Mutation acceptance.** The lint was run on `git archive` trees of the real commits.
+**Mutation acceptance** (re-run on Revision 2). The lint was run on `git archive`
+trees of the real commits.
 
 | Run | Tree | Expected | Got |
 |---|---|---|---|
-| Q1 pre-fix | `d2eb7bb` (parent of 1f4c4c4, #57) | flags `cdata_reader.py` | `src/STKO_to_python/model/cdata_reader.py:45` flagged, exit 1 |
-| Q1 fix | `1f4c4c4` | clean | 0 findings, exit 0 |
-| Q2 pre-fix | `bc5b676` (parent of 294b5fd) | flags `model_info.py` | 4 findings: `model_info.py:471` and `:518`, `int()` and `float()` at each |
-| Q2 fix | `294b5fd` | clean | 0 findings, exit 0 |
-| Live | `main` @ `ade3e09` (113 files) | — | 0 findings |
+| Q1 pre-fix | `d2eb7bb` (parent of 1f4c4c4, #57) | flags `cdata_reader.py` | `--only Q1`: `src/STKO_to_python/model/cdata_reader.py:45` flagged, exit 1 |
+| Q1 fix | `1f4c4c4` | clean | `--only Q1`: 0 findings, exit 0. The full lint is also clean here (exit 0). |
+| Q2 pre-fix | `bc5b676` (parent of 294b5fd) | flags `model_info.py` | `--only Q2`: 4 findings, `model_info.py:471` and `:518`, `int()` and `float()` at each; exit 1 |
+| Q2 fix | `294b5fd` | clean for Q2 | `--only Q2`: 0 findings, exit 0. **Caveat:** the full lint exits 1 here, on Q1 at `model/cdata.py:40`. That is the #57 site, which was not fixed until 1f4c4c4, three weeks later. |
+| Live | `main` @ `ade3e09` (113 files) | — | 0 findings (full lint) |
 
 **History sweep.** The lint ran on every one of the 321 commits reachable from `main`
 that contain `src/STKO_to_python`. Across all of them it flagged only the two incident
 sites. Q1 hit `model/cdata.py`, renamed `cdata_reader.py` in #49, from ab18114
 (2025-05-02) to e586d57 (2026-05-09); every commit from 1f4c4c4 on is clean. Q2 hit
-`model/model_info.py` from ab18114 to bc5b676. The sweep also found 3 WIP commits from
-2025 whose files did not parse; the lint reports those as `PARSE`, it does not swallow
-them. Historical noise: nil.
+`model/model_info.py` from ab18114 to bc5b676. The sweep also found **7 commits**,
+from 2025-07-27 to 2026-01-07 (c483d11, c8da643, 2f1faae, a343a95, b624a3e, 7a01ff3,
+8e8cb2b), whose `nodes.py`, `elements.py` or `nodal_results_dataclass.py` did not
+parse. The lint reports those as `PARSE`; it does not swallow them. Historical noise:
+nil. The sweep was re-run on Revision 2, with the new Q1 callees, the new Q2 shapes
+and token-based waivers. It gives identical per-commit counts on all 321 commits and
+0 STALE findings, so the widened rules and the documented Q2 assumption add no noise.
 
-**The self-test fails when the lint is broken.** 8 one-line mutations of the lint,
-each run against the 54-case self-test:
+**The self-test fails when the lint is broken** (Revision 2). Each of 37 one-line
+mutants of the lint was run against the 114-case self-test inside a `git archive`
+tree, so the real-tree test also runs. **37/37 are killed**, every one by an
+assertion failure, with 0 collection errors. The number in each row is the count of
+failing cases.
 
-| Mutation | Failing cases |
+| Area | Mutants (failing cases) |
 |---|---|
-| binary-mode exemption removed | 4 |
-| Q2 name-binding removed | 2 |
-| stale-waiver check removed | 2 |
-| reason-length check removed | 1 |
-| egg-info / `__pycache__` skip removed | 2 |
-| `*args` / `**kwargs` silence removed | 2 |
-| ambiguous-binding silence (`all` → `any`) | 1 |
-| waiver on the line above ignored | 1 |
+| File walk (finding 1) | `rglob`→`glob` (3); egg-info skip removed (3) |
+| Waiver window (finding 2) | standalone `start-1`→`start-2` (1); trailing also covers the line above (1); standalone never covers the line above (1); `end`→`start` (2); `standalone` always True (1) |
+| Waiver source (finding 3) | waivers from any token, not just COMMENT (3) |
+| Waiver reason and staleness | `MIN_REASON` 12→6 (1); 12→13 (1); reason check removed (2); stale check removed (3) |
+| Q1 mode and encoding | `'b' in mode`→`endswith('b')` (1); binary exemption removed (10); `encoding=None` treated as explicit (3); default mode not text (23) |
+| Q1 callees (finding 5) | `builtins.open` dropped (1); `codecs.open` dropped (2); Path-bound names not resolved (1); `read_text` dropped (3); `write_text` dropped (1) |
+| Decoding (finding 4) | `read_bytes`→`read_text(utf-8)` (1); PARSE line forced to 0 (3) |
+| Q2 reads (finding 6) | `[()]` not stripped (3); `[...]` not stripped (1); attrs alias not followed (3); `.attrs.get` not followed (5) |
+| Q2 bindings | name binding dropped (7); `all`→`any` (7); AnnAssign dropped (1); bare annotation treated as a value (1); AugAssign ignored (1); parameters not bindings (2); one-arg check dropped (1) |
+| Scopes | lambda not a scope in `_scopes` (2); lambda not a scope anywhere (1); class bodies not scopes (1) |
 
 **Viewer visual recipe, validated on a real change.** `ds.plot.mesh()` and
 `ds.plot.deformed_shape(step=5, scale=10)` were rendered on `elasticFrame/results`
@@ -179,9 +228,10 @@ the three guides quote exist: 11 in `mpco_format_conventions.md`, 4 in
 
 **Repo gates on the new files.** Library suite: `PYTHONPATH=src MPLBACKEND=Agg python -m
 pytest tests -q` gives 1565 passed, 105 skipped (no pyvista, heavy fixtures absent),
-the same before and after. Self-test: 54 passed. The repo configures no ruff, pyright
-or mypy. `ruff check` (default rules) and `ruff format --check` are clean on `ci/`
-anyway. `mkdocs build --strict` passes.
+the same before and after, and again on Revision 2. Self-test: 114 passed. The repo
+configures no ruff, pyright or mypy. `ruff check` (the default rules, plus
+`E,F,W,B,UP,I`) and `ruff format --check` are clean on `ci/` anyway.
+`mkdocs build --strict` passes.
 
 ## Live incidents — merge order
 

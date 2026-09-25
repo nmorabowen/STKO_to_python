@@ -2,7 +2,7 @@
 
 One case per rule for the incident shape, the fix shape, every sanctioned
 alternative found in the tree, and every hole a review finds. A hole found
-is a test added.
+is a test added; a one-line mutant of the lint that survives is a test added.
 
 Lives in ci/ on purpose: ``testpaths = ["tests"]`` keeps it out of the
 library suite; CI runs it as its own step right before the lint itself
@@ -17,15 +17,21 @@ from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+CI_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(CI_DIR))
 import check_quirk_patterns as cq  # noqa: E402
 
+WAIVE_Q1 = "# stko-lint: encoding-ok"  # assembled below so no line here is a waiver
+WAIVE_Q2 = "# stko-lint: attrs-ok"
 
-def lint(src: str, only: tuple[str, ...] = cq.RULES) -> list[cq.Finding]:
-    return cq.check_source(textwrap.dedent(src), "mod.py", only)
+
+def lint(src: str | bytes, only: tuple[str, ...] = cq.RULES) -> list[cq.Finding]:
+    if isinstance(src, str):
+        src = textwrap.dedent(src)
+    return cq.check_source(src, "mod.py", only)
 
 
-def rules(src: str, only: tuple[str, ...] = cq.RULES) -> list[tuple[int, str]]:
+def rules(src: str | bytes, only: tuple[str, ...] = cq.RULES) -> list[tuple[int, str]]:
     return [(f.line, f.rule) for f in lint(src, only)]
 
 
@@ -55,10 +61,16 @@ def test_q1_passes_fix_shape_pr57():
         "open(p)",  # default mode is text
         "open(p, 'w')",
         "open(p, mode='rt')",
+        "open(p, encoding=None)",  # None is the locale default: same bug
+        "open(p, 'r', -1, None)",
         "io.open(p)",
+        "builtins.open(p)",
+        "codecs.open(p)",  # encoding=None falls back to builtin text open
+        "codecs.open(p, 'w')",
         "Path(p).open()",
         "pathlib.Path(p).open('r')",
         "p.read_text()",
+        "p.read_text(encoding=None)",
         "Path(p).read_text(errors='replace')",
         "p.write_text(s)",
     ],
@@ -72,7 +84,14 @@ def test_q1_flags_text_io_without_encoding(call):
     [
         "open(p, 'rb')",  # binary: no decoding
         "open(p, mode='wb')",
+        "open(p, 'rb+')",  # 'b' not last
+        "open(p, 'r+b')",
         "open(p, 'r', -1, 'utf-8')",  # encoding positional
+        "open(p, encoding=enc)",  # a variable encoding is an explicit one
+        "builtins.open(p, 'rb')",
+        "codecs.open(p, 'r', 'utf-8')",
+        "codecs.open(p, encoding='utf-8')",
+        "codecs.open(p, 'rb')",
         "Path(p).open('rb')",
         "Path(p).open('r', -1, 'utf-8')",
         "p.read_text('utf-8')",
@@ -109,6 +128,57 @@ def test_q1_multiline_call_is_one_finding_at_its_first_line():
         )
     """
     assert rules(src, ("Q1",)) == [(2, "Q1")]
+
+
+def test_q1_resolves_a_name_bound_only_to_path():
+    src = """
+        from pathlib import Path
+        def f(x):
+            p = Path(x)
+            with p.open() as fh:
+                return fh.read()
+    """
+    assert rules(src, ("Q1",)) == [(5, "Q1")]
+
+
+def test_q1_path_name_in_binary_mode_passes():
+    src = """
+        def f(x):
+            p = Path(x)
+            return p.open("rb").read()
+    """
+    assert rules(src, ("Q1",)) == []
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "def f(p):\n    return p.open()\n",  # a parameter: type unknown
+        "def f(x, pool):\n    p = Path(x)\n    p = pool\n    return p.open()\n",
+        "p = Path(x)\ndef f():\n    return p.open()\n",  # enclosing scope
+    ],
+)
+def test_q1_skips_path_names_it_cannot_resolve(body):
+    assert rules(body, ("Q1",)) == []
+
+
+def test_q1_skips_a_parameter_rebound_to_path():
+    # Known hole: the parameter is a second binding, so `p` is ambiguous.
+    src = """
+        def f(p):
+            p = Path(p)
+            return p.open()
+    """
+    assert rules(src, ("Q1",)) == []
+
+
+def test_q1_sees_lambda_and_class_bodies():
+    src = """
+        read = lambda p: open(p).read()
+        class Reader:
+            HEADER = open("header.txt").readline()
+    """
+    assert rules(src, ("Q1",)) == [(2, "Q1"), (4, "Q1")]
 
 
 # ------------------------------------------------------------------- Q2 attrs
@@ -149,6 +219,8 @@ def test_q2_passes_fix_shape_294b5fd():
         "int(g.attrs['NUM_COLUMNS'])",
         "float(g.attrs.get('TIME'))",
         "float(f[stage].attrs['TIME'])",
+        "int(g.attrs['STEP'][()])",  # [()] keeps the 1-element array
+        "int(g.attrs['STEP'][...])",
     ],
 )
 def test_q2_flags_direct_conversion(expr):
@@ -165,10 +237,40 @@ def test_q2_flags_direct_conversion(expr):
         "np.asarray(g.attrs['GP_X'])",  # element_manager GP_X read
         "len(g.attrs['GP_X'])",
         "int(g.attrs['STEP'], 10)",  # not the one-arg converter form
+        "int(g.attrs)",  # the mapping itself, not a value
     ],
 )
 def test_q2_passes_sanctioned_unwraps(expr):
     assert rules(f"def f(g):\n    return {expr}\n", ("Q2",)) == []
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "a = g.attrs\n    return int(a['STEP'])",
+        "a = g.attrs\n    return float(a.get('TIME'))",
+        "a = g.attrs\n    v = a['STEP']\n    return int(v)",
+        "v = g.attrs['STEP'][()]\n    return int(v)",
+        "v = g.attrs['STEP']\n    return int(v[()])",
+        "v: Any = g.attrs['STEP']\n    return int(v)",  # annotated binding
+    ],
+)
+def test_q2_follows_single_bindings(body):
+    found = rules(f"def f(g):\n    {body}\n", ("Q2",))
+    assert [rule for _, rule in found] == ["Q2"]
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "a = g.attrs\n    return int(a['STEP'][0])",
+        "a = g.attrs\n    a = other\n    return int(a['STEP'])",  # ambiguous
+        "v: int\n    v = g.attrs['STEP']\n    return int(v)",  # bare annotation
+        "v = g.attrs['STEP']\n    v += 1\n    return int(v)",  # augmented
+    ],
+)
+def test_q2_skips_what_it_cannot_resolve(body):
+    assert rules(f"def f(g, other):\n    {body}\n", ("Q2",)) == []
 
 
 def test_q2_skips_name_rebound_to_something_else():
@@ -183,6 +285,16 @@ def test_q2_skips_name_rebound_to_something_else():
     assert rules(src, ("Q2",)) == []
 
 
+def test_q2_skips_a_parameter_rebound_to_an_attrs_read():
+    # Known hole, same as Q1: a parameter is a binding, so `v` is ambiguous.
+    src = """
+        def f(g, v):
+            v = g.attrs["STEP"]
+            return int(v)
+    """
+    assert rules(src, ("Q2",)) == []
+
+
 def test_q2_skips_name_bound_in_enclosing_scope():
     src = """
         def outer(g):
@@ -192,6 +304,18 @@ def test_q2_skips_name_bound_in_enclosing_scope():
             return inner
     """
     assert rules(src, ("Q2",)) == []
+
+
+def test_q2_lambda_parameter_shadows_module_binding():
+    src = """
+        v = g.attrs["STEP"]
+        to_int = lambda v: int(v)
+    """
+    assert rules(src, ("Q2",)) == []
+
+
+def test_q2_sees_lambda_bodies():
+    assert rules("f = lambda g: int(g.attrs['STEP'])\n", ("Q2",)) == [(1, "Q2")]
 
 
 def test_q2_follows_walrus_binding():
@@ -211,51 +335,148 @@ def test_q2_ignores_parameter_named_like_an_attr():
     assert rules(src, ("Q2",)) == []
 
 
+@pytest.mark.parametrize(
+    "expr",
+    [
+        "int(df.attrs['n_rows'])",  # pandas DataFrame.attrs
+        "int(self.attrs['count'])",
+        "float(da.attrs.get('scale'))",  # xarray
+    ],
+)
+def test_q2_assumes_every_attrs_is_h5py(expr):
+    # DELIBERATE: Q2 does not know the type behind `.attrs`. The library reads
+    # only h5py attrs and the history sweep shows no such noise; waive a real one.
+    assert rules(f"def f(df, self, da):\n    return {expr}\n", ("Q2",)) == [(2, "Q2")]
+
+
+def test_q2_flags_a_guarded_conversion_too():
+    # DELIBERATE: the rule does not read guards; this is a waiver case.
+    src = """
+        def f(g):
+            v = g.attrs["STEP"]
+            if np.ndim(v) == 0:
+                return int(v)
+    """
+    assert rules(src, ("Q2",)) == [(5, "Q2")]
+
+
 # ------------------------------------------------------------------- waivers
 def test_waiver_with_reason_suppresses_same_line():
-    src = "x = open(p)  # stko-lint: encoding-ok ASCII-only generated log file\n"
+    src = f"x = open(p)  {WAIVE_Q1} ASCII-only generated log file\n"
     assert rules(src) == []
 
 
 def test_waiver_on_line_above_suppresses():
-    src = """
-        # stko-lint: attrs-ok STEP written as a true 0-d scalar by this writer
-        n = int(g.attrs["STEP"])
-    """
+    src = f"{WAIVE_Q2} STEP written as a true 0-d scalar by this writer\n"
+    src += 'n = int(g.attrs["STEP"])\n'
     assert rules(src) == []
 
 
+def test_trailing_waiver_does_not_cover_the_next_line():
+    src = f"a = open(p)  {WAIVE_Q1} ASCII-only generated log\nb = open(q)\n"
+    assert rules(src) == [(2, "Q1")]
+
+
+def test_comment_only_waiver_two_lines_above_does_not_suppress():
+    src = f"{WAIVE_Q1} ASCII-only generated log file\n\nx = open(p)\n"
+    assert rules(src) == [(1, "STALE"), (3, "Q1")]
+
+
+def test_trailing_waiver_on_the_last_line_of_a_multiline_call():
+    src = (
+        f'f = open(\n    path,\n    "r",\n)  {WAIVE_Q1} ASCII-only generated log file\n'
+    )
+    assert rules(src) == []
+
+
+def test_comment_only_waiver_inside_a_multiline_call():
+    src = f"f = open(\n    {WAIVE_Q1} ASCII-only generated log file\n    path,\n)\n"
+    assert rules(src) == []
+
+
+def test_waiver_text_in_a_string_is_not_a_waiver():
+    src = f'MSG = "{WAIVE_Q1} documented in a string literal"\nb = open(q)\n'
+    assert rules(src) == [(2, "Q1")]
+
+
+def test_waiver_syntax_in_a_docstring_is_not_stale():
+    src = f'"""Waive with:\n\n    {WAIVE_Q1} <reason>\n"""\nx = 1\n'
+    assert rules(src) == []
+
+
+def test_waiver_after_another_comment_on_the_same_line():
+    src = f"x = open(p)  # noqa: SIM115  {WAIVE_Q1} ASCII-only generated log\n"
+    assert rules(src) == []
+
+
+def test_the_lint_and_its_self_test_carry_no_stale_waivers():
+    for name in ("check_quirk_patterns.py", "test_check_quirk_patterns.py"):
+        found = cq.check_source((CI_DIR / name).read_bytes(), name)
+        assert [f for f in found if f.rule == "STALE"] == [], name
+
+
 def test_waiver_without_reason_is_a_finding():
-    src = "x = open(p)  # stko-lint: encoding-ok short\n"
+    src = f"x = open(p)  {WAIVE_Q1} short\n"
     found = lint(src)
     assert [(f.line, f.rule) for f in found] == [(1, "Q1")]
     assert "reason" in found[0].message
 
 
+@pytest.mark.parametrize(("n_chars", "expected"), [(11, [(1, "Q1")]), (12, [])])
+def test_waiver_reason_length_boundary(n_chars, expected):
+    assert rules(f"x = open(p)  {WAIVE_Q1} {'x' * n_chars}\n") == expected
+
+
 def test_waiver_for_the_other_rule_does_not_suppress():
-    src = "x = open(p)  # stko-lint: attrs-ok this is the wrong tag entirely\n"
+    src = f"x = open(p)  {WAIVE_Q2} this is the wrong tag entirely\n"
     assert sorted(rules(src)) == [(1, "Q1"), (1, "STALE")]
 
 
 def test_stale_waiver_is_a_finding():
-    src = """
-        # stko-lint: encoding-ok the call below was fixed long ago
-        x = open(p, encoding="utf-8")
-    """
-    assert rules(src) == [(2, "STALE")]
+    src = f"{WAIVE_Q1} the call below was fixed long ago\n"
+    src += 'x = open(p, encoding="utf-8")\n'
+    assert rules(src) == [(1, "STALE")]
 
 
 def test_stale_check_respects_only():
     # With --only Q2, a Q1 waiver is not judged (its rule did not run).
-    src = "x = open(p, encoding='utf-8')  # stko-lint: encoding-ok stale, not checked\n"
+    src = f"x = open(p, encoding='utf-8')  {WAIVE_Q1} stale, not checked\n"
     assert rules(src, ("Q2",)) == []
+
+
+# ------------------------------------------------------------ source decoding
+def test_utf8_bom_is_not_a_parse_error():
+    assert rules(b"\xef\xbb\xbfx = open(p)\n") == [(1, "Q1")]
+
+
+def test_latin1_coding_cookie_is_honoured():
+    src = b"# -*- coding: latin-1 -*-\nname = '\xe9'\nx = open(p)\n"
+    assert rules(src) == [(3, "Q1")]
+
+
+def test_waiver_in_a_bom_file():
+    src = b"\xef\xbb\xbfx = open(p)  " + WAIVE_Q1.encode() + b" ASCII-only log file\n"
+    assert rules(src) == []
+
+
+def test_parse_error_is_reported_not_swallowed():
+    found = lint("def f(:\n")
+    assert [f.rule for f in found] == ["PARSE"]
+
+
+@pytest.mark.parametrize(
+    "src", [b"x = 1\x00\n", b"# -*- coding: bogus -*-\nx = 1\n", b"\xff\xfe x\n"]
+)
+def test_undecodable_source_is_a_parse_finding_not_a_crash(src):
+    assert [(f.line, f.rule) for f in lint(src)] == [(1, "PARSE")]
 
 
 # ---------------------------------------------------------------- driver/CLI
 def _tree(tmp_path: Path, body: str) -> Path:
     pkg = tmp_path / "src" / "STKO_to_python"
-    pkg.mkdir(parents=True)
+    (pkg / "sub").mkdir(parents=True)
     (pkg / "mod.py").write_text(textwrap.dedent(body), encoding="utf-8")
+    (pkg / "sub" / "deep.py").write_text("y = open(q, 'rb')\n", encoding="utf-8")
     egg = pkg / "STKO_to_python.egg-info"
     egg.mkdir()
     (egg / "junk.py").write_text("x = open(p)\n", encoding="utf-8")  # must be skipped
@@ -268,7 +489,33 @@ def test_cli_exit_codes_and_scope(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "src/STKO_to_python/mod.py:1: Q1" in out
     assert "egg-info" not in out
+    assert "2 files under src/STKO_to_python" in out
     assert cq.main(["--root", str(root), "--only", "Q2"]) == 0
+
+
+def test_cli_recurses_into_subpackages(tmp_path, capsys):
+    root = _tree(tmp_path, "x = 1\n")
+    (root / "src" / "STKO_to_python" / "sub" / "deep.py").write_text(
+        "y = open(q)\n", encoding="utf-8"
+    )
+    assert cq.main(["--root", str(root)]) == 1
+    assert "src/STKO_to_python/sub/deep.py:1: Q1" in capsys.readouterr().out
+
+
+def test_cli_reads_bom_and_latin1_files(tmp_path, capsys):
+    root = _tree(tmp_path, "x = 1\n")
+    pkg = root / "src" / "STKO_to_python"
+    (pkg / "bom.py").write_bytes(b"\xef\xbb\xbfx = 1\n")
+    (pkg / "lat.py").write_bytes(b"# -*- coding: latin-1 -*-\ns = '\xe9'\n")
+    assert cq.main(["--root", str(root)]) == 0, capsys.readouterr().out
+
+
+def test_real_tree_is_walked_recursively():
+    repo = CI_DIR.parent
+    files = [p.relative_to(repo).as_posix() for p in cq.iter_files(repo)]
+    assert len(files) >= 100
+    assert "src/STKO_to_python/io/meta_parser.py" in files
+    assert not any(".egg-info" in f for f in files)
 
 
 def test_cli_clean_tree_passes(tmp_path):
@@ -282,6 +529,12 @@ def test_cli_rejects_unknown_rule(tmp_path):
         cq.main(["--root", str(root), "--only", "Q9"])
 
 
-def test_parse_error_is_reported_not_swallowed():
-    found = lint("def f(:\n")
-    assert [f.rule for f in found] == ["PARSE"]
+def test_list_waivers_reads_comments_only(tmp_path, capsys):
+    root = _tree(tmp_path, f'M = "{WAIVE_Q1} not a comment"\n')
+    pkg = root / "src" / "STKO_to_python"
+    (pkg / "w.py").write_text(
+        f"x = open(p)  {WAIVE_Q1} ASCII-only log\n", encoding="utf-8"
+    )
+    assert cq.main(["--root", str(root), "--list-waivers"]) == 0
+    out = capsys.readouterr().out.strip().splitlines()
+    assert out == ["src/STKO_to_python/w.py:1: encoding-ok ASCII-only log"]
