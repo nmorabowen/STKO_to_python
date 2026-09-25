@@ -3,7 +3,7 @@
 Revision 1. Not yet adversarially reviewed.
 
 **Status:** built on branch `claude/agent-surface`, cut from `main` @ `ade3e09`
-(2026-09-25), as a draft PR. No production (library) code changed. The lint reports
+(2026-09-25), draft PR #99. No production (library) code changed. The lint reports
 **0 findings** on `main`, so it has no merge-order dependency. The PR will still show
 one red job, "Viewer extras resolve", which has been red on `main` since #92; this PR
 does not cause it (see "Live incidents").
