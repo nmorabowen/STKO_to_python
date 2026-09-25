@@ -17,7 +17,7 @@ FIXTURES_DIR = Path(__file__).parent / "fixtures"
 GOLDEN_MPCO_NAME = "golden.mpco"
 
 # Real-world examples checked in under stko_results_examples/. These are
-# the canonical integration-test inputs; see memory/project_examples_folder.md.
+# the canonical integration-test inputs; see AGENTS.md "Working rules".
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 

@@ -312,7 +312,7 @@ Tags on `main` follow semver:
 - **PATCH** (`v1.x.Y`) — bug fixes, docs, tests, internal refactors.
 
 The release flow is documented in
-[`CLAUDE.md`](https://github.com/nmorabowen/STKO_to_python/blob/main/CLAUDE.md):
+[`AGENTS.md`](https://github.com/nmorabowen/STKO_to_python/blob/main/AGENTS.md):
 bump `pyproject.toml` in the release-bearing PR, then tag the merge
 commit on `main` and push the tag. Tags are lightweight unless a
 real GitHub release with artifacts is being cut.
