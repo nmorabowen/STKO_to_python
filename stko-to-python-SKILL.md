@@ -21,6 +21,10 @@ The library parses OpenSees simulation results stored in STKO's MPCO HDF5 format
 provides high-level abstractions for accessing nodal/element data, plotting, and
 statistical aggregation.
 
+> **Scope:** this skill is about *using* the library. *Changing* the library itself
+> (its MPCO reader, viewer, releases) is out of scope here: in the STKO_to_python repo,
+> read `AGENTS.md` and the task guides in `.claude/skills/stko-*/SKILL.md`.
+
 ## Dependencies
 
 ```
