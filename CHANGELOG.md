@@ -23,6 +23,14 @@ spelled out in [`CLAUDE.md`](CLAUDE.md#versioning-policy):
   `xvfb-run`, so the PyVista snapshot and save tests render on Mesa's
   software rasterizer
   ([#100](https://github.com/nmorabowen/STKO_to_python/pull/100)).
+- CI: the same job never tested the Qt half of the `[viewer]` extra.
+  `import pyvistaqt` failed on the runner with `libEGL.so.1: cannot
+  open shared object file`, and `tests/viewer/test_smoke.py` skipped the
+  Qt test as "viewer extra not installed". The job now installs
+  `libegl1`; the smoke tests skip only when a package is not installed
+  and fail on any other import error; and the import-is-light test runs
+  in a subprocess, so it no longer half-unloads PySide6 for the tests
+  after it ([#101](https://github.com/nmorabowen/STKO_to_python/pull/101)).
 
 ## [1.12.0] — 2026-05-13
 
