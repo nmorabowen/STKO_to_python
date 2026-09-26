@@ -26,6 +26,9 @@ extra is installed. Layer / scene code reaches it indirectly through
 """
 from __future__ import annotations
 
+import ctypes.util
+import os
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Iterable
@@ -76,6 +79,9 @@ class PvSceneHandle:
     plotter: Any
     is_3d: bool
     off_screen: bool
+    # Set once the headless-GL check has passed for this plotter, so an
+    # animation export doesn't repeat the library lookup on every frame.
+    _gl_checked: bool = field(default=False, init=False, repr=False, compare=False)
 
 
 @dataclass
@@ -101,6 +107,61 @@ class _PvActorRef:
 
 
 # ---------------------------------------------------------------------- #
+# Headless GL check (Linux)
+# ---------------------------------------------------------------------- #
+
+_IS_LINUX = sys.platform.startswith("linux")
+_PROC_SELF_MAPS = "/proc/self/maps"
+# What VTK falls back to on Linux when there is no X display.
+_HEADLESS_GL_LIBS = ("EGL", "OSMesa")
+
+
+def _headless_gl_library_present() -> bool:
+    """Return True if an EGL or OSMesa library is available to VTK.
+
+    Two cheap lookups; neither creates a GL context:
+
+    - ``ctypes.util.find_library`` (the dynamic linker cache,
+      ``LD_LIBRARY_PATH``);
+    - the libraries already mapped into this process
+      (``/proc/self/maps``). By the time a scene renders, VTK has
+      already created its render window and loaded whichever library it
+      found, including one outside the linker cache (a conda
+      environment, a copy bundled in a wheel).
+    """
+    if any(ctypes.util.find_library(name) for name in _HEADLESS_GL_LIBS):
+        return True
+    try:
+        with open(_PROC_SELF_MAPS, encoding="utf-8", errors="replace") as fh:
+            maps = fh.read()
+    except OSError:
+        return False
+    return any(f"/lib{name}" in maps for name in _HEADLESS_GL_LIBS)
+
+
+def _missing_gl_context() -> bool:
+    """Return True when VTK has no way to get an OpenGL context here.
+
+    Linux only; always False on Windows and macOS. True when
+    ``DISPLAY`` and ``WAYLAND_DISPLAY`` are both unset or empty AND no
+    EGL or OSMesa library is present (:func:`_headless_gl_library_present`).
+    In that setup VTK 9.7 falls through to an OSMesa window with no
+    library behind it and segfaults on the first render (#100).
+
+    It cannot detect a ``DISPLAY`` that points at no running X server,
+    or an EGL / OSMesa library that is present but unusable (for example
+    libglvnd's ``libEGL.so.1`` with no vendor driver): those still reach
+    VTK. It would wrongly return True only if EGL or OSMesa were linked
+    statically into VTK, with no separate library file.
+    """
+    if not _IS_LINUX:
+        return False
+    if os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"):
+        return False
+    return not _headless_gl_library_present()
+
+
+# ---------------------------------------------------------------------- #
 # Backend implementation
 # ---------------------------------------------------------------------- #
 
@@ -115,10 +176,12 @@ class PyVistaBackend:
     ``update_*`` / ``set_visible`` / ``remove`` calls unwrap those
     to reach the actor and its underlying dataset.
 
-    Off-screen rendering uses VTK's native off-screen path (no Qt,
-    no X server). On Linux, callers may need to wrap their entry
-    point in ``xvfb-run`` if no GPU + EGL stack is available — see
-    ``docs/viewer/03-deployment-targets.md`` §7.
+    Off-screen rendering uses VTK's native off-screen path (no Qt, no
+    window). On Linux, VTK still needs an OpenGL context from an X
+    server (``xvfb-run`` provides one), EGL or OSMesa — see
+    ``docs/viewer/03-deployment-targets.md`` §7. When none of them is
+    available, :meth:`snapshot` and :meth:`save` raise ``RuntimeError``
+    instead of letting VTK segfault.
     """
 
     name: str = "pyvista"
@@ -491,6 +554,7 @@ class PyVistaBackend:
         Callers that need precise pixel counts should set
         ``scene.plotter.window_size`` before calling.
         """
+        self._require_gl_context(scene)
         if dpi != 300:
             # Best-effort scaling from default DPI.
             scale = max(1, int(round(dpi / 96.0)))
@@ -504,6 +568,7 @@ class PyVistaBackend:
 
     def snapshot(self, scene: PvSceneHandle) -> np.ndarray:
         """Return the current frame as an ``(H, W, 3)`` ``uint8`` RGB array."""
+        self._require_gl_context(scene)
         img = scene.plotter.screenshot(
             return_img=True, transparent_background=False,
         )
@@ -515,6 +580,28 @@ class PyVistaBackend:
     # ------------------------------------------------------------------ #
     # Internals
     # ------------------------------------------------------------------ #
+    @staticmethod
+    def _require_gl_context(scene: PvSceneHandle) -> None:
+        """Raise instead of rendering when VTK has no OpenGL context.
+
+        Called before every render. See :func:`_missing_gl_context` for
+        what the check can and cannot detect.
+        """
+        if scene._gl_checked:
+            return
+        if _missing_gl_context():
+            raise RuntimeError(
+                "PyVistaBackend cannot render: on Linux VTK needs an OpenGL "
+                "context, and this process has none. DISPLAY and "
+                "WAYLAND_DISPLAY are unset, and no EGL or OSMesa library was "
+                "found; VTK would segfault on the first render. Provide one "
+                "of: an X server (run under Xvfb, e.g. "
+                "'xvfb-run -a -s \"-screen 0 1024x768x24\" python ...'), an "
+                "EGL library (libEGL, from Mesa or the GPU driver), or OSMesa "
+                "(libOSMesa). See docs/viewer/03-deployment-targets.md §7."
+            )
+        scene._gl_checked = True
+
     @staticmethod
     def _unwrap(actor: ActorRef) -> _PvActorRef:
         if not isinstance(actor, _PvActorRef):
