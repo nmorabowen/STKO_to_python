@@ -11,6 +11,9 @@ matrices that include the ``viewer-3d`` job will pick them up.
 """
 from __future__ import annotations
 
+import sys
+import types
+
 import numpy as np
 import pytest
 
@@ -19,6 +22,7 @@ pv = pytest.importorskip("pyvista")
 from STKO_to_python.viewer.backends.pyvista import (
     PvSceneHandle,
     PyVistaBackend,
+    backend as pv_backend,
 )
 from STKO_to_python.viewer.backends.pyvista.backend import _PvActorRef
 from STKO_to_python.viewer.core import (
@@ -363,3 +367,151 @@ def test_show_off_screen_is_noop(backend) -> None:
         backend.show(handle)  # must not raise
     finally:
         handle.plotter.close()
+
+
+# --------------------------------------------------------------------- #
+# Headless GL check (Linux)
+# --------------------------------------------------------------------- #
+# The platform, the environment and both library lookups are faked, so
+# these run on any OS and never reach VTK. Reaching the fake plotter's
+# screenshot() stands for a real render, which segfaults on Linux when
+# there is no GL context (#100).
+
+
+_REAL_GL_LIBRARY_DIRS = getattr(pv_backend, "_gl_library_dirs", None)
+
+
+class _FakePlotter:
+    def __init__(self) -> None:
+        self.screenshots = 0
+
+    def screenshot(self, *args, **kwargs):
+        self.screenshots += 1
+        return np.zeros((4, 4, 3), dtype=np.uint8)
+
+
+def _fake_scene() -> PvSceneHandle:
+    return PvSceneHandle(plotter=_FakePlotter(), is_3d=True, off_screen=True)
+
+
+@pytest.fixture
+def headless_linux(monkeypatch, tmp_path):
+    """Linux with no display and no EGL / OSMesa (the CI runner before #100).
+
+    Returns the fake ``/proc/self/maps``: libGL (GLX) is mapped, which
+    is no use without an X server. ``raising=False``: against the code
+    before the fix, which has none of these names, the tests below then
+    fail on the missing error, not in this fixture.
+    """
+    maps = tmp_path / "maps"
+    maps.write_text(
+        "7f00-7f01 r-xp 00000000 08:01 1 /usr/lib/x86_64-linux-gnu/libGL.so.1\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(pv_backend, "_IS_LINUX", True, raising=False)
+    monkeypatch.setattr(pv_backend, "_PROC_SELF_MAPS", str(maps), raising=False)
+    monkeypatch.delenv("DISPLAY", raising=False)
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+    monkeypatch.delenv("STKO_SKIP_GL_CHECK", raising=False)
+    monkeypatch.delenv("CONDA_PREFIX", raising=False)
+    monkeypatch.setattr("ctypes.util.find_library", lambda name: None)
+    monkeypatch.setattr(pv_backend, "_gl_library_dirs", lambda: [], raising=False)
+    return maps
+
+
+def test_render_without_gl_raises_instead_of_segfaulting(
+    backend, headless_linux, tmp_path,
+) -> None:
+    scene = _fake_scene()
+    with pytest.raises(RuntimeError, match=r"Xvfb.*EGL.*OSMesa"):
+        backend.snapshot(scene)
+    with pytest.raises(RuntimeError, match=r"Xvfb.*EGL.*OSMesa"):
+        backend.save(scene, tmp_path / "out.png")
+    assert scene.plotter.screenshots == 0
+
+
+@pytest.mark.parametrize(
+    "var, value", [("DISPLAY", ":99"), ("WAYLAND_DISPLAY", "wayland-0")],
+)
+def test_render_with_a_display_is_not_blocked(
+    backend, headless_linux, monkeypatch, var, value,
+) -> None:
+    """Xvfb (or any X server / Wayland session) sets one of these."""
+    monkeypatch.setenv(var, value)
+    scene = _fake_scene()
+    assert backend.snapshot(scene).shape == (4, 4, 3)
+
+
+@pytest.mark.parametrize("lib", ["EGL", "OSMesa"])
+def test_render_with_egl_or_osmesa_on_the_linker_path_is_not_blocked(
+    backend, headless_linux, monkeypatch, lib,
+) -> None:
+    monkeypatch.setattr(
+        "ctypes.util.find_library",
+        lambda name: f"lib{name}.so.1" if name == lib else None,
+    )
+    scene = _fake_scene()
+    assert backend.snapshot(scene).shape == (4, 4, 3)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/usr/lib/x86_64-linux-gnu/libEGL.so.1",
+        "/opt/conda/envs/post/lib/libOSMesa.so.8",
+        "/site-packages/vtk.libs/libOSMesa-1a2b3c4d.so.8.0.0",
+    ],
+)
+def test_render_with_egl_or_osmesa_already_loaded_is_not_blocked(
+    backend, headless_linux, path,
+) -> None:
+    """A library VTK loaded from outside the linker cache (conda, a wheel)."""
+    with headless_linux.open("a", encoding="utf-8") as fh:
+        fh.write(f"7f02-7f03 r-xp 00000000 08:01 2 {path}\n")
+    scene = _fake_scene()
+    assert backend.snapshot(scene).shape == (4, 4, 3)
+
+
+def test_check_is_linux_only(backend, headless_linux, monkeypatch) -> None:
+    monkeypatch.setattr(pv_backend, "_IS_LINUX", False, raising=False)
+    scene = _fake_scene()
+    assert backend.snapshot(scene).shape == (4, 4, 3)
+
+
+def test_check_runs_once_per_scene(backend, headless_linux, monkeypatch) -> None:
+    """An animation export must not repeat the library lookup per frame."""
+    monkeypatch.setenv("DISPLAY", ":99")
+    scene = _fake_scene()
+    backend.snapshot(scene)
+    monkeypatch.delenv("DISPLAY")
+    backend.snapshot(scene)
+    assert scene.plotter.screenshots == 2
+    with pytest.raises(RuntimeError, match="Xvfb"):
+        backend.snapshot(_fake_scene())
+
+
+def test_skip_gl_check_env_is_an_opt_out(backend, headless_linux, monkeypatch) -> None:
+    """A false positive must not hard-block rendering."""
+    monkeypatch.setenv("STKO_SKIP_GL_CHECK", "1")
+    scene = _fake_scene()
+    assert backend.snapshot(scene).shape == (4, 4, 3)
+
+
+def test_error_names_the_opt_out(backend, headless_linux) -> None:
+    with pytest.raises(RuntimeError, match="STKO_SKIP_GL_CHECK=1"):
+        backend.snapshot(_fake_scene())
+
+
+@pytest.mark.parametrize("lib", ["libOSMesa.so.8", "libEGL.so.1"])
+def test_library_in_conda_prefix_is_not_blocked(
+    backend, headless_linux, monkeypatch, tmp_path, lib,
+) -> None:
+    """VTK 9.4+ may load it from $CONDA_PREFIX/lib only at first render."""
+    monkeypatch.setattr(pv_backend, "_gl_library_dirs", _REAL_GL_LIBRARY_DIRS)
+    # Only CONDA_PREFIX counts here, not the real VTK package directory.
+    monkeypatch.setitem(sys.modules, "vtkmodules", types.SimpleNamespace())
+    prefix = tmp_path / "env"
+    (prefix / "lib").mkdir(parents=True)
+    (prefix / "lib" / lib).write_bytes(b"")
+    monkeypatch.setenv("CONDA_PREFIX", str(prefix))
+    assert backend.snapshot(_fake_scene()).shape == (4, 4, 3)

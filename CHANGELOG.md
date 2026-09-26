@@ -25,6 +25,46 @@ spelled out in [`AGENTS.md`](AGENTS.md#versioning-policy):
 - `.gitignore` ignores `.claude/*` again (dropped by a merge resolution in
   ab335f2) while tracking `.claude/skills/`.
 
+### Fixed
+
+- CI: the "Viewer extras resolve" job in `.github/workflows/test.yml`
+  had been red since [#92](https://github.com/nmorabowen/STKO_to_python/pull/92).
+  The hosted Ubuntu runner has no X server, no EGL and no OSMesa, so
+  VTK's first real render (`PyVistaBackend.snapshot`) segfaulted with
+  exit 139, and pytest died before the rest of `tests/viewer/` ran. The
+  job now installs Xvfb + Mesa and runs the viewer suite under
+  `xvfb-run`, so the PyVista snapshot and save tests render on Mesa's
+  software rasterizer
+  ([#100](https://github.com/nmorabowen/STKO_to_python/pull/100)).
+- CI: the "Viewer extras resolve" job in `.github/workflows/test.yml`
+  never tested the Qt half of the `[viewer]` extra. `import pyvistaqt`
+  failed on the runner with `libEGL.so.1: cannot open shared object
+  file`, and `tests/viewer/test_smoke.py` skipped the Qt test as "viewer
+  extra not installed". The job now installs `libegl1` and sets
+  `STKO_REQUIRE_VIEWER_EXTRAS=1`, which turns the extras skips into
+  failures there. The smoke tests skip only when a package is not
+  installed and fail on any other import error, and the import-is-light
+  test runs in a subprocess, so it no longer half-unloads PySide6 for the
+  tests after it ([#101](https://github.com/nmorabowen/STKO_to_python/pull/101)).
+- `PyVistaBackend.snapshot` and `PyVistaBackend.save` no longer let VTK
+  segfault on Linux when there is no OpenGL context. When `DISPLAY` and
+  `WAYLAND_DISPLAY` are unset and no EGL or OSMesa library is found,
+  they raise a `RuntimeError` that names Xvfb, EGL and OSMesa. Before,
+  the process died in the first render with exit code 139. Set
+  `STKO_SKIP_GL_CHECK=1` to bypass the check if it is wrong for your
+  setup. It does not catch a `DISPLAY` with no X server behind it, or
+  libglvnd's `libEGL.so.1` without a vendor driver (Qt loads that
+  library, so the check passes once Qt is imported), and `show()` with
+  `off_screen=False` is not checked
+  ([#102](https://github.com/nmorabowen/STKO_to_python/pull/102)).
+- Correction to the 1.12.0 entry for `PyVistaBackend`: off-screen
+  rendering needs no Qt and no window, but on Linux it does need an
+  OpenGL context from an X server (Xvfb works), EGL or OSMesa. The
+  1.12.0 text "(no Qt, no X server)" is wrong for Linux.
+  `docs/viewer/03-deployment-targets.md` §7 now says so, and no longer
+  claims that a CLI calls `pv.start_xvfb()`; no such CLI exists yet
+  ([#102](https://github.com/nmorabowen/STKO_to_python/pull/102)).
+
 ## [1.12.0] — 2026-05-13
 
 Introduces the optional **viewer subpackage** — a renderer-agnostic
