@@ -43,6 +43,34 @@ jobs:
       - name: Run pytest
         run: pytest tests/ -q
 
+  quirk-lint:
+    # Quirk-pattern lint (docs/agent-surface.md): lessons that name a
+    # greppable pattern AND have a documented incident, enforced -- Q1
+    # text-mode file I/O without encoding= (#57, invisible on this UTF-8
+    # runner), Q2 int()/float() on a raw h5py attribute (294b5fd). Its own
+    # fast job: no package install, so it neither hides nor waits on the
+    # suites above. The self-test runs first and proves each rule still
+    # fires; the lint itself is the last step.
+    name: Quirk-pattern lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pytest
+        run: python -m pip install "pytest>=7.4"
+
+      - name: quirk-pattern lint self-test
+        run: pytest -q ci/test_check_quirk_patterns.py
+
+      - name: quirk-pattern lint
+        run: python ci/check_quirk_patterns.py
+
   viewer-extras:
     # Verifies the viewer optional extras resolve and import cleanly.
     # Runs the same smoke tests as the base matrix above plus the
