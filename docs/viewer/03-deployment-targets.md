@@ -172,14 +172,17 @@ pip install "stko_to_python[viewer-headless]"
 Adds: `pyvista`, `vtk`, `imageio`, `imageio-ffmpeg`. **No Qt.** No
 display libraries beyond what PyVista needs for off-screen rendering.
 
-**On Linux, you need one of:**
+**On Linux, VTK needs an OpenGL context even off-screen.** You need one of:
 
-- VTK built with EGL support (newer wheels, no X needed).
-- `xvfb-run` to give PyVista a virtual framebuffer (`apt install xvfb`).
-- Mesa `llvmpipe` for software rendering when no GPU is available.
+- An X server: `xvfb-run` gives PyVista a virtual framebuffer
+  (`apt install xvfb`).
+- EGL (`libEGL`, from Mesa or the GPU driver); no X needed.
+- OSMesa (`libOSMesa`), for pure software rendering.
 
-PyVista's `pv.start_xvfb()` does the Xvfb dance automatically; the CLI
-calls it for you on Linux when `$DISPLAY` is unset.
+Mesa's `llvmpipe` does the rendering when there is no GPU. With none of
+these, `PyVistaBackend.snapshot` / `save` raise a `RuntimeError` instead
+of letting VTK segfault; if that check is wrong for your setup, set
+`STKO_SKIP_GL_CHECK=1`.
 
 **Use:**
 

@@ -114,23 +114,51 @@ _IS_LINUX = sys.platform.startswith("linux")
 _PROC_SELF_MAPS = "/proc/self/maps"
 # What VTK falls back to on Linux when there is no X display.
 _HEADLESS_GL_LIBS = ("EGL", "OSMesa")
+# Set to any non-empty value to skip the check (a false positive).
+_SKIP_GL_CHECK_ENV = "STKO_SKIP_GL_CHECK"
+
+
+def _gl_library_dirs() -> list[Path]:
+    """Directories VTK may load EGL / OSMesa from outside the linker cache.
+
+    ``$CONDA_PREFIX/lib`` and VTK's own package directories (the
+    ``vtkmodules`` package and a wheel's bundled ``vtk.libs``). VTK 9.4+
+    picks its GL backend at run time, so a library there may not be
+    mapped into the process yet.
+    """
+    dirs: list[Path] = []
+    conda = os.environ.get("CONDA_PREFIX")
+    if conda:
+        dirs.append(Path(conda) / "lib")
+    vtkmodules = sys.modules.get("vtkmodules")
+    vtk_file = getattr(vtkmodules, "__file__", None)
+    if vtk_file:
+        pkg = Path(vtk_file).parent
+        dirs += [pkg, pkg.parent / "vtk.libs"]
+    return dirs
 
 
 def _headless_gl_library_present() -> bool:
     """Return True if an EGL or OSMesa library is available to VTK.
 
-    Two cheap lookups; neither creates a GL context:
+    Three cheap lookups; none creates a GL context:
 
     - ``ctypes.util.find_library`` (the dynamic linker cache,
       ``LD_LIBRARY_PATH``);
+    - a ``libEGL*`` / ``libOSMesa*`` file in :func:`_gl_library_dirs`
+      (a conda environment, a copy bundled in the VTK wheel);
     - the libraries already mapped into this process
-      (``/proc/self/maps``). By the time a scene renders, VTK has
-      already created its render window and loaded whichever library it
-      found, including one outside the linker cache (a conda
-      environment, a copy bundled in a wheel).
+      (``/proc/self/maps``), whatever path they came from.
     """
     if any(ctypes.util.find_library(name) for name in _HEADLESS_GL_LIBS):
         return True
+    for d in _gl_library_dirs():
+        for name in _HEADLESS_GL_LIBS:
+            try:
+                if any(d.glob(f"lib{name}*")):
+                    return True
+            except OSError:
+                pass
     try:
         with open(_PROC_SELF_MAPS, encoding="utf-8", errors="replace") as fh:
             maps = fh.read()
@@ -142,19 +170,28 @@ def _headless_gl_library_present() -> bool:
 def _missing_gl_context() -> bool:
     """Return True when VTK has no way to get an OpenGL context here.
 
-    Linux only; always False on Windows and macOS. True when
-    ``DISPLAY`` and ``WAYLAND_DISPLAY`` are both unset or empty AND no
-    EGL or OSMesa library is present (:func:`_headless_gl_library_present`).
-    In that setup VTK 9.7 falls through to an OSMesa window with no
-    library behind it and segfaults on the first render (#100).
+    Linux only; always False on Windows and macOS, and when
+    ``STKO_SKIP_GL_CHECK`` is set. True when ``DISPLAY`` and
+    ``WAYLAND_DISPLAY`` are both unset or empty AND no EGL or OSMesa
+    library is present (:func:`_headless_gl_library_present`). In that
+    setup VTK 9.7 falls through to an OSMesa window with no library
+    behind it and segfaults on the first render (#100).
 
-    It cannot detect a ``DISPLAY`` that points at no running X server,
-    or an EGL / OSMesa library that is present but unusable (for example
-    libglvnd's ``libEGL.so.1`` with no vendor driver): those still reach
-    VTK. It would wrongly return True only if EGL or OSMesa were linked
-    statically into VTK, with no separate library file.
+    False negatives (the check passes, VTK may still crash):
+
+    - ``DISPLAY`` is set but no X server is running there (a stale SSH
+      forward);
+    - libglvnd's ``libEGL.so.1`` is installed with no vendor driver. Qt
+      (``PySide6.QtGui``) loads it, so once Qt is imported the maps check
+      always passes;
+    - :meth:`PyVistaBackend.show` with ``off_screen=False`` is not
+      guarded at all.
+
+    False positive: EGL or OSMesa linked statically into VTK, or loaded
+    from a directory none of the lookups covers. Set
+    ``STKO_SKIP_GL_CHECK=1`` to bypass the check.
     """
-    if not _IS_LINUX:
+    if not _IS_LINUX or os.environ.get(_SKIP_GL_CHECK_ENV):
         return False
     if os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"):
         return False
@@ -598,7 +635,9 @@ class PyVistaBackend:
                 "of: an X server (run under Xvfb, e.g. "
                 "'xvfb-run -a -s \"-screen 0 1024x768x24\" python ...'), an "
                 "EGL library (libEGL, from Mesa or the GPU driver), or OSMesa "
-                "(libOSMesa). See docs/viewer/03-deployment-targets.md §7."
+                "(libOSMesa). See docs/viewer/03-deployment-targets.md §7. If "
+                "this is wrong and VTK can render here, set "
+                f"{_SKIP_GL_CHECK_ENV}=1 to skip this check."
             )
         scene._gl_checked = True
 

@@ -11,6 +11,9 @@ matrices that include the ``viewer-3d`` job will pick them up.
 """
 from __future__ import annotations
 
+import sys
+import types
+
 import numpy as np
 import pytest
 
@@ -375,6 +378,9 @@ def test_show_off_screen_is_noop(backend) -> None:
 # there is no GL context (#100).
 
 
+_REAL_GL_LIBRARY_DIRS = getattr(pv_backend, "_gl_library_dirs", None)
+
+
 class _FakePlotter:
     def __init__(self) -> None:
         self.screenshots = 0
@@ -406,7 +412,10 @@ def headless_linux(monkeypatch, tmp_path):
     monkeypatch.setattr(pv_backend, "_PROC_SELF_MAPS", str(maps), raising=False)
     monkeypatch.delenv("DISPLAY", raising=False)
     monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+    monkeypatch.delenv("STKO_SKIP_GL_CHECK", raising=False)
+    monkeypatch.delenv("CONDA_PREFIX", raising=False)
     monkeypatch.setattr("ctypes.util.find_library", lambda name: None)
+    monkeypatch.setattr(pv_backend, "_gl_library_dirs", lambda: [], raising=False)
     return maps
 
 
@@ -479,3 +488,30 @@ def test_check_runs_once_per_scene(backend, headless_linux, monkeypatch) -> None
     assert scene.plotter.screenshots == 2
     with pytest.raises(RuntimeError, match="Xvfb"):
         backend.snapshot(_fake_scene())
+
+
+def test_skip_gl_check_env_is_an_opt_out(backend, headless_linux, monkeypatch) -> None:
+    """A false positive must not hard-block rendering."""
+    monkeypatch.setenv("STKO_SKIP_GL_CHECK", "1")
+    scene = _fake_scene()
+    assert backend.snapshot(scene).shape == (4, 4, 3)
+
+
+def test_error_names_the_opt_out(backend, headless_linux) -> None:
+    with pytest.raises(RuntimeError, match="STKO_SKIP_GL_CHECK=1"):
+        backend.snapshot(_fake_scene())
+
+
+@pytest.mark.parametrize("lib", ["libOSMesa.so.8", "libEGL.so.1"])
+def test_library_in_conda_prefix_is_not_blocked(
+    backend, headless_linux, monkeypatch, tmp_path, lib,
+) -> None:
+    """VTK 9.4+ may load it from $CONDA_PREFIX/lib only at first render."""
+    monkeypatch.setattr(pv_backend, "_gl_library_dirs", _REAL_GL_LIBRARY_DIRS)
+    # Only CONDA_PREFIX counts here, not the real VTK package directory.
+    monkeypatch.setitem(sys.modules, "vtkmodules", types.SimpleNamespace())
+    prefix = tmp_path / "env"
+    (prefix / "lib").mkdir(parents=True)
+    (prefix / "lib" / lib).write_bytes(b"")
+    monkeypatch.setenv("CONDA_PREFIX", str(prefix))
+    assert backend.snapshot(_fake_scene()).shape == (4, 4, 3)
