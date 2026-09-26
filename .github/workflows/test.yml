@@ -53,6 +53,9 @@ jobs:
     runs-on: ubuntu-latest
     env:
       MPLBACKEND: Agg
+      # The extras are installed here, so the extras smoke tests must not
+      # skip: with this set, a package that fails to resolve fails the job.
+      STKO_REQUIRE_VIEWER_EXTRAS: "1"
     steps:
       - name: Checkout
         uses: actions/checkout@v4

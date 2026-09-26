@@ -138,12 +138,23 @@ def test_schema_versions_present() -> None:
     assert _version.SESSION_SCHEMA == 0
 
 
+def _skip_extra(reason: str) -> None:
+    """Skip, unless ``STKO_REQUIRE_VIEWER_EXTRAS`` is set: then fail.
+
+    The CI job that installs the extras sets it, so an extra that stops
+    resolving turns the job red instead of skipping quietly.
+    """
+    if os.environ.get("STKO_REQUIRE_VIEWER_EXTRAS"):
+        pytest.fail(f"{reason}, but STKO_REQUIRE_VIEWER_EXTRAS is set")
+    pytest.skip(reason)
+
+
 # The skip checks run inside the tests, not in ``skipif``: an import error
 # raised while collecting would abort the whole pytest session.
 def test_viewer_3d_extra_resolves() -> None:
     """When ``[viewer-3d]`` is installed, pyvista + vtk import successfully."""
     if not (_has("pyvista") and _has("vtk")):
-        pytest.skip("viewer-3d extra not installed")
+        _skip_extra("viewer-3d extra not installed")
     import pyvista  # noqa: F401
     import vtk  # noqa: F401
 
@@ -151,7 +162,7 @@ def test_viewer_3d_extra_resolves() -> None:
 def test_viewer_qt_extra_resolves() -> None:
     """When ``[viewer]`` is installed, the Qt stack imports successfully."""
     if not (_has("PySide6") and _has("pyvistaqt") and _has("qtpy")):
-        pytest.skip("viewer extra not installed")
+        _skip_extra("viewer extra not installed")
     import PySide6  # noqa: F401
     import pyvistaqt  # noqa: F401
     import qtpy  # noqa: F401
