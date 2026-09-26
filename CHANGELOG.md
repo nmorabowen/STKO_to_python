@@ -12,6 +12,22 @@ spelled out in [`CLAUDE.md`](CLAUDE.md#versioning-policy):
 
 ## [Unreleased]
 
+### Fixed
+
+- `PyVistaBackend.snapshot` and `PyVistaBackend.save` no longer let VTK
+  segfault on Linux when there is no OpenGL context. When `DISPLAY` and
+  `WAYLAND_DISPLAY` are unset and no EGL or OSMesa library is found,
+  they raise a `RuntimeError` that names Xvfb, EGL and OSMesa. Before,
+  the process died in the first render with exit code 139
+  ([#102](https://github.com/nmorabowen/STKO_to_python/pull/102)).
+- Correction to the 1.12.0 entry for `PyVistaBackend`: off-screen
+  rendering needs no Qt and no window, but on Linux it does need an
+  OpenGL context from an X server (Xvfb works), EGL or OSMesa. The
+  1.12.0 text "(no Qt, no X server)" is wrong for Linux.
+  `docs/viewer/01-architecture.md` §7.2 and
+  `docs/viewer/03-deployment-targets.md` §7 state the requirement
+  correctly ([#102](https://github.com/nmorabowen/STKO_to_python/pull/102)).
+
 ## [1.12.0] — 2026-05-13
 
 Introduces the optional **viewer subpackage** — a renderer-agnostic
