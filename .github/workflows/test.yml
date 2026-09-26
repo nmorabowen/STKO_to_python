@@ -53,6 +53,9 @@ jobs:
     runs-on: ubuntu-latest
     env:
       MPLBACKEND: Agg
+      # The extras are installed here, so the extras smoke tests must not
+      # skip: with this set, a package that fails to resolve fails the job.
+      STKO_REQUIRE_VIEWER_EXTRAS: "1"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -67,5 +70,19 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e ".[viewer,test]"
 
+      - name: Install headless GL stack (Xvfb + Mesa + libEGL)
+        # VTK needs an OpenGL context to render, even with off_screen=True.
+        # The runner has no X server, no libEGL and no libOSMesa, so VTK
+        # fell through to an OSMesa window with no library behind it and
+        # the first real render (PyVistaBackend.snapshot) segfaulted with
+        # exit 139 from #92 on. xvfb and libgl1-mesa-dri are on the current
+        # image; they are installed explicitly so the job does not depend
+        # on it. libegl1 is not on the image: PySide6.QtGui links
+        # libEGL.so.1, and without it `import pyvistaqt` raised ImportError,
+        # which the Qt smoke test reported as "viewer extra not installed".
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends xvfb libgl1-mesa-dri libegl1
+
       - name: Run viewer smoke tests
-        run: pytest tests/viewer/ -q
+        run: xvfb-run -a -s "-screen 0 1024x768x24" pytest tests/viewer/ -v -rs
