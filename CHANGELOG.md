@@ -33,6 +33,24 @@ spelled out in [`CLAUDE.md`](CLAUDE.md#versioning-policy):
   installed and fail on any other import error, and the import-is-light
   test runs in a subprocess, so it no longer half-unloads PySide6 for the
   tests after it ([#101](https://github.com/nmorabowen/STKO_to_python/pull/101)).
+- `PyVistaBackend.snapshot` and `PyVistaBackend.save` no longer let VTK
+  segfault on Linux when there is no OpenGL context. When `DISPLAY` and
+  `WAYLAND_DISPLAY` are unset and no EGL or OSMesa library is found,
+  they raise a `RuntimeError` that names Xvfb, EGL and OSMesa. Before,
+  the process died in the first render with exit code 139. Set
+  `STKO_SKIP_GL_CHECK=1` to bypass the check if it is wrong for your
+  setup. It does not catch a `DISPLAY` with no X server behind it, or
+  libglvnd's `libEGL.so.1` without a vendor driver (Qt loads that
+  library, so the check passes once Qt is imported), and `show()` with
+  `off_screen=False` is not checked
+  ([#102](https://github.com/nmorabowen/STKO_to_python/pull/102)).
+- Correction to the 1.12.0 entry for `PyVistaBackend`: off-screen
+  rendering needs no Qt and no window, but on Linux it does need an
+  OpenGL context from an X server (Xvfb works), EGL or OSMesa. The
+  1.12.0 text "(no Qt, no X server)" is wrong for Linux.
+  `docs/viewer/03-deployment-targets.md` §7 now says so, and no longer
+  claims that a CLI calls `pv.start_xvfb()`; no such CLI exists yet
+  ([#102](https://github.com/nmorabowen/STKO_to_python/pull/102)).
 
 ## [1.12.0] — 2026-05-13
 
