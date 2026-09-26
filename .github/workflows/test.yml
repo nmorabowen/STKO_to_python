@@ -67,5 +67,16 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e ".[viewer,test]"
 
+      - name: Install headless GL stack (Xvfb + Mesa)
+        # VTK needs an OpenGL context to render, even with off_screen=True.
+        # The runner has no X server, no libEGL and no libOSMesa, so VTK
+        # fell through to an OSMesa window with no library behind it and
+        # the first real render (PyVistaBackend.snapshot) segfaulted with
+        # exit 139 from #92 on. Both packages are on the current image;
+        # they are installed explicitly so the job does not depend on it.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends xvfb libgl1-mesa-dri
+
       - name: Run viewer smoke tests
-        run: pytest tests/viewer/ -q
+        run: xvfb-run -a -s "-screen 0 1024x768x24" pytest tests/viewer/ -v -rs
